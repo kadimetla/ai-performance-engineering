@@ -122,7 +122,7 @@ class NsightSystemsProfiler:
         print("   - Look for: GPU Utilization timeline")
         
         print("\n2. Memory Bandwidth:")
-        print("   - Target: >7 TB/s (HBM3e peak: 8 TB/s)")
+        print("   - Target: >7 TB/s (HBM3e peak: 7.8 TB/s)")
         print("   - Look for: Memory (HBM) Read/Write Throughput")
         
         print("\n3. Tensor Core Utilization:")
@@ -212,7 +212,7 @@ class NsightComputeProfiler:
         print("   - tcgen05.mma utilization: Target >70%")
         
         print("\n2. Memory Throughput:")
-        print("   - HBM3e: Target >7 TB/s (>87% of 8 TB/s peak)")
+        print("   - HBM3e: Target >7 TB/s (>90% of 7.8 TB/s peak)")
         print("   - L2 Cache hit rate: Target >80%")
         print("   - Check for 256-byte burst access patterns")
         
@@ -401,7 +401,7 @@ def print_quick_reference():
     
     print("\n4. Key Blackwell Metrics:")
     print("   - SM utilization: >80% (148 SMs)")
-    print("   - HBM3e bandwidth: >7 TB/s (>87% of 8 TB/s)")
+    print("   - HBM3e bandwidth: >7 TB/s (>90% of 7.8 TB/s)")
     print("   - Tensor Core (tcgen05): >70% utilization")
     print("   - FP8: >1000 TFLOPS, FP16: >600 TFLOPS")
     

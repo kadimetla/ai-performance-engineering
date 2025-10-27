@@ -23,7 +23,7 @@ def get_architecture_info():
             "name": "Blackwell B200/B300",
             "compute_capability": "10.0",
             "sm_version": "sm_100",
-            "memory_bandwidth": "8.0 TB/s",
+            "memory_bandwidth": "7.8 TB/s",
             "tensor_cores": "5th Gen",
             "features": ["HBM3e", "TMA", "NVLink-C2C"]
         }
@@ -282,7 +282,7 @@ def demonstrate_pytorch_29_memory_features():
     if compute_capability == "10.0":  # Blackwell
         print(f"   Detected: Blackwell B200/B300 (CC {compute_capability})")
         print(f"   HBM3e Total: {device_props.total_memory / 1e9:.1f} GB")
-        print(f"   Memory bandwidth: ~8 TB/s")
+        print(f"   Memory bandwidth: ~7.8 TB/s")
         print(f"   L2 Cache: {device_props.l2_cache_size / 1024 / 1024:.1f} MB")
         
         # Check HBM3e utilization

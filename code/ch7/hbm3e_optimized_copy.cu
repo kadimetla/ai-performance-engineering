@@ -2,7 +2,7 @@
  * HBM3e Memory Access Optimization for Blackwell
  * ===============================================
  * 
- * Blackwell B200/B300 uses HBM3e with 8 TB/s bandwidth.
+ * Blackwell B200/B300 uses HBM3e with 7.8 TB/s bandwidth.
  * Optimal access patterns:
  * - 256-byte bursts (HBM3e burst size)
  * - 128-byte cache lines
@@ -176,8 +176,8 @@ void run_benchmarks() {
     
     if (prop.major == 10 && prop.minor == 0) {
         printf("Blackwell B200/B300 detected (HBM3e)\n");
-        printf("  Peak bandwidth: ~8 TB/s\n");
-        printf("  Target: >7.8 TB/s (>95%% utilization)\n");
+        printf("  Peak bandwidth: 7.8 TB/s\n");
+        printf("  Target: >7.0 TB/s (>90%% utilization)\n");
     } else {
         printf("⚠ Non-Blackwell GPU - HBM3e optimizations may not apply\n");
     }
@@ -267,7 +267,7 @@ void run_benchmarks() {
     printf("1. HBM3e optimal: 256-byte bursts (16 float4s)\n");
     printf("2. Cache streaming (.cs) for write-only patterns\n");
     printf("3. Software prefetch for better latency hiding\n");
-    printf("4. Target >95%% of 8 TB/s peak (~7.8 TB/s)\n");
+    printf("4. Target >90%% of 7.8 TB/s peak (~7.0 TB/s)\n");
     printf("5. Blackwell achieves 30%% higher bandwidth than Hopper\n");
 }
 

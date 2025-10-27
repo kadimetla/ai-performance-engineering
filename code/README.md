@@ -17,8 +17,8 @@ sudo ./setup.sh
 ```
 
 This installs:
-- PyTorch 2.9 nightly with CUDA 12.9
-- CUDA 12.9 toolchain and development tools
+- PyTorch 2.9 with CUDA 13
+- CUDA 13 toolchain and development tools
 - NVIDIA Nsight Systems & Compute (latest versions)  
 - All Python dependencies (`requirements_latest.txt`)
 - System tools (numactl, perf, etc.)
@@ -138,7 +138,7 @@ cd ch1 && python3 performance_basics.py
 - `ch2/Makefile` - Build system
 
 **Key Concepts:**
-- Blackwell B200 architecture (178 GB, 148 SMs)
+- Blackwell B200 architecture (180 GB, 148 SMs)
 - 5th-gen Tensor Cores (tcgen05)
 - NVLink-C2C: 900 GB/s coherent interconnect
 - HBM3e: 7.8 TB/s peak bandwidth

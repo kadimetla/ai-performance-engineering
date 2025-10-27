@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+import triton.testing
 
 # Check for FP8 support
 try:
@@ -372,19 +373,10 @@ def benchmark_fp8_vs_fp16() -> None:
         A_fp16 = torch.randn(M, K, device="cuda", dtype=torch.float16)
         B_fp16 = torch.randn(K, N, device="cuda", dtype=torch.float16)
         
-        torch.cuda.synchronize()
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        # Use Triton's benchmarking - handles warmup, sync, outliers automatically
+        fp16_time = triton.testing.do_bench(lambda: tiled_matmul(A_fp16, B_fp16))
         
-        for _ in range(5):
-            _ = tiled_matmul(A_fp16, B_fp16)
-        
-        start.record()
-        for _ in range(10):
-            C_fp16 = tiled_matmul(A_fp16, B_fp16)
-        end.record()
-        end.synchronize()
-        fp16_time = start.elapsed_time(end) / 10
+        C_fp16 = tiled_matmul(A_fp16, B_fp16)  # For numerical comparison
         
         flops = 2 * M * N * K
         fp16_tflops = flops / (fp16_time * 1e-3) / 1e12
@@ -395,15 +387,10 @@ def benchmark_fp8_vs_fp16() -> None:
             A_fp8 = A_fp16.to(FP8_E4M3_DTYPE)
             B_fp8 = B_fp16.to(FP8_E4M3_DTYPE)
             
-            for _ in range(5):
-                _ = matmul_fp8(A_fp8, B_fp8)
+            # Use Triton's benchmarking - handles warmup, sync, outliers automatically
+            fp8_time = triton.testing.do_bench(lambda: matmul_fp8(A_fp8, B_fp8))
             
-            start.record()
-            for _ in range(10):
-                C_fp8 = matmul_fp8(A_fp8, B_fp8)
-            end.record()
-            end.synchronize()
-            fp8_time = start.elapsed_time(end) / 10
+            C_fp8 = matmul_fp8(A_fp8, B_fp8)  # For numerical comparison
             
             fp8_tflops = flops / (fp8_time * 1e-3) / 1e12
             speedup = fp16_time / fp8_time
@@ -478,7 +465,7 @@ def persistent_matmul(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     C = torch.empty((M, N), device=A.device, dtype=torch.float32)
     
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 32
-    NUM_SMS = 192
+    NUM_SMS = 148  # Blackwell B200 has 148 SMs
     grid = (NUM_SMS,)
     
     persistent_matmul_kernel[grid](
@@ -515,22 +502,8 @@ def benchmark_persistent_vs_standard():
         A = torch.randn(M, K, device=device, dtype=torch.float16)
         B = torch.randn(K, N, device=device, dtype=torch.float16)
         
-        for _ in range(5):
-            _ = persistent_matmul(A, B)
-        torch.cuda.synchronize()
-        
-        torch.cuda.synchronize()
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        
-        iters = 100
-        start.record()
-        for _ in range(iters):
-            _ = persistent_matmul(A, B)
-        end.record()
-        torch.cuda.synchronize()
-        
-        persistent_time = start.elapsed_time(end) / iters
+        # Use Triton's benchmarking - handles warmup, sync, outliers automatically
+        persistent_time = triton.testing.do_bench(lambda: persistent_matmul(A, B))
         persistent_tflops = (2 * M * N * K) / (persistent_time * 1e-3) / 1e12
         
         print(f"  Persistent kernel: {persistent_time:.2f} ms, {persistent_tflops:.1f} TFLOPS")

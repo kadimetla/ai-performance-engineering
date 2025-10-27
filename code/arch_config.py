@@ -26,7 +26,7 @@ class ArchitectureConfig:
             "name": "Blackwell B200/B300",
             "compute_capability": BLACKWELL_CC,
             "sm_version": "sm_100",
-            "memory_bandwidth": "≈8.0 TB/s",
+            "memory_bandwidth": "7.8 TB/s",
             "tensor_cores": "5th Gen",
             "features": ["HBM3e", "TMA", "NVLink-C2C", "Stream-ordered Memory"],
             "cuda_features": ["Stream-ordered Memory", "TMA", "HBM3e optimisations", "NVLink-C2C"],

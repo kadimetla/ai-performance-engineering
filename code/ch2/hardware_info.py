@@ -32,7 +32,7 @@ def get_architecture_info() -> Dict[str, Any]:
             "name": "Blackwell B200/B300",
             "compute_capability": "10.0",
             "sm_version": "sm_100",
-            "memory_bandwidth": "8.0 TB/s",
+            "memory_bandwidth": "7.8 TB/s",
             "tensor_cores": "5th Gen",
             "features": ["HBM3e", "TMA", "NVLink-C2C"],
         }
@@ -56,7 +56,7 @@ def get_gpu_info() -> Dict[str, Any]:
     compute_capability = f"{device_props.major}.{device_props.minor}"
 
     is_blackwell = device_props.major == 10
-    memory_bandwidth_tbps = 8.0 if is_blackwell else None
+    memory_bandwidth_tbps = 7.8 if is_blackwell else None
 
     return {
         "name": device_props.name,
@@ -337,7 +337,7 @@ def demonstrate_blackwell_optimizations() -> None:
     if gpu_info.get("architecture") == "Blackwell B200/B300":
         print("Blackwell B200/B300 Optimizations:")
         print("1. HBM3e Memory Optimizations")
-        print("   • High-bandwidth memory (8.0 TB/s)")
+        print("   • High-bandwidth memory (7.8 TB/s)")
         print("   • Optimized memory access patterns")
         print("   • Unified memory architecture")
 

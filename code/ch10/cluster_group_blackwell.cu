@@ -5,7 +5,7 @@
  * Blackwell SM 10.0 provides enhanced Thread Block Cluster support:
  * - Up to 8 CTAs per cluster (vs 4 on Hopper)
  * - Distributed Shared Memory (DSMEM) - 2 MB total
- * - Better scheduling for 192 SMs
+ * - Better scheduling for 148 SMs
  * - Cluster-wide synchronization
  * 
  * Key Benefits:
@@ -21,7 +21,7 @@
  * Performance on B200:
  * - Up to 8 CTAs per cluster
  * - 2 MB distributed shared memory
- * - Better load balancing on 192 SMs
+ * - Better load balancing on 148 SMs
  */
 
 #include <cooperative_groups.h>
@@ -91,12 +91,12 @@ void print_blackwell_cluster_info() {
         printf("  Max CTAs per cluster: 8 (vs 4 on Hopper)\n");
         printf("  Distributed Shared Memory: 2 MB total\n");
         printf("  Per-block shared memory: 256 KB\n");
-        printf("  Total SMs: 192 (better load balancing)\n");
+        printf("  Total SMs: 148 (better load balancing)\n");
         
         printf("\nBlackwell Advantages:\n");
         printf("  1. 2x more CTAs per cluster\n");
         printf("  2. Larger distributed shared memory\n");
-        printf("  3. Better scheduling on 192 SMs\n");
+        printf("  3. Better scheduling on 148 SMs\n");
         printf("  4. Reduced global memory traffic\n");
         
         printf("\nUse Cases:\n");
@@ -191,7 +191,7 @@ int main() {
     printf("✓ Thread Block Clusters with up to 8 CTAs (Blackwell)\n");
     printf("✓ Distributed Shared Memory (DSMEM) - 2 MB total\n");
     printf("✓ Cluster-wide synchronization\n");
-    printf("✓ Optimized for Blackwell's 192 SMs\n");
+    printf("✓ Optimized for Blackwell's 148 SMs\n");
     printf("\nBlackwell provides 2x more CTAs per cluster than Hopper!\n");
     
     return 0;

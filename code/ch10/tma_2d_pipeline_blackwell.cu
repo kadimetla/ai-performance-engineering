@@ -10,7 +10,7 @@
  * Requirements: SM 10.0 (Blackwell), CUDA 13.0+
  * 
  * Performance:
- * - Up to 7.8 TB/s memory bandwidth utilization
+ * - Up to 7.0 TB/s memory bandwidth utilization (90% of 7.8 TB/s peak)
  * - Better than manual async copy
  * 
  * Compile:
@@ -175,7 +175,7 @@ void demonstrate_tma_blackwell() {
     printf("1. CU_TENSOR_MAP_SWIZZLE_128B - HBM3e cache alignment\n");
     printf("2. Improved L2 promotion for 128B granularity\n");
     printf("3. Better coalescing with async pipeline\n");
-    printf("4. Up to 7.8 TB/s bandwidth utilization\n");
+    printf("4. Up to 7.0 TB/s bandwidth utilization (90%% of 7.8 TB/s peak)\n");
     
     printf("\nUsage Pattern:\n");
     printf("  1. Create TMA descriptor with cuTensorMapEncodeTiled\n");
@@ -235,7 +235,7 @@ int main() {
     printf("✓ Async pipeline with cuda::pipeline\n");
     printf("✓ CUDA 13 TMA descriptor with CU_TENSOR_MAP_SWIZZLE_128B\n");
     printf("✓ Optimized for Blackwell HBM3e (128-byte cache lines)\n");
-    printf("✓ Target: >7.8 TB/s bandwidth utilization\n");
+    printf("✓ Target: >7.0 TB/s bandwidth utilization (90%% of 7.8 TB/s peak)\n");
     
     return 0;
 }
