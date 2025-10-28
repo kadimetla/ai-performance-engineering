@@ -129,6 +129,39 @@ python3 tools/detect_regressions.py \
 ./tools/orchestrate_8xb200_load_test.sh 300 100
 ```
 
+### Capture NVLink bandwidth during stress
+```bash
+./tools/capture_nvlink_during_inference.sh \
+    <duration_sec> \
+    <output_dir> \
+    <workload_type>  # inference, training, or bandwidth
+
+# Example: 60s inference stress with NVLink monitoring
+./tools/capture_nvlink_during_inference.sh 60 nvlink_results inference
+```
+
+### Profile 40B model with Nsight Systems
+```bash
+./tools/profile_40b_8gpu_nsight.sh \
+    <model_size> \
+    <duration_sec> \
+    <output_dir>
+
+# Example: Profile 40B model for 30 seconds
+./tools/profile_40b_8gpu_nsight.sh 40B 30 profile_output
+
+# View in Nsight UI
+nsys-ui profile_output/profile_40B_8gpu.nsys-rep
+```
+
+### Run comprehensive 8-GPU benchmark suite
+```bash
+./run_comprehensive_8gpu_benchmark.sh
+
+# Results: 8gpu_benchmark_results_YYYYMMDD_HHMMSS/
+# Archive: 8gpu_benchmark_results_YYYYMMDD_HHMMSS.tar.gz
+```
+
 ### See full documentation
 ```bash
 cat docs/8xb200_load_testing_guide.md
@@ -235,6 +268,9 @@ python3 tools/<tool_name>.py --help
 
 Comprehensive guides:
 - `docs/8xb200_load_testing_guide.md` - Load testing
+- `docs/moe_deployment_playbook.md` - MoE deployment, routing, autoscaling
+- `docs/power_efficiency_baselines.md` - Power/cost metrics, tokens/Joule
+- `docs/architecture_guides.md` - Architecture-specific tuning
 - `GAPS_ADDRESSED_SUMMARY.md` - What was built
 - `KNOWN_GAPS.md` - Gap status tracking
 

@@ -134,28 +134,19 @@ class ArchitectureConfig:
             os.environ.setdefault("TRITON_TMA_ENABLE", "1")
             os.environ.setdefault("TRITON_ALWAYS_COMPILE", "0")  # Use kernel cache
             
-            # Configure CUTLASS paths for torch.compile backend
-            # PyTorch bundles CUTLASS, but we can also use our own version
-            cutlass_path = os.environ.get("CUTLASS_PATH")
-            if not cutlass_path:
-                # Try to find CUTLASS in third_party/cutlass
-                project_root = os.path.dirname(os.path.abspath(__file__))
-                cutlass_candidate = os.path.join(project_root, "third_party", "cutlass")
-                if os.path.isdir(cutlass_candidate):
-                    cutlass_path = cutlass_candidate
-                    os.environ["CUTLASS_PATH"] = cutlass_path
-                    
-                    # Set CUTLASS directory for TorchInductor
-                    if hasattr(cfg, "cuda") and hasattr(cfg.cuda, "cutlass_dir"):
-                        cfg.cuda.cutlass_dir = cutlass_path
-            
-            if cutlass_path:
-                # Set include paths for CUTLASS headers
-                cutlass_include = os.path.join(cutlass_path, "include")
-                if os.path.isdir(cutlass_include):
-                    cplus_include = os.environ.get("CPLUS_INCLUDE_PATH", "")
-                    if cutlass_include not in cplus_include:
-                        os.environ["CPLUS_INCLUDE_PATH"] = f"{cutlass_include}:{cplus_include}"
+            # Configure CUTLASS for torch.compile backend
+            # Fix the cutlass_dir path to point to nvidia-cutlass-dsl installation
+            if hasattr(cfg, "cuda") and hasattr(cfg.cuda, "cutlass_dir"):
+                try:
+                    import cutlass
+                    # Get the nvidia_cutlass_dsl root directory
+                    cutlass_module_path = os.path.dirname(cutlass.__file__)
+                    nvidia_cutlass_root = os.path.dirname(os.path.dirname(cutlass_module_path))
+                    cfg.cuda.cutlass_dir = nvidia_cutlass_root
+                except ImportError:
+                    # If cutlass not installed, unset cutlass_dir
+                    # PyTorch will skip CUTLASS backend
+                    pass
         
         # PyTorch 2.9: Enable FlashAttention-3 for Blackwell
         if hasattr(torch.backends.cuda, "enable_flash_sdp"):
@@ -172,10 +163,10 @@ class ArchitectureConfig:
         os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         
         # PyTorch 2.9: Enable TF32 for Blackwell (improves FP32 matmul performance)
-        # Use the new API (PyTorch 2.9+)
-        torch.set_float32_matmul_precision('high')  # Enables TF32 for matmul
+        # Use ONLY the new API (PyTorch 2.9+) - do NOT mix with legacy API
+        if hasattr(torch.backends.cuda, "matmul") and hasattr(torch.backends.cuda.matmul, "fp32_precision"):
+            torch.backends.cuda.matmul.fp32_precision = "tf32"
         
-        # Set cudnn TF32 using new API if available
         if hasattr(torch.backends.cudnn, "conv") and hasattr(torch.backends.cudnn.conv, "fp32_precision"):
             torch.backends.cudnn.conv.fp32_precision = "tf32"
 

@@ -106,31 +106,38 @@ def run_load_test(
         if rank == 0:
             expected = max(target_qps * interval, 0.0)
             num_requests = rng.poisson(expected)
-            new_requests = []
+            prompt_lengths: List[int] = []
             for _ in range(num_requests):
                 prompt_len = int(rng.integers(min_prompt_len, max_prompt_len + 1))
                 if prompt_len >= server.max_seq_len:
                     continue
-                prompt_tokens = list(range(prompt_len))
-                request_id = f"req_{generated_counter}"
-                generated_counter += 1
-                new_requests.append(
-                    {
-                        "request_id": request_id,
-                        "prompt_tokens": prompt_tokens,
-                        "max_new_tokens": max_new_tokens,
-                        "temperature": float(temperature),
-                        "top_k": 50,
-                        "priority": generated_counter % 4,
-                        "arrived_at": time.time(),
-                    }
-                )
+                prompt_lengths.append(prompt_len)
+            base_request_id = generated_counter
+            current_time = time.time()
         else:
-            new_requests = None
+            prompt_lengths = []
+            base_request_id = 0
+            current_time = 0.0
 
-        for payload in _broadcast_requests(new_requests):
-            request = InferenceRequest(**payload)
+        payload = [prompt_lengths, base_request_id, current_time]
+        dist.broadcast_object_list(payload, src=0)
+        prompt_lengths, base_request_id, current_time = payload
+
+        for offset, prompt_len in enumerate(prompt_lengths):
+            request_id = f"req_{base_request_id + offset}"
+            prompt_tokens = list(range(prompt_len))
+            request = InferenceRequest(
+                request_id=request_id,
+                prompt_tokens=prompt_tokens,
+                max_new_tokens=max_new_tokens,
+                temperature=float(temperature),
+                top_k=50,
+                priority=(base_request_id + offset) % 4,
+                arrived_at=current_time,
+            )
             server.scheduler.add_request(request)
+
+        generated_counter = base_request_id + len(prompt_lengths)
 
         # Continuous batching iteration (replicates serve_loop body)
         batch = server.scheduler.get_next_batch(server.kv_cache)

@@ -22,9 +22,9 @@ all: $(TARGETS)
 $(TARGETS): %: %.cu
 	@echo "Building $@..."
 	@if [ "$@" = "cutlass_gemm_example" ]; then \
-		$(NVCC) $(NVCC_FLAGS) -lcublas -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $<; \
 	else \
-		$(NVCC) $(NVCC_FLAGS) -o $@ $<; \
+		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $<; \
 	fi
 
 # Architecture-specific targets

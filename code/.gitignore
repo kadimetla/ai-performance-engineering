@@ -7,6 +7,8 @@ quick_test_results/
 power_metrics/
 nsys_validation_*.sqlite
 nvlink_bandwidth_test.json
-power_baseline_*.json
+power_baseline_*.jso
+quick_test_results_*.tar.gz
 validation_results_*/
 large_model_eager_8xb200*.json
+power_baseline*.json

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -18,6 +19,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trace", type=Path, help="Optional path to write Chrome trace JSON")
     parser.add_argument("--sort", default="self_cuda_memory_usage", help="Metric to sort by in the summary table")
     parser.add_argument("--row-limit", type=int, default=25, help="Rows to display in summary table")
+    parser.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Environment variable assignments applied before running the script",
+    )
     return parser.parse_args()
 
 
@@ -26,6 +34,13 @@ def main() -> None:
     script_path = Path(args.script).resolve()
     if not script_path.exists():
         raise SystemExit(f"Script not found: {script_path}")
+
+    # Apply environment overrides
+    for assignment in args.env:
+        if "=" not in assignment:
+            raise SystemExit(f"Invalid --env assignment '{assignment}' (expected KEY=VALUE)")
+        key, value = assignment.split("=", 1)
+        os.environ[key] = value
 
     activities = [ProfilerActivity.CPU]
     if torch.cuda.is_available():

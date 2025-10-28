@@ -5,13 +5,11 @@ ARCH ?= sm_100
 # CUDA configuration
 CUDA_VERSION = 13.0
 NVCC = nvcc
-# CUTLASS 3.5 for Blackwell tensor cores
-CUTLASS_PATH ?= $(shell pwd)/../external/cutlass
-ifneq ($(wildcard $(CUTLASS_PATH)/include),)
-CUTLASS_INCLUDE = -I$(CUTLASS_PATH)/include -DUSE_CUTLASS
-else
+# CUTLASS support (optional - examples work without it)
+# If you need CUTLASS headers for custom kernels, install nvidia-cutlass-dsl:
+#   sudo pip install nvidia-cutlass-dsl
+# Headers available at: /usr/local/lib/python3.11/dist-packages/nvidia_cutlass_dsl/
 CUTLASS_INCLUDE =
-endif
 # Use -gencode to embed both cubin (sm_100) and PTX (compute_100) for forward compatibility
 NVCC_FLAGS = -O3 -std=c++17 -gencode arch=compute_100,code=[sm_100,compute_100] --expt-relaxed-constexpr -DCUDA_VERSION=$(CUDA_VERSION) -Xcompiler -fPIC -lcuda $(CUTLASS_INCLUDE)
 

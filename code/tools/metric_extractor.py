@@ -410,5 +410,8 @@ def flatten_metrics(nested_results: Dict[str, Any]) -> Dict[str, float]:
                     key = f"{source_type}_{metric_name}"
                 flattened[key] = value
     
-    return flattened
+    # Alias common metrics that feed multiple chapters
+    if "ch7_bandwidth_tbs" in flattened and "ch2_hbm3e_bandwidth_tbs" not in flattened:
+        flattened["ch2_hbm3e_bandwidth_tbs"] = flattened["ch7_bandwidth_tbs"]
 
+    return flattened

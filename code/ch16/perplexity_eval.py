@@ -67,13 +67,15 @@ def main() -> None:
             input_ids = torch.tensor(context, device=device, dtype=torch.int32).unsqueeze(0)
             target_ids = torch.tensor(target, device=device, dtype=torch.int64).unsqueeze(0)
             logits = model(input_ids)
+            # Match sizes: logits and targets should have same length
+            min_len = min(logits.size(1), target_ids.size(1))
             loss = F.cross_entropy(
-                logits[:, :-1, :].reshape(-1, config.vocab_size),
-                target_ids.reshape(-1),
+                logits[:, :min_len, :].reshape(-1, config.vocab_size),
+                target_ids[:, :min_len].reshape(-1),
                 reduction="sum",
             )
             total_loss += loss.item()
-            total_tokens += target_ids.numel()
+            total_tokens += min_len
 
     avg_loss = total_loss / total_tokens
     perplexity = float(torch.exp(torch.tensor(avg_loss)))

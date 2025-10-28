@@ -221,20 +221,23 @@ class MultiheadAttentionBackend(nn.Module):
                 backend = "sdpa"
         return backend
 
-    def _window_mask(self, batch: int, q_len: int, kv_len: int):
+    def _window_mask(self, batch: int, q_len: int, kv_len: int, device: torch.device):
         if create_block_mask is None:
             return None
 
         window = self.attention_window
 
         def mask_fn(_b, _h, q_idx, kv_idx):
-            if kv_idx > q_idx:
-                return False
+            # Use tensor operations to avoid data-dependent control flow
+            # Causal mask: kv_idx <= q_idx
+            causal = kv_idx <= q_idx
             if window is not None:
-                return (q_idx - kv_idx) < window
-            return True
+                # Sliding window: (q_idx - kv_idx) < window
+                in_window = (q_idx - kv_idx) < window
+                return causal & in_window
+            return causal
 
-        return create_block_mask(mask_fn, B=batch, H=self.n_heads, Q_LEN=q_len, KV_LEN=kv_len)
+        return create_block_mask(mask_fn, B=batch, H=self.n_heads, Q_LEN=q_len, KV_LEN=kv_len, device=device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
@@ -246,7 +249,7 @@ class MultiheadAttentionBackend(nn.Module):
         if backend == "flex":
             if flex_attention is None:
                 raise RuntimeError("FlexAttention requested but not available")
-            block_mask = self._window_mask(batch, seq_len, key.shape[2])
+            block_mask = self._window_mask(batch, seq_len, key.shape[2], device=key.device)
             attn = flex_attention(
                 query,
                 key,

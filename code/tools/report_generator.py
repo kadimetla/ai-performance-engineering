@@ -269,11 +269,42 @@ def generate_report_from_metrics(
     """
     report = PerformanceReport()
     
-    # Group metrics by chapter
-    metrics_by_chapter: Dict[str, Dict[str, float]] = {}
+    def normalize(name: str) -> str:
+        return name.replace("_", "").lower()
     
-    for metric_name, value in metrics.items():
-        original_name = metric_name
+    def match_metric(metric: str, targets: Dict[str, Any], *, allow_partial: bool) -> tuple[str | None, bool]:
+        """Return (target_metric, is_exact) if matched."""
+        metric_norm = normalize(metric)
+        
+        # Exact name match first
+        if metric in targets:
+            return metric, True
+        
+        # Normalized equality
+        for target in targets:
+            if metric_norm == normalize(target):
+                return target, True
+        
+        if not allow_partial:
+            return None, False
+        
+        # Metric contains target (metric is more specific)
+        for target in targets:
+            if normalize(target) in metric_norm:
+                return target, False
+        
+        # Target contains metric (metric is more general)
+        for target in targets:
+            if metric_norm and metric_norm in normalize(target):
+                return target, False
+        
+        return None, False
+    
+    # Group metrics by chapter
+    metrics_by_chapter: Dict[str, Dict[str, tuple[float, bool]]] = {}
+    
+    for raw_name, value in metrics.items():
+        metric_name = raw_name
         chapter = None
         
         # Strip common prefixes
@@ -282,61 +313,44 @@ def generate_report_from_metrics(
                 metric_name = metric_name[len(prefix):]
                 break
         
-        # Try to extract chapter from metric name
+        # Extract chapter prefix if present
         if metric_name.startswith("ch") and "_" in metric_name:
-            parts = metric_name.split("_", 1)
-            if parts[0] in [f"ch{i}" for i in range(1, 21)]:
-                chapter = parts[0]
-                metric_name = parts[1]
+            prefix, rest = metric_name.split("_", 1)
+            if prefix in [f"ch{i}" for i in range(1, 21)]:
+                chapter = prefix
+                metric_name = rest
         
-        # Try exact match first
-        if chapter:
-            ch_metrics = get_chapter_metrics(chapter)
-            if metric_name not in ch_metrics:
-                # Try fuzzy matching within the chapter
-                metric_normalized = metric_name.replace("_", "").lower()
-                matched = False
-                for target_metric in ch_metrics.keys():
-                    target_normalized = target_metric.replace("_", "").lower()
-                    if metric_normalized in target_normalized or target_normalized in metric_normalized:
-                        metric_name = target_metric  # Use the target metric name
-                        matched = True
-                        break
-                # If still no match, keep the original metric name (won't be reported but won't cause errors)
-        elif chapter is None:
-            # Try to match against known chapter metrics
-            for ch in get_all_chapters():
-                ch_metrics = get_chapter_metrics(ch)
-                if metric_name in ch_metrics:
-                    chapter = ch
-                    break
-                # Try fuzzy matching
-                metric_normalized = metric_name.replace("_", "").lower()
-                for target_metric in ch_metrics.keys():
-                    target_normalized = target_metric.replace("_", "").lower()
-                    if metric_normalized in target_normalized or target_normalized in metric_normalized:
-                        chapter = ch
-                        metric_name = target_metric  # Use the target metric name
-                        break
-                if chapter:
-                    break
-        
-        # Check if it's an overall metric
-        if chapter is None and "overall" in TARGETS:
-            if metric_name in TARGETS["overall"]:
-                chapter = "overall"
+        matched_chapter = None
+        matched_metric = None
+        is_exact = False
         
         if chapter:
-            if chapter not in metrics_by_chapter:
-                metrics_by_chapter[chapter] = {}
-            # Only add if it's a known metric
-            ch_metrics = get_chapter_metrics(chapter)
-            if metric_name in ch_metrics:
-                metrics_by_chapter[chapter][metric_name] = value
+            target_metric, exact = match_metric(metric_name, get_chapter_metrics(chapter), allow_partial=True)
+            if target_metric:
+                matched_chapter = chapter
+                matched_metric = target_metric
+                is_exact = exact
+        else:
+            # Metrics without explicit chapter prefix only map to overall targets
+            if "overall" in TARGETS and metric_name in TARGETS["overall"]:
+                matched_chapter = "overall"
+                matched_metric = metric_name
+                is_exact = True
+        
+        if matched_chapter and matched_metric:
+            chapter_metrics = metrics_by_chapter.setdefault(matched_chapter, {})
+            existing = chapter_metrics.get(matched_metric)
+            if existing:
+                _, existing_exact = existing
+                # Prefer exact matches over partial ones
+                if existing_exact and not is_exact:
+                    continue
+            chapter_metrics[matched_metric] = (value, is_exact)
     
-    # Add metrics to report
+    # Add metrics to report (strip auxiliary data)
     for chapter, ch_metrics in metrics_by_chapter.items():
-        report.add_chapter_metrics(chapter, ch_metrics)
+        cleaned = {metric: val for metric, (val, _) in ch_metrics.items()}
+        report.add_chapter_metrics(chapter, cleaned)
     
     # Generate and optionally write report
     markdown = report.generate_markdown(quick=quick)
@@ -346,4 +360,3 @@ def generate_report_from_metrics(
         output_path.write_text(markdown)
     
     return markdown
-

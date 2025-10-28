@@ -140,7 +140,9 @@ echo "Profiling memory usage for critical workloads..."
 # Profile torch.compile example
 if [ -f "ch14/torch_compiler_examples.py" ]; then
     echo -n "  Memory profiling torch.compile... "
-    if timeout 300 python3 tools/memory_profiler.py ch14/torch_compiler_examples.py \
+    if timeout 300 python3 tools/memory_profiler.py \
+        ch14/torch_compiler_examples.py \
+        --env TORCH_COMPILE_DEMO_QUICK=1 \
         --trace "$MEMORY_DIR/torch_compile_memory.json" \
         > "$MEMORY_DIR/torch_compile_memory.txt" 2>&1; then
         echo -e "${GREEN}DONE${NC}"
@@ -164,8 +166,9 @@ fi
 # Profile MoE benchmark
 if [ -f "ch16/synthetic_moe_inference_benchmark.py" ]; then
     echo -n "  Memory profiling MoE... "
-    if timeout 300 MOE_BENCH_QUICK=1 python3 tools/memory_profiler.py \
+    if timeout 300 python3 tools/memory_profiler.py \
         ch16/synthetic_moe_inference_benchmark.py \
+        --env MOE_BENCH_QUICK=1 \
         --trace "$MEMORY_DIR/moe_memory.json" \
         > "$MEMORY_DIR/moe_memory.txt" 2>&1; then
         echo -e "${GREEN}DONE${NC}"

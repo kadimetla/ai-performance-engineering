@@ -11,12 +11,15 @@ import torch.nn as nn
 import triton.testing
 import os
 import sys
+import time
 
 # Add parent directory to sys.path to import arch_config from root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from torch_compile_large_model import create_model
+
+QUICK_MODE = os.environ.get("TORCH_COMPILE_DEMO_QUICK", "0") == "1"
 
 
 def configure_for_blackwell_peak_performance():
@@ -25,9 +28,12 @@ def configure_for_blackwell_peak_performance():
     print("Configuring PyTorch for Blackwell B200 Peak Performance")
     print("=" * 80)
     
-    torch.set_float32_matmul_precision('high')
-    torch.backends.cudnn.conv.fp32_precision = 'tf32'
-    torch.backends.cuda.matmul.fp32_precision = 'high'
+    if hasattr(torch.backends.cuda, "matmul") and hasattr(torch.backends.cuda.matmul, "fp32_precision"):
+        torch.backends.cuda.matmul.fp32_precision = 'tf32'
+    elif hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision('high')
+    if hasattr(torch.backends.cudnn, "conv") and hasattr(torch.backends.cudnn.conv, "fp32_precision"):
+        torch.backends.cudnn.conv.fp32_precision = 'tf32'
     print("TF32 enabled")
     
     torch.backends.cuda.enable_flash_sdp(True)
@@ -98,12 +104,24 @@ class OptimizedTransformerBlock(nn.Module):
 def benchmark_with_proper_warmup(model, x, name):
     """Benchmark using Triton's testing framework with automatic warmup."""
     print(f"\nBenchmarking: {name}")
-    
+
     def run_model():
         with torch.no_grad():
             return model(x)
     
-    avg_time_ms = triton.testing.do_bench(run_model)
+    if QUICK_MODE:
+        torch.cuda.synchronize()
+        for _ in range(2):
+            run_model()
+        torch.cuda.synchronize()
+        repeats = 5
+        start = time.time()
+        for _ in range(repeats):
+            run_model()
+        torch.cuda.synchronize()
+        avg_time_ms = (time.time() - start) * 1000.0 / repeats
+    else:
+        avg_time_ms = triton.testing.do_bench(run_model)
     throughput = 1000.0 / avg_time_ms  # iter/s
     
     print(f"  Average time: {avg_time_ms:.3f} ms")
@@ -118,10 +136,13 @@ def main():
     
     # 2. Create model (larger for better compilation benefits)
     print("Creating model...")
+    model_size = '5b'
+    if QUICK_MODE:
+        model_size = 'medium'
+
     # Use existing large model infrastructure
-    # Use '5b' (~5B params) to showcase realistic Blackwell-sized workloads
     # Larger model highlights torch.compile benefits on compute-bound kernels
-    model, config, total_params = create_model('5b')
+    model, config, total_params = create_model(model_size)
     model = model.cuda().eval()
     print(f"Model parameters: {total_params / 1e9:.2f}B")
     
@@ -137,8 +158,11 @@ def main():
     print(" Model compiled")
     
     # 4. Create input (larger for better performance)
-    batch_size = 16  # Smaller batch for larger model
+    batch_size = 16
     seq_len = 2048
+    if QUICK_MODE:
+        batch_size = 8
+        seq_len = 1024
     d_model = config['d_model']
     x = torch.randn(batch_size, seq_len, d_model, device='cuda', dtype=torch.float32)
     
@@ -157,11 +181,14 @@ def main():
     print("\n" + "=" * 80)
     print("COMPILED MODE - WARMUP PHASE (100+ iterations required!)")
     print("=" * 80)
-    print("Running 100 warmup iterations for torch.compile...")
+    warmup_iters = 100
+    if QUICK_MODE:
+        warmup_iters = 10
+    print(f"Running {warmup_iters} warmup iterations for torch.compile...")
     with torch.no_grad():
-        for i in range(100):
+        for i in range(warmup_iters):
             _ = model_compiled(x)
-            if (i + 1) % 20 == 0:
+            if not QUICK_MODE and (i + 1) % 20 == 0:
                 print(f"  Warmup iteration {i + 1}/100...")
     torch.cuda.synchronize()
     print(" Warmup complete! Now benchmarking...")
@@ -206,7 +233,7 @@ def main():
     print("KEY LEARNINGS FOR BOOK")
     print("=" * 80)
     print("1. Warmup is CRITICAL - Need 100+ iterations for compiled models")
-    print("2. TF32 must be enabled with torch.set_float32_matmul_precision('high')")
+    print("2. TF32 must be enabled with torch.backends.cuda.matmul.fp32_precision = 'tf32'")
     print("3. fullgraph=True gives best performance (if possible)")
     print("4. CUDA graph trees provide additional 15-20% speedup")
     print("5. Larger models benefit more (aim for >1M parameters)")

@@ -21,7 +21,7 @@ all: $(CUDA_TARGETS)
 # Build individual targets
 $(CUDA_TARGETS): %: %.cu
 	@echo "Compiling $@..."
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
 
 # Architecture-specific targets
 blackwell: ARCH=sm_100

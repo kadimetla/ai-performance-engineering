@@ -891,33 +891,24 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 11: Install CUTLASS 3.5 for Blackwell
+# Step 11: Install CUTLASS Backend for torch.compile
 echo ""
-echo "📦 Step 11: Installing CUTLASS 3.5 for Blackwell Tensor Cores..."
+echo "📦 Step 11: Installing CUTLASS Backend (nvidia-cutlass-dsl)..."
 echo "================================================================="
-CUTLASS_DIR="$PROJECT_ROOT/external/cutlass"
-if [ ! -d "$CUTLASS_DIR" ]; then
-    echo "Cloning CUTLASS 3.5..."
-    mkdir -p "$PROJECT_ROOT/external"
-    cd "$PROJECT_ROOT/external"
-    git clone --branch v3.5.0 --depth 1 https://github.com/NVIDIA/cutlass.git
-    cd "$PROJECT_ROOT"
-    echo "✅ CUTLASS 3.5 installed to $CUTLASS_DIR"
+
+# Install CUTLASS DSL and CUDA Python bindings system-wide
+# These are required for PyTorch's TorchInductor CUTLASS backend
+echo "Installing nvidia-cutlass-dsl and cuda-python..."
+pip install nvidia-cutlass-dsl cuda-python
+
+if [ $? -eq 0 ]; then
+    echo "✅ CUTLASS backend packages installed"
+    echo "   - nvidia-cutlass-dsl: CUTLASS kernels for torch.compile"
+    echo "   - cuda-python: CUDA runtime bindings"
 else
-    echo "✅ CUTLASS already installed at $CUTLASS_DIR"
+    echo "⚠️  CUTLASS backend installation had issues, but continuing..."
 fi
 
-# Create environment variable for CUTLASS path
-if ! grep -q "CUTLASS_PATH" ~/.bashrc; then
-    echo "" >> ~/.bashrc
-    echo "# CUTLASS 3.5 for Blackwell" >> ~/.bashrc
-    echo "export CUTLASS_PATH=$CUTLASS_DIR" >> ~/.bashrc
-    echo "export CPLUS_INCLUDE_PATH=\$CUTLASS_PATH/include:\$CPLUS_INCLUDE_PATH" >> ~/.bashrc
-fi
-export CUTLASS_PATH="$CUTLASS_DIR"
-export CPLUS_INCLUDE_PATH="$CUTLASS_PATH/include:$CPLUS_INCLUDE_PATH"
-
-echo "✅ CUTLASS 3.5 configured"
 echo ""
 
 # Test 4: Hardware info script
@@ -973,6 +964,57 @@ else
     echo "ℹ️  systemctl not available; please restart glances service manually if applicable."
 fi
 
+# Run verification scripts
+echo ""
+echo "🔍 Running Verification Checks..."
+echo "=================================="
+echo ""
+
+VERIFICATION_FAILED=0
+
+# Verify PyTorch installation
+echo "▶️  Verifying PyTorch installation..."
+if python3 verify_pytorch.py; then
+    echo "✅ PyTorch verification passed"
+else
+    echo "❌ PyTorch verification failed"
+    VERIFICATION_FAILED=1
+fi
+
+echo ""
+
+# Verify NVLink connectivity (only if multiple GPUs)
+GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)
+if [ "$GPU_COUNT" -gt 1 ]; then
+    echo "▶️  Verifying NVLink connectivity..."
+    if python3 verify_nvlink.py; then
+        echo "✅ NVLink verification passed"
+    else
+        echo "⚠️  NVLink verification had warnings (review output above)"
+    fi
+else
+    echo "ℹ️  Single GPU detected, skipping NVLink verification"
+fi
+
+echo ""
+
+# Verify CUTLASS backend
+echo "▶️  Verifying CUTLASS backend..."
+if python3 verify_cutlass.py 2>/dev/null; then
+    echo "✅ CUTLASS verification passed"
+else
+    echo "⚠️  CUTLASS verification had issues (may be expected)"
+fi
+
+echo ""
+
+# Summary of verification
+if [ $VERIFICATION_FAILED -eq 0 ]; then
+    echo "✅ All critical verifications passed!"
+else
+    echo "⚠️  Some verifications failed - review output above"
+fi
+
 # Final summary
 echo ""
 echo "🎉 Setup Complete!"
@@ -987,6 +1029,11 @@ echo "  • NVIDIA Nsight Systems (latest available)"
 echo "  • NVIDIA Nsight Compute (latest available)"
 echo "  • All project dependencies"
 echo "  • System performance tools (numactl, perf, etc.)"
+echo ""
+echo "✅ Verified:"
+echo "  • PyTorch installation and CUDA functionality"
+echo "  • NVLink connectivity (if multi-GPU)"
+echo "  • CUTLASS backend configuration"
 echo ""
 echo "🚀 Quick Start:"
 echo "  1. Run: python3 ch1/performance_basics.py"
@@ -1003,6 +1050,12 @@ echo "🔧 Profiling Commands:"
 echo "  • Nsight Systems: nsys profile -t cuda,nvtx,osrt -o profile python script.py"
 echo "  • Nsight Compute: ncu --metrics achieved_occupancy -o profile python script.py"
 echo "  • PyTorch Profiler: Use torch.profiler in your code"
+echo ""
+echo "🔗 NVLink Configuration (for multi-GPU workloads):"
+echo "  export NCCL_P2P_LEVEL=NVL"
+echo "  export NCCL_P2P_DISABLE=0"
+echo "  export NCCL_IB_DISABLE=1"
+echo "  export NCCL_NVLS_ENABLE=1"
 echo ""
 echo "📖 For more information, see the main README.md file and chapter-specific documentation."
 echo ""

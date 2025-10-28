@@ -43,6 +43,7 @@ sudo ./setup.sh   # Complete installation
 - **[MODEL_SIZE_RECOMMENDATIONS.md](MODEL_SIZE_RECOMMENDATIONS.md)** - Deployment sizing
 - **[docs/performance_baseline.md](docs/performance_baseline.md)** - Validated baselines
 - **[docs/power_efficiency_baselines.md](docs/power_efficiency_baselines.md)** - Power metrics
+- **[docs/CUTLASS_SETUP.md](docs/CUTLASS_SETUP.md)** - CUTLASS backend configuration
 
 ### Architecture & Deployment
 - **[docs/architecture_guides.md](docs/architecture_guides.md)** - GPT, MoE, inference tuning
@@ -270,10 +271,26 @@ Large models are **memory-bound**, not compute-bound. Moving 80 GB of weights fr
 - Compilation adds memory overhead (80.6 → 82.5 GB) without speedup
 - For 40B+ models: use FP8 quantization (35% memory reduction) or tensor parallelism instead
 
-**CUTLASS Backend:** PyTorch 2.9 includes CUTLASS support for GEMM operations. To use it, ensure `nvidia-cutlass-dsl` and `cuda-python` are installed system-wide. Performance gains vary by model size and workload - memory-bound operations won't benefit significantly.
+**CUTLASS Backend:** PyTorch 2.9 includes CUTLASS support for GEMM operations. Install via `sudo ./setup.sh` (includes `nvidia-cutlass-dsl` and `cuda-python`). The backend is working without errors, but performance gains are limited by memory bandwidth on large models. Use `mode='max-autotune'` to enable. See [docs/CUTLASS_SETUP.md](docs/CUTLASS_SETUP.md) for details.
+
+---
+
+## 📚 Documentation
+
+### Core Guides
+- **[8x B200 Load Testing Guide](docs/8xb200_load_testing_guide.md)** - Comprehensive load testing on 8-GPU systems
+- **[MoE Deployment Playbook](docs/moe_deployment_playbook.md)** - Production deployment for Mixture-of-Experts models (routing, autoscaling, monitoring)
+- **[Power Efficiency Baselines](docs/power_efficiency_baselines.md)** - Tokens/Joule metrics and cost analysis
+- **[Architecture Guides](docs/architecture_guides.md)** - Architecture-specific tuning (GPT, MoE, inference)
+- **[Migration to B200](docs/migration_to_b200.md)** - Step-by-step migration guide
+- **[Tools Quick Reference](docs/TOOLS_QUICK_REFERENCE.md)** - All tools and workflows
+
+### Status & Planning
+- **[KNOWN_GAPS.md](KNOWN_GAPS.md)** - What's implemented, what's not, and why
+- **[Performance Baseline](docs/performance_baseline.md)** - Validated baseline metrics
 
 ---
 
 **Status:** Production-ready, fully validated on 8x B200 hardware  
 **Last Updated:** October 28, 2025  
-**Documentation:** All claims backed by measurements ([docs/TODO.md](docs/TODO.md))
+**Documentation:** All claims backed by measurements

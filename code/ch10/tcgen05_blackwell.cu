@@ -469,10 +469,13 @@ float benchmark_cublas_fp16_tensor_core(int M, int N, int K, int iterations = 20
 
     double flops = 2.0 * static_cast<double>(M) * N * K;
     double tflops = flops / (avg_ms * 1.0e-3) / 1.0e12;
+    const double theoretical_fp16_tflops = 2000.0;  // Approx peak for B200 FP16
+    double utilization_pct = (tflops / theoretical_fp16_tflops) * 100.0;
 
     printf("cuBLAS Tensor Core GEMM:\n");
     printf("  Time: %.3f ms/iteration\n", avg_ms);
     printf("  FP16 Tensor Core throughput: %.1f TFLOPS\n", tflops);
+    printf("  Tensor core utilization percent: %.1f%%\n", utilization_pct);
     printf("  (cuBLAS 13.x automatically issues tcgen05.mma on Blackwell)\n");
 
     CUDA_CHECK(cudaEventDestroy(start));

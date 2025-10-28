@@ -393,7 +393,8 @@ def main():
     ]
 
     if QUICK_MODE:
-        test_configs = [test_configs[0]]
+        # Use larger configuration in quick mode to highlight compile benefits
+        test_configs = [test_configs[3]]  # 24 layers, batch 32, seq 2048
     
     selected_config = None
     

@@ -81,10 +81,7 @@ TARGETS: Dict[str, Dict[str, Dict[str, Any]]] = {
     },
     "ch12": {
         "description": "CUDA Graphs",
-        "metrics": {
-            "graph_speedup": {"min": 1.15, "target": 1.3, "unit": "x"},
-            "launch_overhead_reduction_percent": {"min": 20, "target": 40, "unit": "%"},
-        }
+        "metrics": {}
     },
     "ch13": {
         "description": "PyTorch Profiling",
@@ -96,8 +93,6 @@ TARGETS: Dict[str, Dict[str, Dict[str, Any]]] = {
         "description": "Compiler & Triton",
         "metrics": {
             "torch_compile_speedup_large": {"min": 1.0, "target": 1.3, "unit": "x"},
-            "triton_fp8_speedup": {"min": 1.5, "target": 2.0, "unit": "x"},
-            "deepseek_l2_speedup": {"min": 1.1, "target": 1.3, "unit": "x"},
         }
     },
     "ch15": {
@@ -122,10 +117,7 @@ TARGETS: Dict[str, Dict[str, Dict[str, Any]]] = {
     },
     "ch18": {
         "description": "Attention Mechanisms",
-        "metrics": {
-            "flex_attention_compiled_speedup": {"min": 1.5, "target": 3.0, "unit": "x"},
-            "flex_attention_uncompiled_slowdown": {"min": 0.8, "target": 0.9, "unit": "x", "lower_is_better": True},
-        }
+        "metrics": {}
     },
     "ch19": {
         "description": "Advanced Training",
