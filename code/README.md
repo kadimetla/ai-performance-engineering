@@ -5,8 +5,8 @@ Production playbook for standing up, validating, and tuning PyTorch LLM workload
 ---
 
 ## Overview
-**Target hardware:** 8x NVIDIA B200 (180 GB HBM3e, 148 SMs)  
-**Reference stack:** Ubuntu 22.04, CUDA 13.0, PyTorch 2.9
+**Target hardware:** NVIDIA Blackwell B200/B300 (sm100), Grace Blackwell GB200/GB300 (sm102), and DGX Spark GB10 (sm121)  
+**Reference stack:** CUDA 13+, PyTorch 2.9+, Triton 3.5+, and Python 3.10+
 
 The repository packages everything needed to:
 - Provision a reproducible software stack (`setup.sh`) for new lab machines.
