@@ -6,10 +6,30 @@ profiling is enabled, reducing overhead for pure performance benchmarks.
 
 import os
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
+from io import StringIO
 from typing import Optional
 
 import torch
+
+
+class FilteredStderr:
+    """Thread-safe filter for stderr that removes NVTX threading errors."""
+    def __init__(self, original):
+        self.original = original
+    
+    def write(self, text):
+        # Filter out NVTX threading error messages
+        if "External init callback must run in same thread as registerClient" not in text:
+            self.original.write(text)
+        # Otherwise silently drop the error message
+    
+    def flush(self):
+        self.original.flush()
+    
+    def __getattr__(self, name):
+        # Forward all other attributes to original stderr
+        return getattr(self.original, name)
 
 
 @contextmanager
@@ -18,37 +38,12 @@ def _suppress_nvtx_threading_error():
     
     This is a known PyTorch/NVTX issue where NVTX is initialized in one thread
     but used in another. The error is harmless and benchmarks complete successfully.
-    We suppress stderr output for this specific error message.
+    We suppress stderr output for this specific error message using thread-safe redirect_stderr.
     """
-    # Redirect stderr temporarily to filter out NVTX threading errors
-    original_stderr = sys.stderr
-    
-    class FilteredStderr:
-        """Filter stderr to remove NVTX threading errors."""
-        def __init__(self, original):
-            self.original = original
-            self.buffer = []
-        
-        def write(self, text):
-            # Filter out NVTX threading error messages
-            if "External init callback must run in same thread as registerClient" not in text:
-                self.original.write(text)
-            # Otherwise silently drop the error message
-        
-        def flush(self):
-            self.original.flush()
-        
-        def __getattr__(self, name):
-            # Forward all other attributes to original stderr
-            return getattr(self.original, name)
-    
-    filtered_stderr = FilteredStderr(original_stderr)
-    sys.stderr = filtered_stderr
-    
-    try:
+    # Use contextlib.redirect_stderr for thread-safe stderr redirection
+    filtered_stderr = FilteredStderr(sys.stderr)
+    with redirect_stderr(filtered_stderr):
         yield
-    finally:
-        sys.stderr = original_stderr
 
 
 @contextmanager

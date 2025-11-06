@@ -322,53 +322,78 @@ def benchmark_cuda_executable(executable: Path, iterations: int = 20, warmup: in
     Returns:
         CudaBenchmarkResult with statistical measures, or None if failed
     """
+    import os
+    import signal
+    
     times_ms = []
     
     # Warmup runs
     for _ in range(warmup):
         try:
-            subprocess.run(
+            # Run executable in its own process group so we can kill it without affecting parent
+            process = subprocess.Popen(
                 [str(executable)],
-                capture_output=True,
-                timeout=timeout,
-                check=False
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid  # Create new process group
             )
-        except subprocess.TimeoutExpired:
-            # Timeout occurred - kill any remaining processes
-            import os
-            import signal
             try:
-                # Try to kill any child processes that might still be running
-                os.killpg(os.getpgid(0), signal.SIGTERM)
-            except:
-                pass
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Timeout occurred - kill the process group (only the child, not parent)
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                    # Wait a bit for graceful termination
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        # Force kill if still running
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                        process.wait()
+                except (ProcessLookupError, OSError):
+                    # Process already terminated
+                    pass
+                return None
+        except Exception as e:
+            # If process creation failed, return None
             return None
     
     # Benchmark runs
     for _ in range(iterations):
         try:
             start = time.perf_counter()
-            result = subprocess.run(
+            # Run executable in its own process group so we can kill it without affecting parent
+            process = subprocess.Popen(
                 [str(executable)],
-                capture_output=True,
-                timeout=timeout,
-                check=False
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid  # Create new process group
             )
-            end = time.perf_counter()
-            
-            if result.returncode == 0:
-                elapsed_ms = (end - start) * 1000.0
-                times_ms.append(elapsed_ms)
-        except subprocess.TimeoutExpired:
-            # Timeout occurred - kill any remaining processes
-            import os
-            import signal
             try:
-                # Try to kill any child processes that might still be running
-                os.killpg(os.getpgid(0), signal.SIGTERM)
-            except:
-                pass
-            return None
+                stdout, stderr = process.communicate(timeout=timeout)
+                end = time.perf_counter()
+                
+                if process.returncode == 0:
+                    elapsed_ms = (end - start) * 1000.0
+                    times_ms.append(elapsed_ms)
+            except subprocess.TimeoutExpired:
+                # Timeout occurred - kill the process group (only the child, not parent)
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                    # Wait a bit for graceful termination
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        # Force kill if still running
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                        process.wait()
+                except (ProcessLookupError, OSError):
+                    # Process already terminated
+                    pass
+                return None
+        except Exception as e:
+            # If process creation failed, skip this iteration
+            continue
     
     if not times_ms:
         return None
@@ -857,12 +882,13 @@ def ensure_cuda_executables_built(chapter_dir: Path) -> bool:
         return False
 
 
-def test_chapter(chapter_dir: Path, enable_profiling: bool = False) -> Dict[str, Any]:
+def test_chapter(chapter_dir: Path, enable_profiling: bool = False, fast_mode: bool = False) -> Dict[str, Any]:
     """Test all benchmarks in a chapter and return results.
     
     Args:
         chapter_dir: Path to chapter directory
         enable_profiling: If True, generate profiling files (nsys, ncu, PyTorch) alongside benchmarks
+        fast_mode: If True, reduce iterations and warmup for faster runs
     """
     dump_environment_and_capabilities()
 
@@ -943,11 +969,22 @@ def test_chapter(chapter_dir: Path, enable_profiling: bool = False) -> Dict[str,
         }
     
     # Create harness for Python benchmarks with explicit timeout to prevent hangs
+    # Adjust iterations/warmup based on fast_mode
+    if fast_mode:
+        iterations = 5
+        warmup = 1
+    else:
+        iterations = 20
+        warmup = 5
+    
     config = BenchmarkConfig(
-        iterations=20,
-        warmup=5,
+        iterations=iterations,
+        warmup=warmup,
         timeout_seconds=15,  # 15 second timeout per benchmark to prevent hangs
-        enable_memory_tracking=True  # Enable memory metrics display
+        enable_memory_tracking=True,  # Enable memory metrics display
+        enable_profiling=enable_profiling,  # Respect profiling flag (default: True, can opt out with --skip-profiling)
+        enable_nsys=enable_profiling,  # nsys profiling (gracefully degrades if unavailable)
+        enable_ncu=enable_profiling,  # ncu profiling (gracefully degrades if unavailable)
     )
     harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
     

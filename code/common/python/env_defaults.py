@@ -84,7 +84,10 @@ _ENV_AND_CAPABILITIES_LOGGED = False
 
 
 def apply_env_defaults() -> Dict[str, str]:
-    """Apply default environment configuration and return the resulting values."""
+    """Apply default environment configuration and return the resulting values.
+    
+    Only sets variables that are not already set, to avoid overwriting user configurations.
+    """
     applied: Dict[str, str] = {}
 
     for key, value in ENV_DEFAULTS.items():
@@ -98,7 +101,13 @@ def apply_env_defaults() -> Dict[str, str]:
         os.environ["PYTORCH_ALLOC_CONF"] = legacy or "max_split_size_mb:128,expandable_segments:True"
     applied["PYTORCH_ALLOC_CONF"] = os.environ["PYTORCH_ALLOC_CONF"]
 
-    _ensure_cuda_paths()
+    # Only ensure CUDA paths if CUDA_HOME was not already set by user
+    # This prevents overwriting user-configured CUDA installations
+    if "CUDA_HOME" not in os.environ or os.environ["CUDA_HOME"] == ENV_DEFAULTS.get("CUDA_HOME"):
+        _ensure_cuda_paths()
+    else:
+        # CUDA_HOME is set by user - only prepend paths if they're missing (don't force our defaults)
+        _ensure_cuda_paths(use_existing_cuda_home=True)
     applied["PATH"] = os.environ.get("PATH", "")
     applied["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH", "")
 
@@ -108,17 +117,39 @@ def apply_env_defaults() -> Dict[str, str]:
     return {key: os.environ.get(key, "") for key in REPORTED_ENV_KEYS}
 
 
-def _ensure_cuda_paths() -> None:
-    """Ensure CUDA paths are present in PATH and LD_LIBRARY_PATH."""
-    cuda_home = os.environ.get("CUDA_HOME", ENV_DEFAULTS["CUDA_HOME"])
+def _ensure_cuda_paths(use_existing_cuda_home: bool = False) -> None:
+    """Ensure CUDA paths are present in PATH and LD_LIBRARY_PATH.
+    
+    Args:
+        use_existing_cuda_home: If True, use existing CUDA_HOME value even if it matches defaults.
+                                If False, only add paths if CUDA_HOME was set from defaults.
+    """
+    # Only use default CUDA_HOME if it's not already set
+    if use_existing_cuda_home:
+        cuda_home = os.environ.get("CUDA_HOME")
+        if not cuda_home:
+            # No CUDA_HOME set and we're not using defaults - skip
+            return
+    else:
+        # Use default only if not set
+        cuda_home = os.environ.get("CUDA_HOME", ENV_DEFAULTS.get("CUDA_HOME", ""))
+        if not cuda_home:
+            return
+
+    # Only add paths if the CUDA_HOME directory actually exists
+    if not os.path.exists(cuda_home):
+        return
 
     path_prefixes = _build_paths(cuda_home, CUDA_PATH_SUFFIXES)
     lib_prefixes = _build_paths(cuda_home, CUDA_LIBRARY_SUFFIXES)
 
+    # Only prepend if missing (this function already checks)
     for prefix in path_prefixes:
-        _prepend_if_missing("PATH", prefix)
+        if os.path.exists(prefix):  # Only add if path exists
+            _prepend_if_missing("PATH", prefix)
     for prefix in lib_prefixes:
-        _prepend_if_missing("LD_LIBRARY_PATH", prefix)
+        if os.path.exists(prefix):  # Only add if path exists
+            _prepend_if_missing("LD_LIBRARY_PATH", prefix)
 
 
 def _build_paths(root: str, suffixes: Iterable[str]) -> List[str]:

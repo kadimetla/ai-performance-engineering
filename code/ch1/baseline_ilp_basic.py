@@ -42,7 +42,21 @@ class BaselineIlpBasicBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 100_000_000  # 100M elements - match optimized scale
+        # Scale workload based on available GPU memory (match optimized scale)
+        # Default: 100M elements (~400 MB FP32) for large GPUs
+        # Scale down for smaller GPUs to ensure it fits
+        if torch.cuda.is_available():
+            total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if total_memory_gb >= 16:  # Large GPU (A100, H100, etc.)
+                self.N = 100_000_000  # 100M elements
+            elif total_memory_gb >= 8:  # Medium GPU (RTX 3090, etc.)
+                self.N = 50_000_000  # 50M elements
+            elif total_memory_gb >= 4:  # Small GPU (RTX 3060, etc.)
+                self.N = 25_000_000  # 25M elements
+            else:  # Very small GPU
+                self.N = 10_000_000  # 10M elements
+        else:
+            self.N = 100_000_000  # Fallback (shouldn't happen - CUDA required)
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""

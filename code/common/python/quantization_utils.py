@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 
-def quantize_to_fp8(tensor: torch.Tensor) -> torch.Tensor:
+def quantize_to_fp8(tensor: torch.Tensor, return_scale: bool = False) -> Union[torch.Tensor, tuple[torch.Tensor, float]]:
     """Quantize tensor to FP8 (E4M3FN format) for CUDA.
     
     FP8 E4M3FN: 1 sign bit, 4 exponent bits, 3 mantissa bits
@@ -21,31 +21,42 @@ def quantize_to_fp8(tensor: torch.Tensor) -> torch.Tensor:
     
     Args:
         tensor: Input tensor (FP32, FP16, or BF16)
+        return_scale: If True, return (tensor, scale) tuple for proper dequantization
         
     Returns:
-        Quantized tensor (converted to BF16 for computation compatibility)
+        Quantized tensor (converted to BF16 for computation compatibility), or (tensor, scale) if return_scale=True
     """
     if hasattr(torch, 'float8_e4m3fn'):
         try:
             # Native FP8 quantization: FP32/FP16/BF16 -> FP8 -> BF16
             # FP8 is the storage format, BF16 is used for computation
+            # Native FP8 doesn't have explicit scale (it's built into the format)
             tensor_fp8 = tensor.to(torch.float8_e4m3fn)
-            return tensor_fp8.to(torch.bfloat16)
+            quantized = tensor_fp8.to(torch.bfloat16)
+            if return_scale:
+                # For native FP8, scale is 1.0 (no explicit scaling needed)
+                return quantized, 1.0
+            return quantized
         except (RuntimeError, TypeError):
             # Fallback if FP8 conversion fails
             pass
     
-    # Fallback: Manual FP8 quantization simulation
+    # Fallback: Manual FP8 quantization simulation with scale tracking
     # Scale to FP8 range and quantize
-    scale = tensor.abs().max() / 448.0 if tensor.abs().max() > 0 else 1.0
+    max_val = tensor.abs().max().item()  # Convert tensor to scalar
+    scale = max_val / 448.0 if max_val > 0 else 1.0
     tensor_scaled = tensor / scale
     tensor_clamped = torch.clamp(tensor_scaled, -448.0, 448.0)
     # Quantize to 8-bit precision
     tensor_quantized = (tensor_clamped * 8.0).round() / 8.0
-    return tensor_quantized * scale
+    quantized = tensor_quantized * scale
+    
+    if return_scale:
+        return quantized, scale.item() if isinstance(scale, torch.Tensor) else scale
+    return quantized
 
 
-def quantize_to_fp4(tensor: torch.Tensor) -> torch.Tensor:
+def quantize_to_fp4(tensor: torch.Tensor, return_scale: bool = False) -> Union[torch.Tensor, tuple[torch.Tensor, float]]:
     """Quantize tensor to FP4 for CUDA (simulated via aggressive FP8).
     
     FP4 provides 2x memory reduction vs FP8, 4x vs FP16
@@ -53,9 +64,10 @@ def quantize_to_fp4(tensor: torch.Tensor) -> torch.Tensor:
     
     Args:
         tensor: Input tensor
+        return_scale: If True, return (tensor, scale) tuple for proper dequantization
         
     Returns:
-        Quantized tensor (converted to BF16 for computation)
+        Quantized tensor (converted to BF16 for computation), or (tensor, scale) if return_scale=True
     """
     # FP4 is not natively supported in PyTorch yet, so we use aggressive FP8
     # In production, would use Transformer Engine or custom kernels for FP4
@@ -65,23 +77,33 @@ def quantize_to_fp4(tensor: torch.Tensor) -> torch.Tensor:
             tensor_fp8 = tensor.to(torch.float8_e4m3fn)
             # Convert back and quantize again for FP4-like precision
             tensor_fp8_2 = tensor_fp8.to(torch.bfloat16).to(torch.float8_e4m3fn)
-            return tensor_fp8_2.to(torch.bfloat16)
+            quantized = tensor_fp8_2.to(torch.bfloat16)
+            if return_scale:
+                # For native FP8-based FP4 simulation, scale is 1.0
+                return quantized, 1.0
+            return quantized
         except (RuntimeError, TypeError):
             pass
     
-    # Fallback: Aggressive quantization
-    scale = tensor.abs().max() / 224.0 if tensor.abs().max() > 0 else 1.0  # FP4-like range
+    # Fallback: Aggressive quantization with scale tracking
+    max_val = tensor.abs().max().item()  # Convert tensor to scalar
+    scale = max_val / 224.0 if max_val > 0 else 1.0  # FP4-like range
     tensor_scaled = tensor / scale
     tensor_clamped = torch.clamp(tensor_scaled, -224.0, 224.0)
     # More aggressive quantization (4-bit precision simulation)
     tensor_quantized = (tensor_clamped * 16.0).round() / 16.0
-    return tensor_quantized * scale
+    quantized = tensor_quantized * scale
+    
+    if return_scale:
+        return quantized, scale.item() if isinstance(scale, torch.Tensor) else scale
+    return quantized
 
 
 def quantize_model_to_fp8(
     model: nn.Module,
     device: torch.device,
-    precision: Literal['fp8', 'fp4'] = 'fp8'
+    precision: Literal['fp8', 'fp4'] = 'fp8',
+    store_scales: bool = False
 ) -> nn.Module:
     """Quantize a PyTorch model to FP8 or FP4 for CUDA.
     
@@ -92,6 +114,7 @@ def quantize_model_to_fp8(
         model: PyTorch model to quantize
         device: CUDA device
         precision: 'fp8' or 'fp4' quantization
+        store_scales: If True, store per-tensor scales in module._quantization_scales
         
     Returns:
         Quantized model (weights quantized, model in BF16 for computation)
@@ -103,9 +126,24 @@ def quantize_model_to_fp8(
         for module in model.modules():
             if isinstance(module, nn.Linear):
                 # Quantize weights: FP32 -> FP8/FP4 -> BF16
-                module.weight.data = quantize_fn(module.weight.data)
+                if store_scales:
+                    quantized_weight, weight_scale = quantize_fn(module.weight.data, return_scale=True)
+                    module.weight.data = quantized_weight
+                    if not hasattr(module, '_quantization_scales'):
+                        module._quantization_scales = {}
+                    module._quantization_scales['weight'] = weight_scale
+                else:
+                    module.weight.data = quantize_fn(module.weight.data)
+                
                 if module.bias is not None:
-                    module.bias.data = quantize_fn(module.bias.data)
+                    if store_scales:
+                        quantized_bias, bias_scale = quantize_fn(module.bias.data, return_scale=True)
+                        module.bias.data = quantized_bias
+                        if not hasattr(module, '_quantization_scales'):
+                            module._quantization_scales = {}
+                        module._quantization_scales['bias'] = bias_scale
+                    else:
+                        module.bias.data = quantize_fn(module.bias.data)
     
     # Convert model to BF16 for computation (FP8/FP4 weights stored as BF16)
     model = model.to(device).to(torch.bfloat16).eval()

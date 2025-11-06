@@ -42,7 +42,21 @@ class OptimizedIlpBasicBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 100_000_000  # 100M elements - much larger workload
+        # Scale workload based on available GPU memory
+        # Default: 100M elements (~400 MB FP32) for large GPUs
+        # Scale down for smaller GPUs to ensure it fits
+        if torch.cuda.is_available():
+            total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if total_memory_gb >= 16:  # Large GPU (A100, H100, etc.)
+                self.N = 100_000_000  # 100M elements
+            elif total_memory_gb >= 8:  # Medium GPU (RTX 3090, etc.)
+                self.N = 50_000_000  # 50M elements
+            elif total_memory_gb >= 4:  # Small GPU (RTX 3060, etc.)
+                self.N = 25_000_000  # 25M elements
+            else:  # Very small GPU
+                self.N = 10_000_000  # 10M elements
+        else:
+            self.N = 100_000_000  # Fallback (shouldn't happen - CUDA required)
     
     
     def setup(self) -> None:
@@ -90,9 +104,10 @@ class OptimizedIlpBasicBenchmark(Benchmark):
             # Use torch operations that are optimized for parallel execution
             # Each operation reads from 'val' independently, enabling parallel execution
             # Use element-wise operations that can be fused efficiently
-            # Compute: val*2 + val + val*3 + val - 5 = val*(2+1+3+1) - 5 = val*7 - 5
+            # Algebraically simplify baseline: ((val * 2 + 1) * 3) - 5 = val * 6 + 3 - 5 = val * 6 - 2
             # This reduces to 2 operations instead of 4, enabling better ILP
-            self.output = val * 7.0 - 5.0
+            # Mathematically equivalent to baseline but with better parallelism
+            self.output = val * 6.0 - 2.0
             
             # Optimization: High ILP benefits
             # - Independent operations enable parallel execution
@@ -115,9 +130,24 @@ class OptimizedIlpBasicBenchmark(Benchmark):
         )
     
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
+        """Validate benchmark result by comparing to baseline computation.
+        
+        Baseline computes: ((input * 2 + 1) * 3) - 5 = input * 6 - 2
+        Optimized computes: input * 6 - 2 (algebraically simplified, mathematically equivalent)
+        """
         if self.input is None or self.output is None:
             return "Tensors not initialized"
+        
+        # Compute baseline result: ((input * 2 + 1) * 3) - 5 = input * 6 - 2
+        baseline_output = self.input * 6.0 - 2.0
+        
+        # Compare outputs with tolerance appropriate for FP32
+        # Use tight tolerance: rtol=1e-5, atol=1e-6 for FP32
+        if not torch.allclose(self.output, baseline_output, rtol=1e-5, atol=1e-6):
+            max_diff = (self.output - baseline_output).abs().max().item()
+            mean_diff = (self.output - baseline_output).abs().mean().item()
+            return f"Output mismatch: max difference {max_diff:.9f}, mean difference {mean_diff:.9f} exceeds tolerance (rtol=1e-5, atol=1e-6). Expected: input * 6 - 2"
+        
         return None
 
 

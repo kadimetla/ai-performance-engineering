@@ -42,6 +42,8 @@ class OptimizedQuantizationBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.input = None
+        self.output = None  # Store output for validation
+        self.baseline_output = None  # Store baseline output for comparison
     
     def setup(self) -> None:
         """Setup: Initialize quantized model."""
@@ -89,6 +91,9 @@ class OptimizedQuantizationBenchmark(Benchmark):
                 # FP8 provides 2x memory reduction vs FP16, 4x vs FP32
                 output, _ = self.model(self.input, self.input, self.input)
                 
+                # Store output for validation
+                self.output = output.detach().clone()
+                
                 # Optimization: FP8 Quantization benefits
                 # - Reduced memory usage (FP8: 2x vs FP16, 4x vs FP32)
                 # - Improved performance (faster FP8 computation on Tensor Cores)
@@ -101,6 +106,8 @@ class OptimizedQuantizationBenchmark(Benchmark):
         """Teardown: Clean up resources."""
         self.model = None
         self.input = None
+        self.output = None
+        self.baseline_output = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -111,11 +118,37 @@ class OptimizedQuantizationBenchmark(Benchmark):
         )
     
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
+        """Validate benchmark result by comparing FP8 output to FP32 baseline."""
         if self.model is None:
             return "Model not initialized"
         if self.input is None:
             return "Input not initialized"
+        if self.output is None:
+            return "Output not computed"
+        
+        # Compute baseline (FP32) output for comparison
+        # Use same seed and model architecture but with FP32 precision
+        torch.manual_seed(42)
+        hidden_dim = 256
+        baseline_model = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=8,
+            batch_first=True
+        ).to(self.device).eval()
+        
+        # Use FP32 input (convert from FP8 input)
+        baseline_input = self.input.float() if self.input.dtype != torch.float32 else self.input
+        
+        with torch.no_grad():
+            baseline_output, _ = baseline_model(baseline_input, baseline_input, baseline_input)
+        
+        # Compare outputs with tolerance appropriate for FP8 quantization
+        # FP8 has lower precision, so we use looser tolerance
+        # rtol=0.1 (10% relative tolerance), atol=0.01 (absolute tolerance)
+        if not torch.allclose(self.output.float(), baseline_output, rtol=0.1, atol=0.01):
+            max_diff = (self.output.float() - baseline_output).abs().max().item()
+            return f"Output mismatch: max difference {max_diff:.6f} exceeds tolerance (rtol=0.1, atol=0.01)"
+        
         return None
 
 def get_benchmark() -> Benchmark:

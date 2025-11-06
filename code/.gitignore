@@ -17,6 +17,7 @@ tmp_profiles/
 tmp_profile_*/
 tmp_bench_*/
 tmp_*/
+*-plan.md
 
 # Python
 __pycache__/

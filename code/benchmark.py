@@ -2,15 +2,18 @@
 """Run all benchmarks - discover, run, and summarize results.
 
 Usage:
-    python benchmark.py                           # Run all benchmarks
+    python benchmark.py                           # Run all benchmarks (profiling enabled by default)
     python benchmark.py --chapter 12              # Run benchmarks for chapter 12 (accepts number or ch12)
     python benchmark.py --chapter ch12            # Run benchmarks for chapter 12 (accepts number or ch12)
     python benchmark.py --format json              # Output JSON only
     python benchmark.py --chapter 12 --format json # Run ch12, output JSON only
-    python benchmark.py --profile                  # Enable nsys profiling (generates .nsys-rep files)
-    python benchmark.py --chapter 1 --profile       # Run ch1 with profiling enabled
+    python benchmark.py --skip-profiling          # Disable profiling for faster runs
+    python benchmark.py --chapter 1 --skip-profiling  # Run ch1 without profiling
     python benchmark.py --suite-timeout 7200        # Set suite timeout to 2 hours (default: 4 hours)
     python benchmark.py --suite-timeout 0          # Disable suite timeout (run until completion)
+    
+Note: Profiling (nsys/ncu/PyTorch profiler) is enabled by default and gracefully degrades
+      if tools are unavailable. Use --skip-profiling to disable for faster runs.
 """
 
 import sys
@@ -94,7 +97,7 @@ def ensure_peak_benchmarks_exist():
         print("   Continuing with benchmarks (using hardcoded targets if available)...")
 
 
-def run_benchmarks(chapter='all', format='both', enable_profiling=False, suite_timeout_seconds=None):
+def run_benchmarks(chapter='all', format='both', enable_profiling=True, suite_timeout_seconds=None, fast_mode=False):
     """Run all benchmarks - discover, run, and summarize results.
     
     THIS IS THE DEFAULT ACTION WHEN RUNNING benchmark.py
@@ -102,9 +105,10 @@ def run_benchmarks(chapter='all', format='both', enable_profiling=False, suite_t
     Args:
         chapter: Chapter to run ('all' or specific chapter like 'ch1')
         format: Output format ('json', 'markdown', or 'both')
-        enable_profiling: If True, generate nsys-rep files alongside benchmarks
+        enable_profiling: If True, generate nsys-rep files alongside benchmarks (default: True - core experience)
         suite_timeout_seconds: Overall timeout for entire suite in seconds (default: 14400 = 4 hours)
                               Set to None to disable timeout
+        fast_mode: If True, reduce iterations and warmup for faster runs
     """
     dump_environment_and_capabilities()
 
@@ -122,8 +126,12 @@ def run_benchmarks(chapter='all', format='both', enable_profiling=False, suite_t
     
     print("=" * 80)
     print("RUNNING ALL BENCHMARKS")
+    if fast_mode:
+        print("FAST MODE: Reduced iterations and warmup for quicker runs")
     if enable_profiling:
-        print("PROFILING ENABLED: nsys-rep files will be generated")
+        print("PROFILING ENABLED: nsys/ncu/PyTorch profiling will run (gracefully degrades if tools unavailable)")
+    else:
+        print("PROFILING DISABLED: Use --profile to enable or remove --skip-profiling")
     
     # Set realistic default timeout: ~4 hours (14400 seconds)
     # With 223 benchmark pairs × 2 benchmarks × 15s timeout = ~111 minutes minimum
@@ -192,7 +200,7 @@ def run_benchmarks(chapter='all', format='both', enable_profiling=False, suite_t
                     print(f"\nWARNING: Approaching suite timeout, skipping remaining chapters")
                     break
             
-            result = test_chapter(chapter_dir, enable_profiling=enable_profiling)
+            result = test_chapter(chapter_dir, enable_profiling=enable_profiling, fast_mode=fast_mode)
             all_results.append(result)
     except (TimeoutError, KeyboardInterrupt):
         suite_timed_out = True
@@ -278,16 +286,25 @@ def main():
     
     parser.add_argument('--chapter', type=str, default='all', help='Chapter to run (e.g., 12, ch12, or "all") (default: all)')
     parser.add_argument('--format', choices=['json', 'markdown', 'both'], default='both', help='Output format (default: both)')
-    parser.add_argument('--profile', action='store_true', help='Enable nsys profiling (generates .nsys-rep files alongside benchmarks)')
+    parser.add_argument('--profile', action='store_true', help='[DEPRECATED] Profiling is enabled by default. Use --skip-profiling to disable.')
+    parser.add_argument('--skip-profiling', action='store_true', help='Disable profiling (nsys/ncu/PyTorch profiler) for faster runs')
+    parser.add_argument('--fast', action='store_true', help='Fast mode: reduce iterations and warmup for quicker runs')
     parser.add_argument('--suite-timeout', type=int, default=14400, 
                        help='Overall timeout for entire suite in seconds (default: 14400 = 4 hours). Set to 0 to disable.')
     
     args = parser.parse_args()
     
+    # Determine profiling setting: default True, but can be disabled with --skip-profiling
+    # --profile flag is kept for backward compatibility but is now redundant
+    enable_profiling = not args.skip_profiling
+    
+    # Fast mode reduces iterations and warmup
+    fast_mode = args.fast
+    
     # Run benchmarks by default
     suite_timeout = args.suite_timeout if args.suite_timeout > 0 else None
-    run_benchmarks(chapter=args.chapter, format=args.format, enable_profiling=args.profile, 
-                   suite_timeout_seconds=suite_timeout)
+    run_benchmarks(chapter=args.chapter, format=args.format, enable_profiling=enable_profiling, 
+                   suite_timeout_seconds=suite_timeout, fast_mode=fast_mode)
 
 
 if __name__ == '__main__':
