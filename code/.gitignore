@@ -109,6 +109,7 @@ large_model_eager_8xb200*.json
 
 # PyTorch compile caches
 .torch_inductor/
+.torch_extensions/
 compiled_code_output/
 torch_compile_debug/
 
