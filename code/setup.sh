@@ -7,7 +7,7 @@
 #   1. NVIDIA Driver 580+ (auto-upgrades if needed)
 #   2. Python 3.11 (PyTorch 2.9 compatible)
 #   3. CUDA 13.0 repository and toolchain
-#   4. PyTorch 2.9 nightly with CUDA 13.0 support
+#   4. PyTorch 2.9.0 with CUDA 13.0 support (pinned)
 #   5. NVIDIA Nsight Systems 2025.3.2 (for timeline profiling)
 #   6. NVIDIA Nsight Compute 2025.3.1 (for kernel metrics)
 #   7. All Python dependencies from requirements_latest.txt
@@ -35,7 +35,7 @@
 #   - Auto-upgrades NVIDIA driver to 580+ if needed (will prompt reboot)
 #   - Installs CUDA 13.0 toolkit and libraries
 #   - Installs latest Nsight tools (2025.x)
-#   - Installs PyTorch 2.9 nightly with CUDA 13.0
+#   - Installs PyTorch 2.9.0 (pinned) with CUDA 13.0
 #   - Removes conflicting system packages (python3-optree, etc.)
 #   - Installs nvidia-ml-py (replaces deprecated pynvml)
 #   - Configures NVIDIA kernel modules for profiling
@@ -62,7 +62,7 @@ echo "This script will install:"
 echo "  • NVIDIA Driver 580+ (auto-upgrade if needed)"
 echo "  • Python 3.11 (PyTorch 2.9 compatible)"
 echo "  • CUDA 13.0 repository and toolchain"
-echo "  • PyTorch 2.9 nightly with CUDA 13.0"
+echo "  • PyTorch 2.9.0 with CUDA 13.0 support (pinned)"
 echo "  • NVIDIA Nsight Systems 2025.3.2 (latest)"
 echo "  • NVIDIA Nsight Compute 2025.3.1 (latest)"
 echo "  • All project dependencies"
@@ -327,12 +327,25 @@ if ! python3.11 -m pip --version &> /dev/null; then
 fi
 
 # Upgrade pip
-python3 -m pip install --upgrade pip setuptools packaging
+python3 -m pip install --upgrade --break-system-packages --ignore-installed pip setuptools packaging
+
+# Ensure wheel build backend is available for manual builds
+python3 -m pip install --no-cache-dir --upgrade --ignore-installed wheel
 
 # Fix python3-apt for the new Python version
+DISTUTILS_PTH="/usr/lib/python3/dist-packages/distutils-precedence.pth"
+if [ -f "$DISTUTILS_PTH" ]; then
+    echo "Removing distutils-precedence.pth shim (causes _distutils_hack errors)..."
+    rm -f "$DISTUTILS_PTH"
+fi
+
 echo ""
 echo "Fixing Python APT module..."
 apt install -y --reinstall python3-apt
+if [ -f "$DISTUTILS_PTH" ]; then
+    echo "Removing distutils-precedence.pth shim after python3-apt reinstall..."
+    rm -f "$DISTUTILS_PTH"
+fi
 
 # Remove distro flatbuffers package whose invalid version breaks pip metadata
 if dpkg -s python3-flatbuffers >/dev/null 2>&1; then
@@ -558,37 +571,51 @@ python3 - <<'PY'
 import sys
 try:
     import torch
+    cuda_ver = getattr(torch.version, "cuda", None)
+    print(f"torch.version.cuda = {cuda_ver}")
+    if not cuda_ver:
+        print("PyTorch build does not have CUDA enabled")
+except ImportError:
+    print("PyTorch not yet installed (will be installed later in this script)")
 except Exception as exc:
-    print(f"Failed to import torch for CUDA verification: {exc}")
-    sys.exit(1)
-
-cuda_ver = getattr(torch.version, "cuda", None)
-print(f"torch.version.cuda = {cuda_ver}")
-if not cuda_ver:
-    print("PyTorch build does not have CUDA enabled")
+    print(f"Warning: Could not verify PyTorch CUDA support: {exc}")
 PY
 
 # Install runtime monitoring/precision dependencies that require CUDA headers
 echo ""
-echo "Installing CUDA-dependent Python packages (prometheus-client, lmcache, transformer-engine)..."
+echo "Installing CUDA-dependent Python packages (prometheus-client, transformer-engine)..."
+
+# Helper to ensure pip installs run with CUDA environment populated
+pip_cuda() {
+    local cuda_home="${CUDA_HOME:-/usr/local/cuda-13.0}"
+    CUDA_HOME="${cuda_home}" \
+    TORCH_CUDA_HOME="${cuda_home}" \
+    CUDA_PATH="${cuda_home}" \
+    PATH="${cuda_home}/bin:${PATH}" \
+    LD_LIBRARY_PATH="${cuda_home}/lib64:${LD_LIBRARY_PATH:-}" \
+    PYTHONPATH="${PROJECT_ROOT}/.cuda_env:${PYTHONPATH:-}" \
+    python3 -m pip "$@"
+}
+
+export PYTHONPATH="${PROJECT_ROOT}/.cuda_env:${PYTHONPATH:-}"
 
 # Ensure NumPy is present for torch's extension helper before building any wheels
-python3 -m pip install --no-cache-dir --upgrade --ignore-installed numpy || true
+pip_cuda install --no-cache-dir --upgrade --ignore-installed numpy || true
 
 install_cuda_package() {
     local package_spec="$1"
     echo "Installing $package_spec"
-    if python3 -m pip install \
+    if pip_cuda install \
         --no-cache-dir --upgrade --ignore-installed --prefer-binary "$package_spec"; then
-echo "Installed $package_spec"
-return 0
-fi
+        echo "Installed $package_spec"
+        return 0
+    fi
 
     echo "Installing numpy inside pip build environment to satisfy torch setup requirements..."
-    python3 -m pip install --no-cache-dir --upgrade --ignore-installed numpy || true
+    pip_cuda install --no-cache-dir --upgrade --ignore-installed numpy || true
 
     echo "Initial install of $package_spec failed, retrying without build isolation..."
-    if python3 -m pip install \
+    if pip_cuda install \
         --no-cache-dir --upgrade --ignore-installed --no-build-isolation --prefer-binary "$package_spec"; then
         echo "Installed $package_spec (no-build-isolation)"
         return 0
@@ -600,15 +627,6 @@ fi
 
 install_cuda_package "prometheus-client==0.21.0"
 
-echo ""
-echo "Installing lmcache==0.3.8 (requires setuptools-scm version override)..."
-if ! SETUPTOOLS_SCM_PRETEND_VERSION=0.3.8 \
-        python3 -m pip install \
-        --no-cache-dir --upgrade --ignore-installed --no-build-isolation --prefer-binary \
-        lmcache==0.3.8; then
-    echo "Failed to install lmcache==0.3.8 even with version override. Please verify CUDA toolkit and setuptools-scm."
-fi
-
 install_cuda_package "transformer-engine"
 
 # Clean up
@@ -619,11 +637,13 @@ cd "$PROJECT_ROOT"
 # Install system tools for performance testing
 echo ""
 echo "Installing system performance tools..."
+KERNEL_RELEASE=$(uname -r)
+
 apt install -y \
     numactl \
     linux-tools-common \
     linux-tools-generic \
-    linux-tools-$(uname -r) \
+    "linux-tools-${KERNEL_RELEASE}" \
     gdb \
     perf-tools-unstable \
     infiniband-diags \
@@ -636,11 +656,21 @@ echo ""
 echo "Installing ninja (required for CUDA extensions)..."
 python3 -m pip install --no-cache-dir --upgrade --ignore-installed ninja==1.13.0
 
-# Install PyTorch 2.9 nightly with CUDA 13.0
+# Install PyTorch 2.9.0 with CUDA 13.0 (pinned)
 echo ""
-echo "Installing PyTorch 2.9 nightly with CUDA 13.0..."
-python3 -m pip install --index-url https://download.pytorch.org/whl/nightly/cu130 \
-    --no-cache-dir --upgrade --ignore-installed torch torchvision torchaudio
+echo "Installing PyTorch 2.9.0 (CUDA 13.0, pinned wheels)..."
+TORCHVISION_PKG="torchvision==0.24.0+cu130"
+if [ "$(uname -m)" = "aarch64" ]; then
+    TORCHVISION_PKG="torchvision==0.24.0"
+fi
+if ! python3 -m pip install \
+    --no-cache-dir --upgrade --ignore-installed \
+    --index-url https://download.pytorch.org/whl/cu130 \
+    --extra-index-url https://pypi.org/simple \
+    torch==2.9.0+cu130 "$TORCHVISION_PKG"; then
+    echo "Pinned PyTorch wheel install failed; retrying with default index (may build from source)..."
+    python3 -m pip install --no-cache-dir --upgrade --ignore-installed torch==2.9.0 torchvision==0.24.0
+fi
 
 # Install project dependencies
 echo ""
@@ -665,7 +695,8 @@ if [ -f "$REQUIREMENTS_FILE" ]; then
             onnx==1.19.0 onnxruntime-gpu==1.23.0 \
             py-spy==0.4.1 memory-profiler==0.61.0 line-profiler==5.0.0 pyinstrument==5.1.1 snakeviz==2.2.2 \
             optuna==4.5.0 hyperopt==0.2.7 ray==2.49.2 \
-            dask==2025.9.1 xarray==2025.6.1
+            dask==2025.9.1 xarray==2025.6.1 \
+            fsspec[http]==2024.6.1
     fi
 else
     echo "Requirements file not found at $REQUIREMENTS_FILE. Installing core packages directly..."
@@ -679,8 +710,12 @@ else
         onnx==1.19.0 onnxruntime-gpu==1.23.0 \
         py-spy==0.4.1 memory-profiler==0.61.0 line-profiler==5.0.0 pyinstrument==5.1.1 snakeviz==2.2.2 \
         optuna==4.5.0 hyperopt==0.2.7 ray==2.49.2 \
-        dask==2025.9.1 xarray==2025.6.1
+        dask==2025.9.1 xarray==2025.6.1 \
+        fsspec[http]==2024.6.1
 fi
+
+# Ensure fsspec version matches datasets requirement
+python3 -m pip install --no-cache-dir --upgrade --ignore-installed fsspec[http]==2024.6.1
 
 # Sync CUTLASS headers for tcgen05 kernels
 echo ""
@@ -695,8 +730,7 @@ fi
 
 # Ensure monitoring/runtime dependencies are available even if requirements were cached
 echo ""
-echo "Ensuring monitoring/runtime packages (Prometheus, LMCache, Transformer Engine)..."
-python3 -m pip install --no-input --upgrade --ignore-installed prometheus-client==0.21.0 lmcache==0.3.9
+echo "Ensuring monitoring/runtime packages (Prometheus, Transformer Engine)..."
 
 # Transformer Engine build requires CUDNN headers shipped with the Python wheel.
 CUDA_ROOT=/usr/local/cuda-13.0
@@ -1341,7 +1375,7 @@ echo "Setup Complete!"
 echo "=================="
 echo ""
 echo "Installed:"
-echo "  • PyTorch 2.9 nightly with CUDA 13.0"
+echo "  • PyTorch 2.9.0 with CUDA 13.0 (pinned)"
 echo "  • CUDA 13.0 toolchain and development tools"
 echo "  • NCCL 2.28.7 (Blackwell-optimized with NVLS support)"
 echo "  • NVSHMEM 3.4.5 runtime and headers (CUDA 13)"

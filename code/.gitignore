@@ -1,4 +1,5 @@
 book/
+.cuda_env/
 benchmark_test_results.json
 benchmark_test_results.md
 benchmark_status_table.json

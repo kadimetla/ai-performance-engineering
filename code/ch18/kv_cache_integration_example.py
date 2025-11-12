@@ -10,22 +10,22 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 """
-LMCache Integration Example (Chapter 18)
+KV Cache Integration Example (Chapter 18)
 
-Demonstrates LMCache integration for KV cache management as described in Chapter 18.
-LMCache enables efficient sharing and reuse of KV cache across requests and nodes.
+Demonstrates a generic key-value cache manager based on the strategies described
+in Chapter 18 for efficient KV cache management across GPU and CPU tiers.
 
 Key features:
 - GPU and CPU cache management
 - Paged cache offload
 - Prefix sharing and deduplication
 - Dynamic GPU/CPU ratio adjustment
-- Multi-node cache coordination
+- Multi-node cache coordination (conceptual)
 
 Usage:
-    from lmcache_integration_example import LMCacheManager
-    
-    cache_mgr = LMCacheManager(gpu_cache_size_gb=10, cpu_cache_size_gb=50)
+    from kv_cache_integration_example import KVCacheManager
+
+    cache_mgr = KVCacheManager(gpu_cache_size_gb=10, cpu_cache_size_gb=50)
     cache_mgr.put_kv_cache(token_ids, kv_tensors)
     cached_kv = cache_mgr.get_kv_cache(token_ids)
 """
@@ -41,7 +41,7 @@ import time
 
 @dataclass
 class CacheEntry:
-    """Entry in the LMCache"""
+    """Entry in the KV cache."""
     key_hash: str
     token_ids: torch.Tensor
     kv_cache: Tuple[torch.Tensor, torch.Tensor]  # (keys, values)
@@ -53,7 +53,7 @@ class CacheEntry:
 
 @dataclass
 class CacheStats:
-    """Statistics for LMCache"""
+    """Statistics for the cache."""
     total_requests: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
@@ -74,9 +74,9 @@ class CacheStats:
         return (self.prefix_matches / self.total_requests * 100) if self.total_requests > 0 else 0.0
 
 
-class LMCacheManager:
+class KVCacheManager:
     """
-    LMCache Manager for efficient KV cache management.
+    Generic KV cache manager for efficient KV cache management.
     
     Implements the approach from Chapter 18:
     - GPU cache for hot/recent sequences
@@ -94,7 +94,7 @@ class LMCacheManager:
         enable_prefix_sharing: bool = True
     ):
         """
-        Initialize LMCache manager.
+        Initialize the KV cache manager.
         
         Args:
             gpu_cache_size_gb: GPU cache size in GB
@@ -118,7 +118,7 @@ class LMCacheManager:
         self.gpu_cache_used_bytes = 0
         self.cpu_cache_used_bytes = 0
         
-        print(f"Initialized LMCacheManager:")
+        print(f"Initialized KVCacheManager:")
         print(f"  GPU cache: {gpu_cache_size_gb:.1f} GB")
         print(f"  CPU cache: {cpu_cache_size_gb:.1f} GB")
         print(f"  Page size: {page_size} tokens")
@@ -357,7 +357,7 @@ class LMCacheManager:
         """
         Dynamically adjust GPU/CPU cache ratio based on memory pressure.
         
-        As mentioned in Chapter 18: "vLLM's LMCache component allows adjusting
+        As mentioned in Chapter 18: "Modern KV cache systems allow adjusting
         the GPU versus CPU cache ratio."
         
         Args:
@@ -391,7 +391,7 @@ class LMCacheManager:
     def print_stats(self):
         """Print cache statistics."""
         print("\n" + "="*70)
-        print("LMCache Statistics")
+        print("Cache Statistics")
         print("="*70)
         print(f"\nCache Performance:")
         print(f"  Total requests:     {self.stats.total_requests}")
@@ -418,7 +418,7 @@ class LMCacheManager:
 # Example usage
 if __name__ == '__main__':
     print("=" * 70)
-    print("LMCache Integration Example (Chapter 18)")
+    print("KV Cache Integration Example (Chapter 18)")
     print("=" * 70)
     
     if not torch.cuda.is_available():
@@ -426,8 +426,8 @@ if __name__ == '__main__':
         print("Exiting...")
         exit(0)
     
-    # Initialize LMCache manager
-    cache_mgr = LMCacheManager(
+    # Initialize cache manager
+    cache_mgr = KVCacheManager(
         gpu_cache_size_gb=1.0,  # Small for demo
         cpu_cache_size_gb=2.0,
         page_size=16,
@@ -503,7 +503,7 @@ if __name__ == '__main__':
     print("Demo complete!")
     print("="*70)
     
-    print("\nKey Benefits of LMCache (Chapter 18):")
+    print("\nKey Benefits of Chapter 18 Cache Strategies:")
     print("- Efficient GPU/CPU cache management")
     print("- Prefix sharing reduces redundant computation")
     print("- Dynamic ratio adjustment adapts to memory pressure")

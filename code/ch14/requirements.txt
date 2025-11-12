@@ -7,7 +7,6 @@
 --extra-index-url https://pypi.org/simple
 torch==2.9.*
 torchvision==0.24.*
-torchaudio==2.9.*
 
 # Optional: install upstream Triton if you author custom GPU kernels outside of
 # TorchInductor (PyTorch ships a bundled runtime already). Prefer ≥3.5.1/post
