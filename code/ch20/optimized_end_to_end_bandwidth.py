@@ -25,6 +25,12 @@ except ImportError:
     pass
 from typing import Optional
 
+try:
+    from common.python.logger import get_logger
+    LOGGER = get_logger(__name__)
+except ImportError:  # pragma: no cover - logger not available during docs builds
+    LOGGER = None
+
 from ch20.inductor_guard import (
     disable_inductor_cudagraph_features,
     restore_inductor_cudagraph_features,
@@ -72,6 +78,8 @@ class OptimizedEndToEndBandwidthBenchmark(Benchmark):
         self.hidden_dim = 1024
         self.num_batches = 10
         self._inductor_cfg_state: InductorCudagraphState = None
+        self._used_compiled_model = False
+        self._compile_error: Optional[str] = None
     
     def setup(self) -> None:
         """Setup: Initialize optimized model and data."""
@@ -86,8 +94,22 @@ class OptimizedEndToEndBandwidthBenchmark(Benchmark):
             
             # Optimized: FP16, compiled model
             model = SimplePipeline(hidden_dim=self.hidden_dim).to(self.device).half().eval()
-            self.model = torch.compile(model, mode="reduce-overhead")
-            # Warmup to trigger compilation and catch errors early
+
+            try:
+                compiled_model = torch.compile(model, mode="reduce-overhead")
+                self.model = compiled_model
+                self._used_compiled_model = True
+            except Exception as exc:  # torch.compile can fail on newer architectures/toolchains
+                self._compile_error = f"{exc.__class__.__name__}: {exc}"
+                self._used_compiled_model = False
+                self.model = model  # Fallback to eager execution
+                if LOGGER is not None:
+                    LOGGER.warning(
+                        "torch.compile failed for %s; falling back to eager execution.",
+                        self.__class__.__name__,
+                        exc_info=exc,
+                    )
+            # Warmup to trigger compilation (or validate eager fallback) and catch errors early
             test_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
             for _ in range(3):
                 with torch.no_grad():
@@ -103,7 +125,8 @@ class OptimizedEndToEndBandwidthBenchmark(Benchmark):
             
             # Warmup
             for inp in self.inputs[:5]:
-                _ = self.model(inp)
+                with torch.no_grad():
+                    _ = self.model(inp)
             torch.cuda.synchronize()
         except Exception:
             restore_inductor_cudagraph_features(self._inductor_cfg_state)
@@ -127,7 +150,8 @@ class OptimizedEndToEndBandwidthBenchmark(Benchmark):
             
             self.outputs = []
             for inp in self.inputs:
-                out = self.model(inp)
+                with torch.no_grad():
+                    out = self.model(inp)
                 self.outputs.append(out)
             torch.cuda.synchronize()
 
@@ -156,6 +180,15 @@ class OptimizedEndToEndBandwidthBenchmark(Benchmark):
         if len(self.outputs) != self.num_batches:
             return f"Expected {self.num_batches} outputs, got {len(self.outputs)}"
         return None
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        """Expose compile mode so results clearly state if a fallback occurred."""
+        metrics = {
+            "used_torch_compile": self._used_compiled_model,
+        }
+        if self._compile_error:
+            metrics["torch_compile_error"] = self._compile_error
+        return metrics
 
 
 def get_benchmark() -> Benchmark:

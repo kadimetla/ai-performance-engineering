@@ -11,9 +11,11 @@
         "updated_at": "2025-11-10T18:32:27.559864"
       },
       "metrics": {
+        "baseline_p75_ms": 2.4872000217437744,
         "baseline_throughput.latency_ms": 2.2082016110420226,
         "baseline_throughput.requests_per_s": 452.85720062857513,
         "baseline_time_ms": 2.2082016110420226,
+        "best_optimized_p75_ms": 0.2646079957485199,
         "best_optimized_speedup": 20.413191113240668,
         "best_optimized_throughput.latency_ms": 0.12406079992651939,
         "best_optimized_throughput.requests_per_s": 8060.563857336847,
@@ -33,9 +35,11 @@
         "updated_at": "2025-11-11T08:06:10.558925"
       },
       "metrics": {
+        "baseline_p75_ms": 1.0847680568695068,
         "baseline_throughput.latency_ms": 1.0323795223236083,
         "baseline_throughput.requests_per_s": 968.6360281045378,
         "baseline_time_ms": 1.0323795223236083,
+        "best_optimized_p75_ms": 0.5279359817504883,
         "best_optimized_speedup": 2.37882689577385,
         "best_optimized_throughput.latency_ms": 0.4427833598852158,
         "best_optimized_throughput.requests_per_s": 2258.4407875201846,
@@ -55,9 +59,11 @@
         "updated_at": "2025-11-11T08:05:51.120110"
       },
       "metrics": {
+        "baseline_p75_ms": 0.2696959972381592,
         "baseline_throughput.latency_ms": 0.27131776094436644,
         "baseline_throughput.requests_per_s": 3685.715216428642,
         "baseline_time_ms": 0.27131776094436644,
+        "best_optimized_p75_ms": 0.25123199820518494,
         "best_optimized_speedup": 1.5509660205730724,
         "best_optimized_throughput.latency_ms": 0.20452416062355042,
         "best_optimized_throughput.requests_per_s": 4889.39789290035,
@@ -77,7 +83,11 @@
         "updated_at": "2025-11-11T08:06:36.517811"
       },
       "metrics": {
+        "baseline_p75_ms": 2523.6969810002847,
+        "baseline_p90_ms": 2523.6969810002847,
         "baseline_time_ms": 2474.6742124001685,
+        "best_optimized_p75_ms": 1535.3971969998383,
+        "best_optimized_p90_ms": 1535.3971969998383,
         "best_optimized_speedup": 1.9519389520573454,
         "best_optimized_time_ms": 1464.1910745999667,
         "best_speedup": 1.9519389520573454
@@ -95,9 +105,11 @@
         "updated_at": "2025-11-10T18:32:16.775073"
       },
       "metrics": {
-        "baseline_throughput.latency_ms": 1.090755832195282,
-        "baseline_throughput.requests_per_s": 916.7954646525936,
-        "baseline_time_ms": 1.090755832195282,
+        "baseline_p75_ms": 1.174880027770996,
+        "baseline_throughput.latency_ms": 1.0163903999328614,
+        "baseline_throughput.requests_per_s": 983.8739130810916,
+        "baseline_time_ms": 1.0163903999328614,
+        "best_optimized_p75_ms": 0.40064001083374023,
         "best_optimized_speedup": 4.737711200064804,
         "best_optimized_throughput.latency_ms": 0.3442015987634659,
         "best_optimized_throughput.requests_per_s": 2905.274128860733,
@@ -117,9 +129,11 @@
         "updated_at": "2025-11-10T20:13:33.848646"
       },
       "metrics": {
+        "baseline_p75_ms": 41.84294509887695,
         "baseline_throughput.latency_ms": 38.93746910095215,
         "baseline_throughput.requests_per_s": 25.682203365794688,
         "baseline_time_ms": 38.93746910095215,
+        "best_optimized_p75_ms": 25.41417694091797,
         "best_optimized_speedup": 5.852613369895361,
         "best_optimized_throughput.latency_ms": 7.091968059539795,
         "best_optimized_throughput.requests_per_s": 141.00458315725848,
@@ -139,9 +153,11 @@
         "updated_at": "2025-11-10T20:13:28.337320"
       },
       "metrics": {
+        "baseline_p75_ms": 9.900959968566895,
         "baseline_throughput.latency_ms": 8.017990398406983,
         "baseline_throughput.requests_per_s": 124.71953074409771,
         "baseline_time_ms": 8.017990398406983,
+        "best_optimized_p75_ms": 2.6880319118499756,
         "best_optimized_speedup": 4.659827466627879,
         "best_optimized_throughput.latency_ms": 2.0588735580444335,
         "best_optimized_throughput.requests_per_s": 485.70248332773934,

@@ -176,17 +176,19 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_kv_cache_naive", enable=enable_nvtx):
-            for seq_idx, x in enumerate(self.inputs):
-                request_id = f"req_{seq_idx}"
-                seq_len = x.size(1)
-                
-                for pos in range(seq_len):
-                    token = x[:, pos:pos+1, :]
-                    hidden = token
-                    for layer_idx, layer in enumerate(self.model):
-                        hidden = layer(hidden, self.kv_cache, request_id, layer_idx, pos)
-                
-                self.kv_cache.free(request_id)
+            with torch.no_grad():
+                for seq_idx, x in enumerate(self.inputs):
+                    request_id = f"req_{seq_idx}"
+                    seq_len = x.size(1)
+                    
+                    for pos in range(seq_len):
+                        token = x[:, pos:pos+1, :]
+                        hidden = token
+                        for layer_idx, layer in enumerate(self.model):
+                            hidden = layer(hidden, self.kv_cache, request_id, layer_idx, pos)
+                    
+                    self.kv_cache.free(request_id)
+            torch.cuda.synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""

@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, TYPE_CHECKING, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, TYPE_CHECKING, Union, cast
 
 import numpy as np
 import torch
@@ -122,6 +122,20 @@ except ImportError:
     LOGGER_AVAILABLE = False
     import logging
     logger = logging.getLogger(__name__)
+
+
+def _extract_skip_reason_from_messages(messages: Sequence[str]) -> Optional[str]:
+    """Return the SKIPPED reason embedded in harness error messages."""
+    for msg in messages:
+        upper = msg.upper()
+        if "SKIPPED" not in upper:
+            continue
+        if "SKIPPED:" in msg:
+            return msg.split("SKIPPED:", 1)[1].strip()
+        idx = upper.find("SKIPPED")
+        if idx != -1:
+            return msg[idx:].strip()
+    return None
 
 from common.python.gpu_memory_logger import (
     GpuMemoryLogger,
@@ -1070,7 +1084,14 @@ class BenchmarkHarness:
                 error_details.append(f"Partial memory stats: peak={memory_peak_mb:.2f}MB")
             if profiling_outputs:
                 error_details.append(f"Profiling artifacts collected: {list(profiling_outputs.keys())}")
-            
+
+            skip_reason = _extract_skip_reason_from_messages(errors)
+            if skip_reason:
+                skip_message = skip_reason if skip_reason.upper().startswith("SKIPPED") else f"SKIPPED: {skip_reason}"
+                if LOGGER_AVAILABLE:
+                    logger.warning("Benchmark '%s' skipped: %s", benchmark_name, skip_message)
+                raise RuntimeError(skip_message)
+
             error_message = "\n".join(error_details)
             if LOGGER_AVAILABLE:
                 logger.error("=" * 80)
@@ -1602,7 +1623,14 @@ class BenchmarkHarness:
                 error_details.append(f"Partial memory stats: peak={memory_peak_mb:.2f}MB")
             if profiling_outputs:
                 error_details.append(f"Profiling artifacts collected: {list(profiling_outputs.keys())}")
-            
+
+            skip_reason = _extract_skip_reason_from_messages(errors)
+            if skip_reason:
+                skip_message = skip_reason if skip_reason.upper().startswith("SKIPPED") else f"SKIPPED: {skip_reason}"
+                if LOGGER_AVAILABLE:
+                    logger.warning("Benchmark '%s' skipped: %s", benchmark_name, skip_message)
+                raise RuntimeError(skip_message)
+
             error_message = "\n".join(error_details)
             if LOGGER_AVAILABLE:
                 logger.error("=" * 80)

@@ -11,6 +11,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 364.7046813964844,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -20,7 +21,8 @@
         "baseline_throughput.samples_per_s": 468.13455761253954,
         "baseline_throughput.tokens_per_s": 239684.89349762024,
         "baseline_time_ms": 17.08910369873047,
-        "best_optimized_speedup": 2.0795787108546064,
+        "best_optimized_p75_ms": 100.07158660888672,
+        "best_optimized_speedup": 3.626310344637212,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
         "best_optimized_throughput.custom_unit_per_s": null,
@@ -30,7 +32,7 @@
         "best_optimized_throughput.samples_per_s": 908.0787877702084,
         "best_optimized_throughput.tokens_per_s": 464936.3393383467,
         "best_optimized_time_ms": 8.809808254241943,
-        "best_speedup": 2.0795787108546064
+        "best_speedup": 3.626310344637212
       },
       "type": "python"
     },
@@ -45,6 +47,7 @@
         "updated_at": "2025-11-11T19:33:39.396743"
       },
       "metrics": {
+        "baseline_p75_ms": 136.093017578125,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -54,6 +57,7 @@
         "baseline_throughput.samples_per_s": 29.633650457954943,
         "baseline_throughput.tokens_per_s": 29.633650457954943,
         "baseline_time_ms": 134.98168258666993,
+        "best_optimized_p75_ms": 2.752959966659546,
         "best_optimized_speedup": 72.8732560474243,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -79,6 +83,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 0.6534720063209534,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -88,6 +93,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": 6298902.556912856,
         "baseline_time_ms": 0.6502720057964325,
+        "best_optimized_p75_ms": 0.4139519929885864,
         "best_optimized_speedup": 2.917571728197023,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -113,6 +119,7 @@
         "updated_at": "2025-11-11T19:28:26.997639"
       },
       "metrics": {
+        "baseline_p75_ms": 2.738271951675415,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -122,6 +129,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 2.648358392715454,
+        "best_optimized_p75_ms": 2.0333120822906494,
         "best_optimized_speedup": 9.406956473680616,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -147,6 +155,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 1162.3348388671875,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -156,6 +165,7 @@
         "baseline_throughput.samples_per_s": 27.312641306952564,
         "baseline_throughput.tokens_per_s": 27.312641306952564,
         "baseline_time_ms": 292.9046630859375,
+        "best_optimized_p75_ms": 244.77325439453125,
         "best_optimized_speedup": 4.622481060427188,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -181,6 +191,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 1.5753599405288696,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -190,16 +201,17 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 1.4692735910415649,
+        "best_optimized_p75_ms": 0.5580480098724365,
         "best_optimized_speedup": 4.656719109430104,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
         "best_optimized_throughput.custom_unit_per_s": null,
         "best_optimized_throughput.goodput": null,
-        "best_optimized_throughput.latency_ms": 0.5567615985870361,
-        "best_optimized_throughput.requests_per_s": 1796.1008850786868,
+        "best_optimized_throughput.latency_ms": 0.48168320059776304,
+        "best_optimized_throughput.requests_per_s": 2076.053303829181,
         "best_optimized_throughput.samples_per_s": null,
         "best_optimized_throughput.tokens_per_s": null,
-        "best_optimized_time_ms": 0.5567615985870361,
+        "best_optimized_time_ms": 0.48168320059776304,
         "best_speedup": 4.656719109430104
       },
       "type": "python"
@@ -215,6 +227,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 560.1570434570312,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -224,6 +237,7 @@
         "baseline_throughput.samples_per_s": 130.2768444236565,
         "baseline_throughput.tokens_per_s": 66701.74434491213,
         "baseline_time_ms": 61.4076894124349,
+        "best_optimized_p75_ms": 514.498779296875,
         "best_optimized_speedup": 1.5391785653639802,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -249,6 +263,7 @@
         "updated_at": "2025-11-11T19:27:56.725504"
       },
       "metrics": {
+        "baseline_p75_ms": 12.550432205200195,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -258,6 +273,7 @@
         "baseline_throughput.samples_per_s": 361.58096519751314,
         "baseline_throughput.tokens_per_s": 185129.45418112673,
         "baseline_time_ms": 11.062529239654541,
+        "best_optimized_p75_ms": 1.9479039907455444,
         "best_optimized_speedup": 5.979042817497598,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -283,6 +299,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 96.62188720703125,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -292,6 +309,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 96.80582427978516,
+        "best_optimized_p75_ms": 2.197312116622925,
         "best_optimized_speedup": 56.063317511967696,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -317,6 +335,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 75.97833251953125,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -326,6 +345,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 69.15686416625977,
+        "best_optimized_p75_ms": 46.431297302246094,
         "best_optimized_speedup": 1.615188675430685,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -351,6 +371,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 10.488863945007324,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -360,6 +381,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 10.627689647674561,
+        "best_optimized_p75_ms": 2.6928958892822266,
         "best_optimized_speedup": 4.944972085283864,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -385,6 +407,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 3.9111039638519287,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -394,6 +417,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": 92210.35740813454,
         "baseline_time_ms": 2.776260793209076,
+        "best_optimized_p75_ms": 1.743839979171753,
         "best_optimized_speedup": 2.1295618530180365,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -419,6 +443,7 @@
         "updated_at": "2025-11-11T19:30:24.266333"
       },
       "metrics": {
+        "baseline_p75_ms": 9.619872093200684,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -428,6 +453,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 8.682462453842163,
+        "best_optimized_p75_ms": 3.8676159381866455,
         "best_optimized_speedup": 3.275705569279915,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -453,6 +479,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 4.300191879272461,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -460,8 +487,9 @@
         "baseline_throughput.latency_ms": 1.4378480017185211,
         "baseline_throughput.requests_per_s": 5563.870444190465,
         "baseline_throughput.samples_per_s": 5563.870444190465,
-        "baseline_throughput.tokens_per_s": 2848701.667425518,
+        "baseline_throughput.tokens_per_s": 3830615.105258267,
         "baseline_time_ms": 1.4378480017185211,
+        "best_optimized_p75_ms": 4.60422420501709,
         "best_optimized_speedup": 1.4461589545485525,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -470,7 +498,7 @@
         "best_optimized_throughput.latency_ms": 1.2115040123462677,
         "best_optimized_throughput.requests_per_s": 6603.36236485651,
         "best_optimized_throughput.samples_per_s": 6603.36236485651,
-        "best_optimized_throughput.tokens_per_s": 3380921.530806533,
+        "best_optimized_throughput.tokens_per_s": 3786723.190369439,
         "best_optimized_time_ms": 1.2115040123462677,
         "best_speedup": 1.4461589545485525
       },
@@ -487,6 +515,7 @@
         "updated_at": "2025-11-12T00:27:22.467168"
       },
       "metrics": {
+        "baseline_p75_ms": 100.60291290283203,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -496,6 +525,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 9.159551938374838,
+        "best_optimized_p75_ms": 95.44012451171875,
         "best_optimized_speedup": 1.1438839857544372,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,

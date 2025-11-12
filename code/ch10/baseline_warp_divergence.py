@@ -88,11 +88,11 @@ class BaselineWarpDivergenceBenchmark(Benchmark):
                 result[mask] = positive
                 result[~mask] = negative
                 mask_source = 0.9 * mask_source + 0.1 * torch.roll(result, shifts=iteration + 1, dims=0)
-                torch.cuda.synchronize()
 
             self.output = result
             self.routing_logits = mask_source
             self._checksum = float(result.sum().item())
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
@@ -106,6 +106,7 @@ class BaselineWarpDivergenceBenchmark(Benchmark):
         return BenchmarkConfig(
             iterations=50,
             warmup=5,
+            measurement_timeout_seconds=120,
         )
     
     def validate_result(self) -> Optional[str]:

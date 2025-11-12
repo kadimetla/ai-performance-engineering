@@ -5,12 +5,13 @@
       "metadata": {
         "best_optimization": "optimized_cutlass",
         "best_optimization_file": "optimized_cutlass.py",
-        "best_optimization_speedup": 4.447798145461009,
-        "best_optimization_time_ms": 4.845185899734497,
-        "git_commit": "935c9879521036ebb752bedf852b23fec5ce2066",
-        "updated_at": "2025-11-11T20:07:11.079632"
+        "best_optimization_speedup": 5.040553230732811,
+        "best_optimization_time_ms": 4.413802232742309,
+        "git_commit": "7a301a67a040041e232ac553c1ebae1fe317b20c",
+        "updated_at": "2025-11-12T13:36:57.095842"
       },
       "metrics": {
+        "baseline_p75_ms": 22.589664459228516,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -20,17 +21,18 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 21.55040885925293,
-        "best_optimized_speedup": 4.447798145461009,
+        "best_optimized_p75_ms": 4.595232009887695,
+        "best_optimized_speedup": 5.040553230732811,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
         "best_optimized_throughput.custom_unit_per_s": null,
         "best_optimized_throughput.goodput": null,
-        "best_optimized_throughput.latency_ms": 4.845185899734497,
-        "best_optimized_throughput.requests_per_s": 206.39042973661697,
+        "best_optimized_throughput.latency_ms": 4.413802232742309,
+        "best_optimized_throughput.requests_per_s": 226.56203138913563,
         "best_optimized_throughput.samples_per_s": null,
         "best_optimized_throughput.tokens_per_s": null,
-        "best_optimized_time_ms": 4.845185899734497,
-        "best_speedup": 4.447798145461009
+        "best_optimized_time_ms": 4.413802232742309,
+        "best_speedup": 5.040553230732811
       },
       "type": "python"
     },
@@ -39,32 +41,34 @@
       "metadata": {
         "best_optimization": "optimized_flex_attention",
         "best_optimization_file": "optimized_flex_attention.py",
-        "best_optimization_speedup": 7.461434714469591,
-        "best_optimization_time_ms": 1.8655545687675477,
-        "git_commit": "935c9879521036ebb752bedf852b23fec5ce2066",
-        "updated_at": "2025-11-12T00:04:54.209419"
+        "best_optimization_speedup": 8.134377045274434,
+        "best_optimization_time_ms": 1.7152140879631042,
+        "git_commit": "7a301a67a040041e232ac553c1ebae1fe317b20c",
+        "updated_at": "2025-11-12T13:36:50.975517"
       },
       "metrics": {
+        "baseline_p75_ms": 13.909088134765625,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
         "baseline_throughput.goodput": null,
         "baseline_throughput.latency_ms": 13.920000553131104,
-        "baseline_throughput.requests_per_s": 71.84072318561055,
+        "baseline_throughput.requests_per_s": 71.84072318561056,
         "baseline_throughput.samples_per_s": null,
-        "baseline_throughput.tokens_per_s": 73564.72645966609,
+        "baseline_throughput.tokens_per_s": 73564.7264596661,
         "baseline_time_ms": 13.920000553131104,
-        "best_optimized_speedup": 7.461434714469591,
+        "best_optimized_p75_ms": 1.8107839822769165,
+        "best_optimized_speedup": 8.134377045274434,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
         "best_optimized_throughput.custom_unit_per_s": null,
         "best_optimized_throughput.goodput": null,
-        "best_optimized_throughput.latency_ms": 1.8655545687675477,
-        "best_optimized_throughput.requests_per_s": 536.0336367221014,
+        "best_optimized_throughput.latency_ms": 1.7152140879631042,
+        "best_optimized_throughput.requests_per_s": 583.0175993875763,
         "best_optimized_throughput.samples_per_s": null,
-        "best_optimized_throughput.tokens_per_s": 548898.4440034318,
-        "best_optimized_time_ms": 1.8655545687675477,
-        "best_speedup": 7.461434714469591
+        "best_optimized_throughput.tokens_per_s": 597010.0217728781,
+        "best_optimized_time_ms": 1.7152140879631042,
+        "best_speedup": 8.134377045274434
       },
       "type": "python"
     },
@@ -73,12 +77,13 @@
       "metadata": {
         "best_optimization": "optimized_model_eager",
         "best_optimization_file": "optimized_model_eager.py",
-        "best_optimization_speedup": 1.7957495054793096,
-        "best_optimization_time_ms": 49.29269760131836,
-        "git_commit": "935c9879521036ebb752bedf852b23fec5ce2066",
-        "updated_at": "2025-11-11T20:07:11.079632"
+        "best_optimization_speedup": 1.802747197692303,
+        "best_optimization_time_ms": 51.45881523132324,
+        "git_commit": "7a301a67a040041e232ac553c1ebae1fe317b20c",
+        "updated_at": "2025-11-12T13:37:14.528296"
       },
       "metrics": {
+        "baseline_p75_ms": 93.11039733886719,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -88,6 +93,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 90.93234558105469,
+        "best_optimized_p75_ms": 51.80931091308594,
         "best_optimized_speedup": 1.8308298022400458,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
@@ -107,12 +113,13 @@
       "metadata": {
         "best_optimization": "optimized_nccl_quantization",
         "best_optimization_file": "optimized_nccl_quantization.py",
-        "best_optimization_speedup": 19.201003422153363,
-        "best_optimization_time_ms": 0.5846348793804645,
-        "git_commit": "935c9879521036ebb752bedf852b23fec5ce2066",
-        "updated_at": "2025-11-11T20:07:11.079632"
+        "best_optimization_speedup": 62.41446704692348,
+        "best_optimization_time_ms": 0.1753260798752308,
+        "git_commit": "7a301a67a040041e232ac553c1ebae1fe317b20c",
+        "updated_at": "2025-11-12T13:37:19.974470"
       },
       "metrics": {
+        "baseline_p75_ms": 13.502143859863281,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -122,17 +129,18 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 11.225576319694518,
-        "best_optimized_speedup": 19.201003422153363,
+        "best_optimized_p75_ms": 0.1990080028772354,
+        "best_optimized_speedup": 62.41446704692348,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,
         "best_optimized_throughput.custom_unit_per_s": null,
         "best_optimized_throughput.goodput": null,
-        "best_optimized_throughput.latency_ms": 0.5846348793804645,
-        "best_optimized_throughput.requests_per_s": 1710.4692779529275,
+        "best_optimized_throughput.latency_ms": 0.1753260798752308,
+        "best_optimized_throughput.requests_per_s": 5703.658010899696,
         "best_optimized_throughput.samples_per_s": null,
         "best_optimized_throughput.tokens_per_s": null,
-        "best_optimized_time_ms": 0.5846348793804645,
-        "best_speedup": 19.201003422153363
+        "best_optimized_time_ms": 0.1753260798752308,
+        "best_speedup": 62.41446704692348
       },
       "type": "python"
     },
@@ -147,6 +155,7 @@
         "updated_at": "2025-11-11T20:07:11.079632"
       },
       "metrics": {
+        "baseline_p75_ms": 15.827967643737793,
         "baseline_throughput.bytes_per_s": null,
         "baseline_throughput.custom_unit_name": null,
         "baseline_throughput.custom_unit_per_s": null,
@@ -156,6 +165,7 @@
         "baseline_throughput.samples_per_s": null,
         "baseline_throughput.tokens_per_s": null,
         "baseline_time_ms": 12.25645631313324,
+        "best_optimized_p75_ms": 0.9108480215072632,
         "best_optimized_speedup": 56.9069134807956,
         "best_optimized_throughput.bytes_per_s": null,
         "best_optimized_throughput.custom_unit_name": null,

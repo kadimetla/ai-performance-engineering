@@ -555,9 +555,27 @@ def is_distributed_benchmark(file_path: Path) -> bool:
         has_world_size = 'WORLD_SIZE' in content and ('os.environ' in content or 'getenv' in content)
         has_rank = 'RANK' in content and ('os.environ' in content or 'getenv' in content)
         
-        # A benchmark is distributed if it has distributed imports AND operations
-        # OR if it explicitly uses NCCL backend
-        return (has_dist_import and has_dist_ops) or has_nccl or (has_world_size and has_rank and has_dist_ops)
+        # Some examples gate their execution behind helper functions such as
+        # skip_if_insufficient_gpus() even if they do not import torch.distributed.
+        # Treat those as multi-GPU benchmarks so we can skip them up-front.
+        multi_gpu_markers = (
+            "skip_if_insufficient_gpus",
+            "requires_multiple_gpus",
+            "requires_multi_gpu",
+            "MultiGPUBenchmark",
+            "MIN_GPUS_REQUIRED",
+        )
+        has_explicit_multi_gpu_guard = any(marker in content for marker in multi_gpu_markers)
+
+        # A benchmark is distributed if it has distributed imports AND operations,
+        # OR if it explicitly uses NCCL backend, OR if it contains explicit
+        # multi-GPU guard helpers.
+        return (
+            (has_dist_import and has_dist_ops)
+            or has_nccl
+            or (has_world_size and has_rank and has_dist_ops)
+            or has_explicit_multi_gpu_guard
+        )
     except Exception:
         return False
 
@@ -1736,7 +1754,13 @@ def _test_chapter_impl(
                         f"      📐 Scenario phase sum: "
                         f"{baseline_custom_metrics['scenario_total_phase_ms']:.3f} ms"
                     )
-                
+                compile_error = baseline_custom_metrics.get("torch_compile_error")
+                used_compile = baseline_custom_metrics.get("used_torch_compile")
+                if compile_error:
+                    logger.warning(f"      ⚠️ torch.compile fallback: {compile_error}")
+                elif used_compile:
+                    logger.info("      🚀 torch.compile enabled (reduce-overhead)")
+
                 # Profile baseline if profiling is enabled (nsys, ncu, PyTorch)
                 if enable_profiling and profiling_output_dir:
                     logger.info(f"    Profiling baseline...")
@@ -1925,6 +1949,12 @@ def _test_chapter_impl(
                         )
                     if scenario_speedup is not None:
                         logger.info(f"        📊 Scenario phase-sum speedup: {scenario_speedup:.2f}x")
+                    opt_compile_error = optimized_custom_metrics.get("torch_compile_error")
+                    opt_used_compile = optimized_custom_metrics.get("used_torch_compile")
+                    if opt_compile_error:
+                        logger.warning(f"        ⚠️ torch.compile fallback: {opt_compile_error}")
+                    elif opt_used_compile:
+                        logger.info("        🚀 torch.compile enabled (reduce-overhead)")
                     
                     opt_p75 = None
                     opt_p90 = None
