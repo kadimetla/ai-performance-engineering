@@ -2,7 +2,7 @@
 
 Demonstrates tensor core acceleration using FP16/BF16.
 Tensor cores: Uses tensor cores for accelerated matrix operations.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -20,27 +20,27 @@ from typing import Optional
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch18")
-    return torch.device("cuda")
-
-
-class OptimizedTensorCoresBenchmark(Benchmark):
+class OptimizedTensorCoresBenchmark(BaseBenchmark):
     """Optimized: Tensor core accelerated matrix operations."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A = None
         self.B = None
         self.size = 4096
         self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.size * self.size),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize matrices in FP16/BF16 for tensor cores."""
@@ -56,26 +56,25 @@ class OptimizedTensorCoresBenchmark(Benchmark):
         # This uses FP16/BF16 to leverage tensor core acceleration
         self.A = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
         self.B = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Tensor core accelerated matrix multiplication."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
         # Optimization: FP16/BF16 matmul with tensor cores
         # Tensor cores provide high throughput for these operations
-        with nvtx_range("optimized_tensor_cores", enable=enable_nvtx):
+        with self._nvtx_range("optimized_tensor_cores"):
             _ = torch.matmul(self.A, self.B)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.A = None
         self.B = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -91,7 +90,7 @@ class OptimizedTensorCoresBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedTensorCoresBenchmark()
 
@@ -106,4 +105,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

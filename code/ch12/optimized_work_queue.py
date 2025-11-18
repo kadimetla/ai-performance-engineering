@@ -1,10 +1,4 @@
-"""optimized_work_queue.py - Dynamic work queue with atomics (optimized).
-
-Demonstrates dynamic work distribution using atomic operations and warp-level
-coordination for better load balancing.
-Uses PyTorch CUDA extension for accurate GPU timing with CUDA Events.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_work_queue.py - Dynamic work queue with atomics (optimized)."""
 
 from __future__ import annotations
 
@@ -19,34 +13,32 @@ import torch
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 # Import CUDA extension
 from ch12.cuda_extensions import load_work_queue_extension
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch12")
-    return torch.device("cuda")
-
-
-class OptimizedWorkQueueBenchmark(Benchmark):
+class OptimizedWorkQueueBenchmark(BaseBenchmark):
     """Dynamic work queue - atomic work distribution for better load balancing (uses CUDA extension)."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.input_data = None
         self.output_data = None
         self.N = 1 << 20  # 1M elements
         self.iterations = 5
         self._extension = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N * self.iterations),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
@@ -61,7 +53,7 @@ class OptimizedWorkQueueBenchmark(Benchmark):
         torch.manual_seed(42)
         self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         self._extension.dynamic_work_queue(self.input_data, self.output_data, 1)
         torch.cuda.synchronize()
         torch.manual_seed(42)
@@ -71,8 +63,6 @@ class OptimizedWorkQueueBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Dynamic work queue with atomics."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
@@ -83,6 +73,7 @@ class OptimizedWorkQueueBenchmark(Benchmark):
         with nvtx_range("work_queue", enable=enable_nvtx):
             # Call CUDA extension with dynamic work queue
             self._extension.dynamic_work_queue(self.input_data, self.output_data, self.iterations)
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -101,6 +92,9 @@ class OptimizedWorkQueueBenchmark(Benchmark):
             setup_timeout_seconds=120,  # CUDA extension compilation can take time
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.input_data is None or self.output_data is None:
@@ -112,7 +106,7 @@ class OptimizedWorkQueueBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedWorkQueueBenchmark()
 

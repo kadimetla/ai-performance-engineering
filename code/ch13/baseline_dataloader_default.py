@@ -1,41 +1,14 @@
-"""baseline_dataloader_default.py - Default DataLoader baseline (baseline).
-
-Default DataLoader with no optimizations: num_workers=0, no pin_memory, no prefetch.
-Results in CPU-GPU synchronization overhead and poor GPU utilization.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_dataloader_default.py - Default DataLoader baseline (baseline)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional, Iterator
 
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from collections.abc import Iterator
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
 class SyntheticDataset(Dataset):
@@ -53,7 +26,6 @@ class SyntheticDataset(Dataset):
     
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         sample = self.data[idx]
-        # Simulate realistic CPU-side augmentations (vector math only, no sleeps).
         enriched = torch.tanh(sample * 1.1) + torch.sin(sample * 0.5)
         normalized = enriched - enriched.mean()
         return normalized, self.labels[idx]
@@ -74,11 +46,11 @@ class SimpleModel(nn.Module):
         return x
 
 
-class BaselineDataloaderDefaultBenchmark(Benchmark):
+class BaselineDataloaderDefaultBenchmark(BaseBenchmark):
     """Default DataLoader baseline - no optimizations."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.dataloader = None
         self.optimizer = None
@@ -87,47 +59,40 @@ class BaselineDataloaderDefaultBenchmark(Benchmark):
         self.batch_size = 32
         self.feature_dim = 1024
         self._data_iter: Optional[Iterator] = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.dataset_size // self.batch_size),
+            tokens_per_iteration=float(self.dataset_size * self.feature_dim),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize model and default DataLoader."""
         torch.manual_seed(42)
         
         self.model = SimpleModel(input_dim=self.feature_dim).to(self.device)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.CrossEntropyLoss()
         
-        # Default DataLoader: num_workers=0, no pin_memory, no prefetch
         dataset = SyntheticDataset(num_samples=self.dataset_size, feature_dim=self.feature_dim)
         self.dataloader = DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=False,  # Disable shuffle for consistent benchmarking
-            num_workers=0,  # Single-threaded (baseline)
-            pin_memory=False,  # No pinned memory (baseline)
-            prefetch_factor=None,  # No prefetching (baseline)
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False,
+            prefetch_factor=None,
         )
         
         self._data_iter = iter(self.dataloader)
 
-        # Warmup a couple of batches
         for _ in range(2):
             data, labels = self._next_batch()
             _ = self.model(data)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark - default DataLoader with no optimizations."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        if any(v is None for v in (self.model, self.optimizer, self.criterion, self._data_iter)):
+            raise RuntimeError("Benchmark not configured")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_dataloader_default", enable=enable_nvtx):
-            # Process one batch (default DataLoader: CPU-GPU sync overhead)
+        with self._nvtx_range("baseline_dataloader_default"):
             data, labels = self._next_batch()
             
             self.optimizer.zero_grad()
@@ -135,14 +100,19 @@ class BaselineDataloaderDefaultBenchmark(Benchmark):
             loss = self.criterion(outputs, labels)
             loss.backward()
             self.optimizer.step()
+        self._synchronize()
 
     
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.model, self.dataloader, self.optimizer, self.criterion
-        torch.cuda.empty_cache()
+        self.model = None
+        self.dataloader = None
+        self.optimizer = None
+        self.criterion = None
+        self._data_iter = None
+        super().teardown()
     
     def _next_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+        assert self.dataloader is not None
         if self._data_iter is None:
             self._data_iter = iter(self.dataloader)
         try:
@@ -153,31 +123,22 @@ class BaselineDataloaderDefaultBenchmark(Benchmark):
         return data.to(self.device), labels.to(self.device)
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=100,
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
         )
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
     
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaselineDataloaderDefaultBenchmark:
+    """Factory function for harness discovery."""
     return BaselineDataloaderDefaultBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Default DataLoader: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

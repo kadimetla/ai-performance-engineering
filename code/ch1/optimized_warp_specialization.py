@@ -1,4 +1,4 @@
-"""optimized warp specialization - Optimized with warp specialization. Implements Benchmark protocol for harness integration."""
+"""optimized warp specialization - Optimized with warp specialization."""
 
 from __future__ import annotations
 
@@ -20,21 +20,17 @@ except ImportError:
 from typing import Optional
 
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 from ch1.workload_config import WORKLOAD
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch1")
-    return torch.device("cuda")
-
-
-class OptimizedWarpSpecializationBenchmark(Benchmark):
+class OptimizedWarpSpecializationBenchmark(BaseBenchmark):
     """Optimized: Warp specialization for efficient parallel execution.
     
     Warp specialization: Assigns different roles to warps (producer/consumer).
@@ -42,11 +38,15 @@ class OptimizedWarpSpecializationBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
+        super().__init__()
+        self.model: Optional[nn.Module] = None
         self.inputs = None
         self.microsteps = WORKLOAD.performance_microbatches // 2
         self.group = 2
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.microsteps // self.group),
+            tokens_per_iteration=float(self.microsteps * 64 * 1024),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model with warp specialization optimization."""
@@ -88,27 +88,17 @@ class OptimizedWarpSpecializationBenchmark(Benchmark):
         with torch.cuda.graph(self.cuda_graph):
             self.graph_output = self.model(self.graph_input)
         if self.device.type == "cuda":
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with warp specialization."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("optimized_warp_specialization", enable=enable_nvtx):
+        with self._nvtx_range("optimized_warp_specialization"):
             total = 0.0
             for fused in self.inputs:
                 self.graph_input.copy_(fused)
                 self.cuda_graph.replay()
                 total += self.graph_output.sum()
-            if self.device.type == "cuda":
-                torch.cuda.synchronize()
+            self._synchronize()
             self._checksum = total
 
     
@@ -129,6 +119,9 @@ class OptimizedWarpSpecializationBenchmark(Benchmark):
             use_subprocess=False,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -138,7 +131,7 @@ class OptimizedWarpSpecializationBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedWarpSpecializationBenchmark()
 

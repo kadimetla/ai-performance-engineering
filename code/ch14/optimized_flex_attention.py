@@ -1,9 +1,4 @@
-"""optimized_flex_attention.py - Optimized with FlexAttention.
-
-Demonstrates FlexAttention - a flexible attention mechanism that adapts to different patterns.
-FlexAttention provides configurable attention patterns for various use cases.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_flex_attention.py - Optimized with FlexAttention."""
 
 from __future__ import annotations
 
@@ -20,17 +15,13 @@ import torch.nn.functional as F
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch14")
-    return torch.device("cuda")
 
 
 class FlexAttentionBlock(nn.Module):
@@ -58,11 +49,11 @@ class FlexAttentionBlock(nn.Module):
         return self.out_proj(context)
 
 
-class OptimizedFlexAttentionBenchmark(Benchmark):
+class OptimizedFlexAttentionBenchmark(BaseBenchmark):
     """Optimized: Uses FlexAttention for flexible attention patterns."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.embed_dim = 1024
         self.seq_len = 1024
@@ -70,6 +61,11 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
         self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         self.num_heads = 16
         self._last = 0.0
+        tokens = self.batch * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize FlexAttention model."""
@@ -99,7 +95,7 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
         for _ in range(3):
             with torch.no_grad():
                 _ = self.model(self.graph_input)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: FlexAttention operations."""
@@ -117,7 +113,7 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
                 raise RuntimeError("Model not initialized")
             out = self.model(self.graph_input)
             self._last = float(out.sum())
-            torch.cuda.synchronize(self.device)
+            self._synchronize()
 
     
     def teardown(self) -> None:
@@ -135,6 +131,9 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None or self.graph_input is None:
@@ -142,7 +141,7 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedFlexAttentionBenchmark()
 

@@ -3,7 +3,7 @@
 Demonstrates paged attention for efficient KV cache management.
 Paged attention: Uses non-contiguous pages for efficient memory management.
 Reduces fragmentation and improves memory utilization for variable-length sequences.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
 )
 from common.python.paged_attention import PagedKVCache, PagedAttentionConfig
@@ -35,7 +35,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class OptimizedPagedAttentionBenchmark(Benchmark):
+class OptimizedPagedAttentionBenchmark(BaseBenchmark):
     """Optimized: Paged attention for efficient KV cache management.
     
     Paged attention: Uses non-contiguous pages for efficient memory management.
@@ -43,6 +43,7 @@ class OptimizedPagedAttentionBenchmark(Benchmark):
     """
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
         self.kv_cache = None
@@ -179,7 +180,7 @@ class OptimizedPagedAttentionBenchmark(Benchmark):
             return "KV cache not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedPagedAttentionBenchmark()
 

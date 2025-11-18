@@ -30,7 +30,7 @@ apply_env_defaults()
 
 import torch
 from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 
 
 # Skip tests if CUDA is not available (NVIDIA GPU required)
@@ -245,7 +245,7 @@ def test_benchmark_validation(request):
 
 
 def test_benchmark_protocol_compliance():
-    """Test that benchmarks implement the Benchmark protocol correctly (quick check only)."""
+    """Test that benchmarks implement the BaseBenchmark correctly (quick check only)."""
     from common.python.benchmark_harness import Benchmark
     
     # Test that a sample benchmark implements the protocol

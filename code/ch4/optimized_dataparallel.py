@@ -14,14 +14,14 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 from common.python.compile_utils import enable_tf32
-
-
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda:0")
 
 
 class SimpleNet(nn.Module):
@@ -35,11 +35,11 @@ class SimpleNet(nn.Module):
         return self.linear2(self.relu(self.linear1(x)))
 
 
-class OptimizedDdpBenchmark(Benchmark):
+class OptimizedDdpBenchmark(BaseBenchmark):
     """Uses torch.compile + pinned prefetch for minimal CPU overhead."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.batch_size = 256
         self.input_size = 1024
         self.hidden_size = 256
@@ -48,6 +48,11 @@ class OptimizedDdpBenchmark(Benchmark):
         self.inputs: List[torch.Tensor] = []
         self.targets: List[torch.Tensor] = []
         self.batch_idx = 0
+        tokens = self.batch_size * self.input_size
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         enable_tf32()
@@ -64,7 +69,7 @@ class OptimizedDdpBenchmark(Benchmark):
         for _ in range(4):
             self.inputs.append(torch.randn(self.batch_size, self.input_size, device=self.device, dtype=torch.float16))
             self.targets.append(torch.randn(self.batch_size, 1, device=self.device, dtype=torch.float16))
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
@@ -81,6 +86,7 @@ class OptimizedDdpBenchmark(Benchmark):
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
             self.optimizer.step()
+        self._synchronize()
 
     def teardown(self) -> None:
         self.model = None
@@ -90,7 +96,15 @@ class OptimizedDdpBenchmark(Benchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=20, warmup=5)
+        return BenchmarkConfig(
+            iterations=20,
+            warmup=5,
+            enable_memory_tracking=False,
+            enable_profiling=False,
+        )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
         if self.model is None:
@@ -98,13 +112,11 @@ class OptimizedDdpBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return OptimizedDdpBenchmark()
 
 
 if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(iterations=5, warmup=1),

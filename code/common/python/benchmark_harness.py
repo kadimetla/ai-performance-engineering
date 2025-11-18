@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, TYPE_CHECKING, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Sequence, TYPE_CHECKING, Union, cast
 
 import numpy as np
 import torch
@@ -232,6 +232,8 @@ class BenchmarkConfig:
     enable_nsys: bool = field(default_factory=lambda: _get_default_value("enable_nsys", False))
     enable_ncu: bool = field(default_factory=lambda: _get_default_value("enable_ncu", False))
     profiling_output_dir: Optional[str] = field(default_factory=lambda: _get_default_value("profiling_output_dir", None))
+    profile_type: str = field(default_factory=lambda: _get_default_value("profile_type", "minimal"))
+    nsys_nvtx_include: Optional[List[str]] = field(default_factory=lambda: _get_default_value("nsys_nvtx_include", None))
     enable_nvtx: Optional[bool] = field(default_factory=lambda: _get_default_value("enable_nvtx", None))
     enable_cleanup: bool = field(default_factory=lambda: _get_default_value("enable_cleanup", False))
     use_subprocess: bool = field(default_factory=lambda: _get_default_value("use_subprocess", True))
@@ -246,6 +248,8 @@ class BenchmarkConfig:
     gpu_memory_log_interval_seconds: float = field(default_factory=lambda: _get_default_value("gpu_memory_log_interval_seconds", 5.0))
     gpu_memory_log_path: Optional[str] = field(default_factory=lambda: _get_default_value("gpu_memory_log_path", None))
     profiling_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("profiling_timeout_seconds", None))
+    ncu_metric_set: str = field(default_factory=lambda: _get_default_value("ncu_metric_set", "auto"))
+    ncu_sampling_interval: int = field(default_factory=lambda: _get_default_value("ncu_sampling_interval", 75000))
 
 
     # Legacy timeout field (deprecated, use measurement_timeout_seconds)
@@ -371,44 +375,12 @@ class WorkloadMetadata:
 BenchmarkResult = PydanticBenchmarkResult
 
 
-class Benchmark(Protocol):
-    """Protocol for benchmarkable implementations."""
-    
-    def setup(self) -> None:
-        """Setup phase: initialize models, data, etc."""
-        ...
-    
-    def benchmark_fn(self) -> None:
-        """Function to benchmark. Must be callable with no args."""
-        ...
-    
-    def teardown(self) -> None:
-        """Cleanup phase."""
-        ...
-    
-    def get_config(self) -> Optional[BenchmarkConfig]:
-        """Optional: return benchmark-specific config overrides."""
-        return None
-    
-    def validate_result(self) -> Optional[str]:
-        """Optional: validate benchmark result, return error message if invalid."""
-        return None
-
-    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
-        """Optional: describe workload units processed per benchmark iteration."""
-        return None
-
-    def get_custom_metrics(self) -> Optional[Dict[str, float]]:
-        """Optional: return benchmark-specific custom metrics for reporting."""
-        return None
-
-
 class BaseBenchmark:
     """Base class for benchmarks with shared functionality.
     
     Provides common patterns for device resolution, setup, teardown, validation,
     NVTX range management (_nvtx_range()), and CUDA synchronization (_synchronize()).
-    Benchmarks can inherit from this class or implement the Benchmark Protocol directly.
+    Benchmarks should inherit from this class (or a helper base that derives from it).
     
     Usage:
         class MyBenchmark(BaseBenchmark):
@@ -521,6 +493,14 @@ class BaseBenchmark:
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         """Benchmarks can override to expose custom metrics."""
         return None
+    
+    def _record_start(self) -> float:
+        """Return a high-resolution timestamp for chunk-level timing."""
+        return time.perf_counter()
+
+    def _record_stop(self, start: float) -> float:
+        """Return elapsed time in milliseconds since ``start``."""
+        return (time.perf_counter() - start) * 1000.0
     
     def _scale_workload_by_memory(self, base_size: int) -> int:
         """Scale workload size based on available GPU memory.
@@ -762,7 +742,7 @@ class BenchmarkHarness:
             # memory_reserved may not be available in all PyTorch versions
             result.reserved_mb = None
     
-    def benchmark(self, benchmark: Benchmark) -> PydanticBenchmarkResult:
+    def benchmark(self, benchmark: BaseBenchmark) -> PydanticBenchmarkResult:
         """Run benchmark and return statistical results.
         
         Uses subprocess isolation (if enabled) or threading timeout to prevent hangs.
@@ -812,7 +792,7 @@ class BenchmarkHarness:
     
     def benchmark_with_manifest(
         self, 
-        benchmark: Benchmark,
+        benchmark: BaseBenchmark,
         run_id: Optional[str] = None
     ) -> BenchmarkRun:
         """Run benchmark with manifest and return BenchmarkRun.
@@ -821,7 +801,7 @@ class BenchmarkHarness:
         and returns a BenchmarkRun containing both the manifest and result.
         
         Args:
-            benchmark: Benchmark instance to run
+            benchmark: BaseBenchmark instance to run
             run_id: Optional run identifier (defaults to timestamp)
         
         Returns:
@@ -870,7 +850,7 @@ class BenchmarkHarness:
             schemaVersion="1.0",
         )
     
-    def _benchmark_with_subprocess(self, benchmark: Benchmark, config: BenchmarkConfig) -> PydanticBenchmarkResult:
+    def _benchmark_with_subprocess(self, benchmark: BaseBenchmark, config: BenchmarkConfig) -> PydanticBenchmarkResult:
         """Run benchmark in subprocess for reliable timeout cancellation."""
         import json
         import inspect
@@ -1226,7 +1206,7 @@ class BenchmarkHarness:
         
         return result
     
-    def _benchmark_with_threading(self, benchmark: Benchmark, config: BenchmarkConfig) -> PydanticBenchmarkResult:
+    def _benchmark_with_threading(self, benchmark: BaseBenchmark, config: BenchmarkConfig) -> PydanticBenchmarkResult:
         """Run benchmark using threading (alternative to subprocess method)."""
         import inspect
         
@@ -1772,18 +1752,33 @@ class BenchmarkHarness:
         try:
             import torch.profiler
             
+            torch_profiler_kwargs = {}
+            try:
+                from common.python import profiler_config as profiler_config_mod
+                profiler_cfg = None
+                if hasattr(profiler_config_mod, "build_profiler_config_from_benchmark"):
+                    profiler_cfg = profiler_config_mod.build_profiler_config_from_benchmark(config)
+                elif hasattr(profiler_config_mod, "DEFAULT_PROFILER_CONFIG"):
+                    profiler_cfg = profiler_config_mod.DEFAULT_PROFILER_CONFIG
+                if profiler_cfg is not None:
+                    torch_profiler_kwargs = profiler_cfg.get_torch_profiler_config() or {}
+            except Exception:
+                torch_profiler_kwargs = {}
+
+            if not torch_profiler_kwargs:
+                # Minimal fallback to avoid heavy tracing overhead
+                torch_profiler_kwargs = {
+                    "activities": [torch.profiler.ProfilerActivity.CUDA],
+                    "record_shapes": False,
+                    "profile_memory": False,
+                    "with_stack": False,
+                    "with_flops": False,
+                    "schedule": torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1),
+                }
+            
             # Run benchmark with PyTorch profiler
-            with torch.profiler.profile(
-                activities=[
-                    torch.profiler.ProfilerActivity.CPU,
-                    torch.profiler.ProfilerActivity.CUDA,
-                ],
-                record_shapes=True,
-                profile_memory=True,
-                with_stack=True,
-                with_flops=True,
-            ) as prof:
-                # Run benchmark iterations with minimal overhead
+            with torch.profiler.profile(**torch_profiler_kwargs) as prof:
+                profile_iterations = min(config.iterations, 10)
                 times_ms = cast(List[float], [])
                 is_cuda = self.device.type == "cuda"
                 
@@ -1793,7 +1788,7 @@ class BenchmarkHarness:
                     end_event = torch.cuda.Event(enable_timing=True)
                     torch.cuda.synchronize(self.device)  # Sync once before loop
                     
-                    for _ in range(config.iterations):
+                    for _ in range(profile_iterations):
                         start_event.record()
                         fn()
                         end_event.record()
@@ -1802,7 +1797,7 @@ class BenchmarkHarness:
                         prof.step()  # Record each iteration in profiling trace
                 else:
                     # CPU: use high-resolution timer
-                    for _ in range(config.iterations):
+                    for _ in range(profile_iterations):
                         start_time = time.perf_counter()
                         fn()
                         end_time = time.perf_counter()
@@ -2139,7 +2134,7 @@ class BenchmarkHarness:
             schemaVersion="1.0",
         )
 
-    def _resolve_workload_metadata(self, benchmark: Benchmark) -> Optional[WorkloadMetadata]:
+    def _resolve_workload_metadata(self, benchmark: BaseBenchmark) -> Optional[WorkloadMetadata]:
         """Resolve workload metadata declared by the benchmark (if any)."""
         metadata: Optional[WorkloadMetadata] = None
         getter = getattr(benchmark, "get_workload_metadata", None)
@@ -2157,7 +2152,7 @@ class BenchmarkHarness:
             metadata = self._infer_workload_metadata_from_attributes(benchmark)
         return metadata
 
-    def _resolve_custom_metrics(self, benchmark: Benchmark) -> Optional[Dict[str, float]]:
+    def _resolve_custom_metrics(self, benchmark: BaseBenchmark) -> Optional[Dict[str, float]]:
         """Resolve benchmark-specific custom metrics if provided."""
         getter = getattr(benchmark, "get_custom_metrics", None)
         if callable(getter):
@@ -2170,7 +2165,7 @@ class BenchmarkHarness:
                     logger.debug(f"get_custom_metrics() raised: {exc}")
         return None
 
-    def _infer_workload_metadata_from_attributes(self, benchmark: Benchmark) -> Optional[WorkloadMetadata]:
+    def _infer_workload_metadata_from_attributes(self, benchmark: BaseBenchmark) -> Optional[WorkloadMetadata]:
         """Best-effort inference of workload metadata from common benchmark attributes."""
         def _read_numeric_attr(names: List[str]) -> Optional[float]:
             for name in names:
@@ -2319,7 +2314,7 @@ class BenchmarkHarness:
             goodput=goodput,
         )
 
-    def _attach_throughput_metrics(self, result: PydanticBenchmarkResult, benchmark: Benchmark) -> None:
+    def _attach_throughput_metrics(self, result: PydanticBenchmarkResult, benchmark: BaseBenchmark) -> None:
         """Attach throughput metrics to the benchmark result when possible."""
         workload = self._resolve_workload_metadata(benchmark)
         throughput_stats = self._compute_throughput_stats(result.timing, workload)
@@ -2328,8 +2323,8 @@ class BenchmarkHarness:
 
 
 def compare_benchmarks(
-    baseline: Benchmark,
-    optimized: Benchmark,
+    baseline: BaseBenchmark,
+    optimized: BaseBenchmark,
     harness: Optional[BenchmarkHarness] = None,
     name: str = "Comparison",
     regression_threshold_pct: float = 5.0

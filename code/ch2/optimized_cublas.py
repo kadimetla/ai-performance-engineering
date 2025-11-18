@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -12,17 +12,17 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.compile_utils import enable_tf32, configure_tf32, restore_tf32
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch2 cublas example")
-    return torch.device("cuda")
-
-
-class OptimizedCublasBenchmark(Benchmark):
+class OptimizedCublasBenchmark(BaseBenchmark):
     """
     Optimized: pure cuBLAS GEMM with TF32 and warmed-up heuristics.
 
@@ -31,36 +31,36 @@ class OptimizedCublasBenchmark(Benchmark):
     """
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.m = 2048
         self.n = 2048
         self.k = 2048
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
-        self._prev_tf32_matmul: Optional[bool] = None
-        self._prev_tf32_cudnn: Optional[bool] = None
+        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
         self._prev_precision: Optional[str] = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.m * self.n),
+        )
 
     def setup(self) -> None:
         """Enable TF32, allocate FP32 matrices, and warm up cuBLAS."""
-        self._prev_tf32_matmul = torch.backends.cuda.matmul.allow_tf32
-        self._prev_tf32_cudnn = torch.backends.cudnn.allow_tf32
         self._prev_precision = torch.get_float32_matmul_precision()
 
         enable_tf32()
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+        self._tf32_state = configure_tf32(enable_matmul=True, enable_cudnn=True)
         torch.set_float32_matmul_precision("high")
 
         torch.manual_seed(42)
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
 
         # Warmup a handful of GEMMs so cuBLAS Lt heuristics settle before measurement.
         for _ in range(10):
             _ = torch.matmul(self.A, self.B)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         """cuBLAS TF32 GEMM."""
@@ -70,21 +70,24 @@ class OptimizedCublasBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("cublas", enable=enable_nvtx):
             _ = torch.matmul(self.A, self.B)
+        self._synchronize()
 
     def teardown(self) -> None:
         """Restore TF32 knobs and free tensors."""
         self.A = None
         self.B = None
-        if self._prev_tf32_matmul is not None:
-            torch.backends.cuda.matmul.allow_tf32 = self._prev_tf32_matmul
-        if self._prev_tf32_cudnn is not None:
-            torch.backends.cudnn.allow_tf32 = self._prev_tf32_cudnn
+        if self._tf32_state is not None:
+            restore_tf32(self._tf32_state)
+            self._tf32_state = None
         if self._prev_precision is not None:
             torch.set_float32_matmul_precision(self._prev_precision)  # type: ignore[arg-type]
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=5)
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
         if self.A is None or self.B is None:
@@ -92,13 +95,11 @@ class OptimizedCublasBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return OptimizedCublasBenchmark()
 
 
 if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
     benchmark = get_benchmark()
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,

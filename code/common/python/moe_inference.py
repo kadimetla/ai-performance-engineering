@@ -1,0 +1,293 @@
+"""Shared Mixture-of-Experts inference helpers for chapter benchmarks.
+
+Provides lightweight GPT-style MoE blocks plus configuration utilities so
+baseline/optimized inference demos can share the same synthetic workload.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+from dataclasses import dataclass, field
+from typing import Optional
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+_DTYPE_MAP = {
+    "float32": torch.float32,
+    "fp32": torch.float32,
+    "bfloat16": torch.bfloat16,
+    "bf16": torch.bfloat16,
+    "float16": torch.float16,
+    "fp16": torch.float16,
+}
+
+
+def resolve_dtype(dtype: torch.dtype | str) -> torch.dtype:
+    """Normalize dtype inputs from config/env vars."""
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    key = dtype.lower().strip()
+    if key not in _DTYPE_MAP:
+        raise ValueError(f"Unsupported dtype '{dtype}'")
+    return _DTYPE_MAP[key]
+
+
+def dtype_bytes(dtype: torch.dtype | str) -> int:
+    """Return element size (bytes) for the dtype."""
+    dt = resolve_dtype(dtype)
+    if dt == torch.float32:
+        return 4
+    if dt in (torch.float16, torch.bfloat16):
+        return 2
+    if dt == torch.float64:
+        return 8
+    return torch.tensor([], dtype=dt).element_size()
+
+
+def allocate_kv_cache(
+    batch: int,
+    total_tokens: int,
+    hidden_size: int,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    """Allocate KV cache-sized tensor."""
+    return torch.zeros(batch, total_tokens, hidden_size, dtype=dtype, device=device)
+
+
+def env_override_int(name: str, default: int) -> int:
+    """Read integer override from environment, falling back to default."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def env_override_float(name: str, default: float) -> float:
+    """Read float override from environment, falling back to default."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+@dataclass
+class MoeInferenceConfig:
+    """Synthesizes a GPT-style MoE stack configurable via env vars."""
+
+    vocab_size: int = 32768
+    hidden_size: int = 2048
+    ffn_size: int = 8192
+    num_layers: int = 12
+    num_moe_layers: int = 6
+    num_experts: int = 16
+    top_k: int = 1
+    moe_layer_frequency: int = 2
+    batch_size: int = 4
+    context_window: int = 2048
+    decode_tokens: int = 64
+    router_noise: float = 0.0
+    dtype: torch.dtype | str = field(default_factory=lambda: torch.bfloat16)
+
+    def __post_init__(self) -> None:
+        self.top_k = max(1, min(self.top_k, self.num_experts))
+        self.moe_layer_frequency = max(1, self.moe_layer_frequency)
+        self.num_moe_layers = max(0, min(self.num_layers, self.num_moe_layers))
+
+    @property
+    def dtype_obj(self) -> torch.dtype:
+        if not hasattr(self, "_cached_dtype"):
+            self._cached_dtype = resolve_dtype(self.dtype)
+        return self._cached_dtype
+
+    @property
+    def tokens_per_iteration(self) -> int:
+        return self.batch_size * (self.context_window + self.decode_tokens)
+
+
+class ExpertMLP(nn.Module):
+    """Two-layer feed-forward expert block."""
+
+    def __init__(self, hidden: int, ffn: int, *, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None):
+        super().__init__()
+        linear_kwargs = {}
+        if device is not None:
+            linear_kwargs["device"] = device
+        if dtype is not None:
+            linear_kwargs["dtype"] = dtype
+        self.fc1 = nn.Linear(hidden, ffn, **linear_kwargs)
+        self.fc2 = nn.Linear(ffn, hidden, **linear_kwargs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fc2(F.silu(self.fc1(x)))
+
+
+class DenseFeedForward(nn.Module):
+    """Fallback dense FFN when layer does not use MoE."""
+
+    def __init__(self, hidden: int, ffn: int, *, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None):
+        super().__init__()
+        self.net = ExpertMLP(hidden, ffn, device=device, dtype=dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class MoEFeedForward(nn.Module):
+    """Top-k router with per-expert FFNs."""
+
+    def __init__(
+        self,
+        hidden: int,
+        ffn: int,
+        num_experts: int,
+        top_k: int,
+        router_noise: float = 0.0,
+        *,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
+        super().__init__()
+        linear_kwargs = {}
+        if device is not None:
+            linear_kwargs["device"] = device
+        if dtype is not None:
+            linear_kwargs["dtype"] = dtype
+        self.router = nn.Linear(hidden, num_experts, bias=False, **linear_kwargs)
+        self.experts = nn.ModuleList([ExpertMLP(hidden, ffn, device=device, dtype=dtype) for _ in range(num_experts)])
+        self.top_k = top_k
+        self.router_noise = router_noise
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch, seq, hidden = x.shape
+        flat = x.reshape(batch * seq, hidden)
+        logits = self.router(flat)
+        if self.router_noise > 0:
+            logits = logits + torch.randn_like(logits) * self.router_noise
+        probs = torch.softmax(logits, dim=-1)
+        top_scores, top_indices = torch.topk(probs, k=self.top_k, dim=-1)
+        combined = torch.zeros_like(flat)
+
+        for k in range(self.top_k):
+            expert_ids = top_indices[:, k]
+            weights = top_scores[:, k].unsqueeze(-1)
+            for expert_id, expert in enumerate(self.experts):
+                mask = expert_ids == expert_id
+                if mask.any():
+                    expert_input = flat[mask]
+                    expert_out = expert(expert_input)
+                    combined[mask] += expert_out * weights[mask]
+        return combined.view(batch, seq, hidden)
+
+
+class SimpleMoEBlock(nn.Module):
+    """Attention + (dense or MoE) feed-forward."""
+
+    def __init__(self, config: MoeInferenceConfig, use_moe: bool, device: torch.device):
+        super().__init__()
+        heads = max(1, config.hidden_size // 128)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=config.hidden_size,
+            num_heads=heads,
+            batch_first=True,
+            device=device,
+            dtype=config.dtype_obj,
+        )
+        self.ln_attn = nn.LayerNorm(config.hidden_size, device=device, dtype=config.dtype_obj)
+        self.ln_mlp = nn.LayerNorm(config.hidden_size, device=device, dtype=config.dtype_obj)
+        if use_moe:
+            self.ff = MoEFeedForward(
+                config.hidden_size,
+                config.ffn_size,
+                num_experts=config.num_experts,
+                top_k=config.top_k,
+                router_noise=config.router_noise,
+                device=device,
+                dtype=config.dtype_obj,
+            )
+        else:
+            self.ff = DenseFeedForward(config.hidden_size, config.ffn_size, device=device, dtype=config.dtype_obj)
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        attn_out, _ = self.attn(self.ln_attn(hidden), self.ln_attn(hidden), self.ln_attn(hidden), need_weights=False)
+        hidden = hidden + attn_out
+        ff_out = self.ff(self.ln_mlp(hidden))
+        return hidden + ff_out
+
+
+class SimpleMoEGPT(nn.Module):
+    """Tiny GPT-style stack with configurable MoE frequency."""
+
+    def __init__(self, config: MoeInferenceConfig, *, device: torch.device):
+        super().__init__()
+        self.config = config
+        self.device = device
+        self.embed = nn.Embedding(
+            config.vocab_size,
+            config.hidden_size,
+            device=device,
+            dtype=config.dtype_obj,
+        )
+        self.layers = nn.ModuleList()
+        for idx in range(config.num_layers):
+            use_moe = idx < config.num_moe_layers and (idx % config.moe_layer_frequency == 0)
+            self.layers.append(SimpleMoEBlock(config, use_moe=use_moe, device=device))
+        self.final_norm = nn.LayerNorm(config.hidden_size, device=device, dtype=config.dtype_obj)
+        self.lm_head = nn.Linear(
+            config.hidden_size,
+            config.vocab_size,
+            bias=False,
+            device=device,
+            dtype=config.dtype_obj,
+        )
+
+    def forward_tokens(self, token_ids: torch.Tensor) -> torch.Tensor:
+        if token_ids.dtype != torch.long:
+            token_ids = token_ids.long()
+        hidden = self.embed(token_ids)
+        for block in self.layers:
+            hidden = block(hidden)
+        return self.final_norm(hidden)
+
+    def prefill(
+        self,
+        input_ids: torch.Tensor,
+        kv_cache: Optional[torch.Tensor] = None,
+        cache_start: int = 0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        hidden = self.forward_tokens(input_ids)
+        if kv_cache is not None:
+            kv_cache[:, cache_start:cache_start + hidden.size(1)].copy_(hidden)
+        logits = self.lm_head(hidden)
+        return hidden, logits
+
+    def decode(
+        self,
+        token_ids: torch.Tensor,
+        kv_cache: Optional[torch.Tensor] = None,
+        position: Optional[int] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        hidden = self.forward_tokens(token_ids)
+        if kv_cache is not None and position is not None:
+            kv_cache[:, position:position + hidden.size(1)].copy_(hidden)
+        logits = self.lm_head(hidden)
+        return hidden, logits
+
+
+__all__ = [
+    "allocate_kv_cache",
+    "dtype_bytes",
+    "env_override_float",
+    "env_override_int",
+    "MoeInferenceConfig",
+    "SimpleMoEGPT",
+]

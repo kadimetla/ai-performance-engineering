@@ -1,44 +1,17 @@
-"""baseline_kv_cache_naive.py - Naive KV cache baseline (baseline).
-
-Naive KV cache implementation without optimization.
-High memory usage and inefficient access patterns.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_kv_cache_naive.py - Naive KV cache baseline (baseline)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional, Tuple, List
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-from typing import Optional, List, Tuple
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch13.kv_cache_workload import get_workload
 
 WORKLOAD = get_workload()
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
 
 
 class NaiveKVCache:
@@ -122,31 +95,36 @@ class SimpleAttentionLayer(nn.Module):
         return self.proj(out)
 
 
-class BaselineKVCacheNaiveBenchmark(Benchmark):
-    """Naive KV cache baseline - simple storage."""
+class BaselineKVCacheNaiveBenchmark(BaseBenchmark):
+    """Naive KV cache baseline."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.kv_cache = None
-        self.inputs = None
+        self.inputs: Optional[List[torch.Tensor]] = None
         self.workload = WORKLOAD
-        self.max_seq_len = self.workload.max_seq_len
         self.num_layers = self.workload.num_layers
         self.num_heads = self.workload.num_heads
         self.head_dim = self.workload.head_dim
         self.hidden_dim = self.workload.hidden_dim
         self.batch_size = self.workload.batch_size
+        self.max_seq_len = self.workload.max_seq_len
         self.sequence_lengths = list(self.workload.lengths())
+        total_tokens = self.batch_size * sum(self.sequence_lengths)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(len(self.sequence_lengths)),
+            tokens_per_iteration=float(total_tokens),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize model and KV cache."""
         torch.manual_seed(42)
-        
-        layers = []
-        for _ in range(self.num_layers):
-            layers.append(SimpleAttentionLayer(self.hidden_dim, self.num_heads, self.head_dim, dtype=self.workload.dtype))
-        self.model = nn.Sequential(*layers).to(self.device).eval()
+        self.model = nn.ModuleList(
+            [
+                SimpleAttentionLayer(self.hidden_dim, self.num_heads, self.head_dim, dtype=self.workload.dtype)
+                for _ in range(self.num_layers)
+            ]
+        ).to(self.device).eval()
         
         self.kv_cache = NaiveKVCache(
             max_seq_len=self.max_seq_len,
@@ -154,52 +132,44 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
             num_heads=self.num_heads,
             head_dim=self.head_dim,
             dtype=self.workload.dtype,
-            device=self.device
+            device=self.device,
         )
         
         self.inputs = []
         for seq_len in self.sequence_lengths:
             x = torch.randn(self.batch_size, seq_len, self.hidden_dim, device=self.device, dtype=self.workload.dtype)
             self.inputs.append(x)
-        
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark - naive KV cache."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        if self.model is None or self.kv_cache is None or self.inputs is None:
+            raise RuntimeError("Benchmark not configured")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        with self._nvtx_range("kv_cache_baseline_naive"):
+            for seq_idx, x in enumerate(self.inputs):
+                request_id = f"req_{seq_idx}"
+                seq_len = x.size(1)
+                self.kv_cache.allocate(request_id)
+                
+                for pos in range(seq_len):
+                    token = x[:, pos:pos + 1, :]
+                    for layer_idx, layer in enumerate(self.model):
+                        token = layer(token, self.kv_cache, request_id, layer_idx, pos)
+                
+                self.kv_cache.free(request_id)
+        self._synchronize()
 
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_kv_cache_naive", enable=enable_nvtx):
-            with torch.no_grad():
-                for seq_idx, x in enumerate(self.inputs):
-                    request_id = f"req_{seq_idx}"
-                    seq_len = x.size(1)
-                    
-                    for pos in range(seq_len):
-                        token = x[:, pos:pos+1, :]
-                        hidden = token
-                        for layer_idx, layer in enumerate(self.model):
-                            hidden = layer(hidden, self.kv_cache, request_id, layer_idx, pos)
-                    
-                    self.kv_cache.free(request_id)
-            torch.cuda.synchronize()
-
+    
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.model, self.kv_cache, self.inputs
-        torch.cuda.empty_cache()
+        self.model = None
+        self.kv_cache = None
+        self.inputs = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=1,
             enable_memory_tracking=False,
             enable_profiling=False,
             measurement_timeout_seconds=300,
@@ -207,23 +177,16 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
             setup_timeout_seconds=120,
             timeout_multiplier=1.0,
         )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaselineKVCacheNaiveBenchmark:
+    """Factory function for harness discovery."""
     return BaselineKVCacheNaiveBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Naive KV Cache: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

@@ -3,7 +3,7 @@
 Demonstrates roofline analysis for performance optimization.
 Roofline: Uses roofline analysis to identify compute/memory bottlenecks.
 Guides optimization strategy based on arithmetic intensity.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from typing import Optional
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
 )
 from ch10.workload_config import WORKLOAD
@@ -34,7 +34,7 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch10")
     return torch.device("cuda")
 
-class OptimizedRooflineBenchmark(Benchmark):
+class OptimizedRooflineBenchmark(BaseBenchmark):
     """Optimized: Roofline analysis for performance optimization.
     
     Roofline: Uses roofline analysis to identify compute/memory bottlenecks.
@@ -42,6 +42,7 @@ class OptimizedRooflineBenchmark(Benchmark):
     """
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
         self.input = None
@@ -172,7 +173,7 @@ class OptimizedRooflineBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedRooflineBenchmark()
 

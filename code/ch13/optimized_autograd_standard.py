@@ -1,45 +1,14 @@
-"""optimized_autograd_standard.py - Compiled autograd optimization (optimized).
-
-Compiled autograd using torch.compile for faster backward pass.
-Optimizes gradient computation through compilation.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_autograd_standard.py - Compiled autograd optimization."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-# Import arch_config to apply Triton patch for sm_12x support
-# The patch removes 'a' suffix from sm_121a -> sm_121 for ptxas compatibility
-try:
-    import arch_config  # noqa: F401
-except ImportError:
-    pass  # Continue if arch_config not available
-from typing import Optional
-
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
 class SimpleModel(nn.Module):
@@ -57,11 +26,11 @@ class SimpleModel(nn.Module):
         return x
 
 
-class OptimizedAutogradCompiledBenchmark(Benchmark):
+class OptimizedAutogradCompiledBenchmark(BaseBenchmark):
     """Autograd accelerated with CUDA graphs to remove launch overhead."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         self.targets: Optional[torch.Tensor] = None
@@ -76,6 +45,11 @@ class OptimizedAutogradCompiledBenchmark(Benchmark):
         self.input_pool: list[torch.Tensor] = []
         self.target_pool: list[torch.Tensor] = []
         self.pool_index = 0
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup training step, capture it with CUDA graphs."""
@@ -97,12 +71,10 @@ class OptimizedAutogradCompiledBenchmark(Benchmark):
         self.inputs = self.input_pool[0]
         self.targets = self.target_pool[0]
 
-        # Warmup a few eager steps before capture.
         for idx in range(3):
             self._train_step(self.input_pool[idx], self.target_pool[idx])
-        torch.cuda.synchronize()
+        self._synchronize()
 
-        # CUDA graph capture.
         self.static_input = self.input_pool[0].clone()
         self.static_target = self.target_pool[0].clone()
         self.graph = torch.cuda.CUDAGraph()
@@ -117,15 +89,6 @@ class OptimizedAutogradCompiledBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - compiled autograd."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
         if self.graph is None or self.static_input is None or self.static_target is None:
             raise RuntimeError("CUDA graph not initialized")
 
@@ -133,11 +96,11 @@ class OptimizedAutogradCompiledBenchmark(Benchmark):
         current_target = self.target_pool[self.pool_index]
         self.pool_index = (self.pool_index + 1) % len(self.input_pool)
 
-        with nvtx_range("autograd_standard", enable=enable_nvtx):
+        with self._nvtx_range("autograd_standard"):
             self.static_input.copy_(current_input)
             self.static_target.copy_(current_target)
             self.graph.replay()
-        torch.cuda.synchronize(self.device)
+        self._synchronize()
 
     def _train_step(self, batch: torch.Tensor, target: torch.Tensor) -> None:
         assert self.model is not None and self.optimizer is not None and self.criterion is not None
@@ -149,14 +112,18 @@ class OptimizedAutogradCompiledBenchmark(Benchmark):
 
     def teardown(self) -> None:
         """Cleanup."""
-        del self.model, self.inputs, self.targets, self.optimizer, self.criterion
+        self.model = None
+        self.inputs = None
+        self.targets = None
+        self.optimizer = None
+        self.criterion = None
         self.graph = None
         self.static_input = None
         self.static_target = None
         self.capture_stream = None
         self.input_pool = []
         self.target_pool = []
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -165,8 +132,11 @@ class OptimizedAutogradCompiledBenchmark(Benchmark):
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
-            setup_timeout_seconds=180,  # torch.compile compilation can take 60-120 seconds
+            setup_timeout_seconds=180,
         )
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -174,16 +144,6 @@ class OptimizedAutogradCompiledBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> OptimizedAutogradCompiledBenchmark:
+    """Factory function for harness discovery."""
     return OptimizedAutogradCompiledBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Autograd Compiled: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

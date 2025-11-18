@@ -10,7 +10,7 @@ from common.python.benchmark_comparison import (
     format_metric_comparison_table,
     format_metric_comparison_summary,
 )
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 
 
 def example_basic_usage(baseline_result, optimized_result):

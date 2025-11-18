@@ -1,7 +1,7 @@
 """baseline_reinit_comm.py - Reinitializing NCCL every iteration (baseline).
 
 Anti-pattern: reinitializing NCCL communicator on every iteration.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -32,29 +32,27 @@ except ImportError:
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda")
-
-
-class BaselineReinitCommBenchmark(Benchmark):
+class BaselineReinitCommBenchmark(BaseBenchmark):
     """Reinitializing NCCL every iteration - poor pattern."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.rank = 0
         self.world_size = 1
         self.tensor = None
         self.initialized = False
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            bytes_per_iteration=4.0,  # single float all-reduce
+        )
     
     def setup(self) -> None:
         """Setup: Configure distributed environment."""
@@ -62,22 +60,17 @@ class BaselineReinitCommBenchmark(Benchmark):
         setup_single_gpu_env()
         self.rank = int(os.environ.get("RANK", "0"))
         self.world_size = int(os.environ.get("WORLD_SIZE", "1"))
-        torch.cuda.set_device(0)
+        torch.cuda.set_device(self.device)
         self.tensor = torch.ones(1, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            bytes_per_iteration=self._workload.bytes_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Reinitialize NCCL every iteration."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("reinit_comm", enable=enable_nvtx):
+        with self._nvtx_range("reinit_comm"):
             # Anti-pattern: reinitialize NCCL every iteration
             if dist.is_initialized():
                 dist.destroy_process_group()
@@ -91,6 +84,7 @@ class BaselineReinitCommBenchmark(Benchmark):
             
             # Perform all-reduce
             dist.all_reduce(self.tensor)
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -98,7 +92,7 @@ class BaselineReinitCommBenchmark(Benchmark):
         if dist.is_initialized():
             dist.destroy_process_group()
         self.tensor = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -123,7 +117,7 @@ class BaselineReinitCommBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineReinitCommBenchmark()
 

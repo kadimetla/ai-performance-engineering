@@ -1,4 +1,4 @@
-"""optimized guided decoding - Optimized guided decoding with schema constraints. Implements Benchmark protocol for harness integration."""
+"""optimized guided decoding - Optimized guided decoding with schema constraints."""
 
 from __future__ import annotations
 
@@ -20,20 +20,16 @@ except ImportError:
 from typing import Optional
 
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch1")
-    return torch.device("cuda")
-
-
-class OptimizedGuidedDecodingBenchmark(Benchmark):
+class OptimizedGuidedDecodingBenchmark(BaseBenchmark):
     """Optimized: Guided decoding with schema constraints.
     
     Guided decoding: Uses schema/constraints to guide token generation.
@@ -41,11 +37,18 @@ class OptimizedGuidedDecodingBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.input_ids = None
         self.schema = None
         self.max_length = 20
+        self.batch_size = 4
+        self.seq_len = 10
+        tokens = self.batch_size * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and schema."""
@@ -83,23 +86,12 @@ class OptimizedGuidedDecodingBenchmark(Benchmark):
             "required": ["summary"],
         }
         
-        batch_size = 4
-        seq_len = 10
-        self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
-        torch.cuda.synchronize()
+        self.input_ids = torch.randint(0, vocab_size, (self.batch_size, self.seq_len), device=self.device)
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Guided decoding with schema."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("optimized_guided_decoding", enable=enable_nvtx):
+        with self._nvtx_range("optimized_guided_decoding"):
             with torch.no_grad():
                 # Optimization: Guided decoding
                 # Uses schema to guide token generation
@@ -119,6 +111,7 @@ class OptimizedGuidedDecodingBenchmark(Benchmark):
                 # In practice, would filter/mask logits based on schema
                 # For benchmarking, we demonstrate the concept
                 _ = output.sum()
+            self._synchronize()
 
     
     def teardown(self) -> None:
@@ -135,12 +128,15 @@ class OptimizedGuidedDecodingBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedGuidedDecodingBenchmark()
 

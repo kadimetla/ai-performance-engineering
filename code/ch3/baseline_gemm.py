@@ -2,38 +2,33 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import Optional, List
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import List, Optional, Tuple
 
 import torch
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from common.python.compile_utils import configure_tf32, restore_tf32
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3")
-    return torch.device("cuda")
-
-
-class BaselineGemmBenchmark(Benchmark):
+class BaselineGemmBenchmark(BaseBenchmark):
     """Splits a large GEMM into many small kernels with extra CPU sync."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.block = 512
         self.blocks = 8
         self.left_blocks: List[torch.Tensor] = []
         self.right_blocks: List[torch.Tensor] = []
+        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
+        tokens = self.block * self.block * self.blocks
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.blocks),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         torch.manual_seed(1)
-        torch.backends.cuda.matmul.allow_tf32 = False
+        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
         torch.set_float32_matmul_precision("highest")
         self.left_blocks = [
             torch.randn(self.block, self.block, device=self.device, dtype=torch.float32)
@@ -43,7 +38,7 @@ class BaselineGemmBenchmark(Benchmark):
             torch.randn(self.block, self.block, device=self.device, dtype=torch.float32)
             for _ in range(self.blocks)
         ]
-        torch.cuda.synchronize()
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
         from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
@@ -55,16 +50,22 @@ class BaselineGemmBenchmark(Benchmark):
         with nvtx_range("baseline_gemm", enable=enable_nvtx):
             for a, b in zip(self.left_blocks, self.right_blocks):
                 total += torch.matmul(a, b)
-                torch.cuda.synchronize()  # simulate CPU scheduling between launches
+                self._synchronize()  # simulate CPU scheduling between launches
         return total
 
     def teardown(self) -> None:
         self.left_blocks = []
         self.right_blocks = []
+        if self._tf32_state is not None:
+            restore_tf32(self._tf32_state)
+            self._tf32_state = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=20, warmup=4)
+
+    def get_workload_metadata(self):
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
         if not self.left_blocks or not self.right_blocks:
@@ -72,16 +73,5 @@ class BaselineGemmBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return BaselineGemmBenchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=5, warmup=1),
-    )
-    result = harness.benchmark(get_benchmark())
-    print(f"\nBaseline GEMM latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

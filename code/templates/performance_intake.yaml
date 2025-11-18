@@ -1,0 +1,62 @@
+# Copy this file, fill it out, and keep it alongside the artifacts for the workload you are tuning.
+# The goal is to tighten the loop between goals, baselines, and proof-of-benefit.
+
+objective:
+  primary_kpi: tokens_per_second            # or samples_per_second | p50_latency_ms | p99_latency_ms | $/1M_tokens | J/1M_tokens
+  secondary_kpis: [throughput_per_dollar, throughput_per_watt, SLA_attainment_%]
+
+workload:
+  type: inference                           # or training
+  model: "<name/version, params, precision>"
+  prompt_or_seq_len:
+    p50: null
+    p95: null
+    max: null
+  batch_shape:
+    p50: null
+    p95: null
+    max: null                               # or specify a QPS profile for online traffic
+  constraints: []                           # quality targets, formatting/grammar constraints, allowed accuracy deltas
+
+slos:
+  latency_ms:
+    p50: null
+    p95: null
+    p99: null
+  availability: null
+  cost_budget: "<$ per day/week/month>"
+
+environment:
+  hardware:
+    gpu: ["model", count, "memory_gb"]
+    cpu: "model / cores"
+    ram_gb: null
+    storage: "<type/throughput>"
+    interconnect: ["NVLink/NVSwitch", "NIC type & Gb/s"]
+    topology: "e.g., NVSwitch fabric + host NICs"
+  software:
+    os: ""
+    kernel: ""
+    driver: ""
+    cuda: ""
+    pytorch: ""
+    triton: ""
+    frameworks: ["vLLM", "SGLang", "TensorRT-LLM"]
+    nccl: ""
+    container_orchestrator: ""
+  data_pipeline: []                         # where inputs come from, caching, prefetching, pin-memory
+
+current_baseline:
+  tokens_per_second: null
+  p50_ms: null
+  p99_ms: null
+  gpu_util_percent: null
+  mem_bw_percent: null
+  nic_gbps: null
+  goodput_percent: null                     # useful GPU time / total step/request time
+
+known_issues_or_hypotheses: []
+
+risk_guardrails:
+  correctness_tests: []                     # golden outputs, regressions to run
+  change_windows: []                        # when it is safe to experiment

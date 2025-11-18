@@ -1,47 +1,21 @@
-"""optimized_kv_cache_naive.py - Paged KV cache implementation (optimized).
-
-Paged KV cache allocates memory in fixed-size pages, enabling efficient memory reuse
-and eliminating fragmentation. Pages are allocated on-demand and reused across sequences.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_kv_cache_naive.py - Paged KV cache implementation (optimized)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-import os
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
 import math
 from collections import defaultdict
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Optional, Tuple
-
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
 from ch13.kv_cache_workload import get_workload
 
 WORKLOAD = get_workload()
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
 
 class PagedKVCache:
     """KV cache that reuses right-sized contiguous slabs."""
@@ -154,6 +128,7 @@ class PagedKVCache:
         for entry in self.allocations.pop(request_id):
             self._release_buffer(entry["pages"], entry["buffer"])  # type: ignore[arg-type]
 
+
 class FlashAttentionLayer(nn.Module):
     """FlashAttention layer tailored for paged KV caches."""
     
@@ -196,16 +171,13 @@ class FlashAttentionLayer(nn.Module):
         attn_out = attn_out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
         return self.proj(attn_out)
 
-class OptimizedKVCachePagedBenchmark(Benchmark):
+
+class OptimizedKVCachePagedBenchmark(BaseBenchmark):
     """Paged KV cache optimization - efficient memory reuse."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.layers = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
         self.kv_cache = None
         self.inputs = None
         self.workload = WORKLOAD
@@ -217,19 +189,20 @@ class OptimizedKVCachePagedBenchmark(Benchmark):
         self.batch_size = self.workload.batch_size
         self.sequence_lengths = list(self.workload.lengths())
         self.block_size = self.workload.block_size
+        total_tokens = self.batch_size * sum(self.sequence_lengths)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(len(self.sequence_lengths)),
+            tokens_per_iteration=float(total_tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and paged KV cache."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         torch.manual_seed(42)
         
-        # Create simple model with attention layers
         self.layers = nn.ModuleList(
             [
                 FlashAttentionLayer(self.hidden_dim, self.num_heads, self.head_dim, dtype=self.workload.dtype)
@@ -237,7 +210,6 @@ class OptimizedKVCachePagedBenchmark(Benchmark):
             ]
         ).to(self.device).eval()
         
-        # Paged KV cache (allocates pages on-demand, reuses them)
         self.kv_cache = PagedKVCache(
             page_size=self.page_size,
             num_layers=self.num_layers,
@@ -247,31 +219,23 @@ class OptimizedKVCachePagedBenchmark(Benchmark):
             device=self.device,
         )
         
-        # Prepare inputs (different sequence lengths - paged cache handles efficiently)
         self.inputs = []
         for seq_len in self.sequence_lengths:
             x = torch.randn(self.batch_size, seq_len, self.hidden_dim, device=self.device, dtype=self.workload.dtype)
             self.inputs.append(x)
         
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - paged KV cache with efficient allocation."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        if self.layers is None or self.kv_cache is None or self.inputs is None:
+            raise RuntimeError("Benchmark not configured")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("kv_cache_naive", enable=enable_nvtx):
-            # Process multiple sequences with different lengths
+        with self._nvtx_range("kv_cache_naive"):
             for seq_idx, x in enumerate(self.inputs):
                 request_id = f"req_{seq_idx}"
                 seq_len = x.size(1)
                 
-                # Allocate pages only for this sequence length (efficient)
                 self.kv_cache.allocate(request_id, seq_len)
                 
                 for pos in range(0, seq_len, self.block_size):
@@ -280,20 +244,22 @@ class OptimizedKVCachePagedBenchmark(Benchmark):
                     for layer_idx, layer in enumerate(self.layers):
                         hidden = layer(hidden, self.kv_cache, request_id, layer_idx, pos)
                 
-                # Free cache after sequence (pages returned to pool for reuse)
                 self.kv_cache.free(request_id)
+        self._synchronize()
 
     
     def teardown(self) -> None:
         """Cleanup."""
-        del self.layers, self.kv_cache, self.inputs
-        torch.cuda.empty_cache()
+        self.layers = None
+        self.kv_cache = None
+        self.inputs = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=1,
             enable_memory_tracking=False,
             enable_profiling=False,
             measurement_timeout_seconds=300,
@@ -302,21 +268,16 @@ class OptimizedKVCachePagedBenchmark(Benchmark):
             timeout_multiplier=1.0,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.layers is None:
             return "Model layers not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+
+def get_benchmark() -> OptimizedKVCachePagedBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedKVCachePagedBenchmark()
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Paged KV Cache: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

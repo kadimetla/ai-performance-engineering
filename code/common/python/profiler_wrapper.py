@@ -10,11 +10,11 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Protocol
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
 def create_benchmark_wrapper(
-    benchmark: Benchmark,
+    benchmark: BaseBenchmark,
     benchmark_module,
     benchmark_class: str,
     config: BenchmarkConfig
@@ -25,7 +25,7 @@ def create_benchmark_wrapper(
     instance, then runs setup, warmup, and profiling iterations.
     
     Args:
-        benchmark: Benchmark instance (used to get module info)
+        benchmark: BaseBenchmark instance (used to get module info)
         benchmark_module: Module object containing the benchmark
         benchmark_class: Name of the benchmark class
         config: BenchmarkConfig with iterations/warmup settings
@@ -170,4 +170,3 @@ exec "{cuda_executable}" {" ".join(args)}
         return wrapper_path
     except Exception:
         return None
-

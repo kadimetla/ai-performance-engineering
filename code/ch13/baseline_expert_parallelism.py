@@ -1,35 +1,13 @@
-"""baseline_expert_parallelism.py - Baseline MoE without expert parallelism.
-
-Demonstrates Mixture of Experts (MoE) without expert parallelism.
-Expert parallelism: This baseline processes all experts sequentially on a single GPU.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_expert_parallelism.py - Baseline MoE without expert parallelism."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
 class ExpertLayer(nn.Module):
@@ -47,96 +25,74 @@ class ExpertLayer(nn.Module):
         return self.expert(x)
 
 
-class BaselineExpertParallelismBenchmark(Benchmark):
+class BaselineExpertParallelismBenchmark(BaseBenchmark):
     """Baseline: MoE without expert parallelism (all experts on single GPU)."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.experts = None
         self.router = None
         self.input_data = None
         self.num_experts = 8
-        self.top_k = 2  # Top-k experts per token
+        self.top_k = 2
+        tokens = 32 * 256
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize MoE model with all experts on single GPU."""
         torch.manual_seed(42)
-        # Baseline: All experts on single GPU
-        # Expert parallelism distributes experts across multiple GPUs
-        # This baseline processes all experts sequentially on one GPU
         self.experts = nn.ModuleList([
             ExpertLayer(256).to(self.device) for _ in range(self.num_experts)
         ])
         
-        # Simple router (gating network) to select top-k experts
         self.router = nn.Linear(256, self.num_experts).to(self.device)
-        
-        self.input_data = torch.randn(32, 256, device=self.device)  # Batch of 32 tokens
-        torch.cuda.synchronize()
+        self.input_data = torch.randn(32, 256, device=self.device)
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Sequential expert processing without parallelism."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-        
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-        
-        # Baseline: Process all experts sequentially on single GPU
-        # No expert parallelism - all experts on one device
-        with nvtx_range("baseline_expert_parallelism", enable=enable_nvtx):
+        if self.experts is None or self.router is None or self.input_data is None:
+            raise RuntimeError("Benchmark not configured")
+
+        with self._nvtx_range("baseline_expert_parallelism"):
             with torch.no_grad():
-                router_logits = self.router(self.input_data)  # [batch, num_experts]
+                router_logits = self.router(self.input_data)
                 top_k_weights, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
                 top_k_weights = torch.softmax(top_k_weights, dim=-1)
                 
-                # Process each expert sequentially
                 output = torch.zeros_like(self.input_data)
                 for expert_id in range(self.num_experts):
                     expert_mask = (top_k_indices == expert_id).any(dim=-1)
                     if expert_mask.any():
                         expert_input = self.input_data[expert_mask]
                         expert_output = self.experts[expert_id](expert_input)
-                        # Aggregate outputs (simplified)
                         output[expert_mask] += expert_output
-        
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def teardown(self) -> None:
-        """Cleanup: Clear CUDA cache."""
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        self.experts = None
+        self.router = None
+        self.input_data = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=20,
             warmup=3,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.experts is None or len(self.experts) == 0:
             return "Experts not initialized"
         if self.router is None:
             return "Router not initialized"
-        if self.input_data is None:
-            return "Input data not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaselineExpertParallelismBenchmark:
+    """Factory function for harness discovery."""
     return BaselineExpertParallelismBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(result)
-

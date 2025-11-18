@@ -1,40 +1,18 @@
-"""optimized_training_standard.py - Gradient checkpointing optimization.
-
-Recomputes activations during backward - slower but memory-efficient.
-Enables training larger models that wouldn't fit otherwise.
-"""
+"""optimized_training_standard.py - Gradient checkpointing optimization."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add repo root to path for imports
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 from torch.amp import autocast
 
-from typing import Optional
-
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch13.workload_config import WORKLOAD
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
 
 class DeepModel(nn.Module):
     """Deep model with gradient checkpointing."""
@@ -50,22 +28,18 @@ class DeepModel(nn.Module):
     def forward(self, x):
         for layer in self.layers:
             if self.use_checkpoint and self.training:
-                # Gradient checkpointing: Recompute activations during backward
-                x = checkpoint(lambda x: torch.relu(layer(x)), x, use_reentrant=False)
+                x = checkpoint(lambda y: torch.relu(layer(y)), x, use_reentrant=False)
             else:
                 x = torch.relu(layer(x))
         return x
 
-class OptimizedCheckpointBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+
+class OptimizedCheckpointBenchmark(BaseBenchmark):
+    """Gradient checkpointing: memory-efficient, slightly slower."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
         self.inputs: Optional[torch.Tensor] = None
         self.targets: Optional[torch.Tensor] = None
         self.optimizer = None
@@ -76,17 +50,18 @@ class OptimizedCheckpointBenchmark(Benchmark):
         self.global_batch = self.workload.global_batch_size
         self.micro_batch = self.workload.micro_batch_size
         self.accum_steps = self.global_batch // self.micro_batch
-        self.batch_size = self.micro_batch
         self.dtype = torch.bfloat16
+        tokens = self.global_batch * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.accum_steps),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         model = DeepModel(hidden_dim=self.hidden_dim, num_layers=self.num_layers, use_checkpoint=True)
         self.model = model.to(self.device, dtype=self.dtype).train()
@@ -94,41 +69,34 @@ class OptimizedCheckpointBenchmark(Benchmark):
         self.targets = torch.randn(self.global_batch, self.hidden_dim, device=self.device, dtype=self.dtype)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
-        self._chunks = zip(
-            self.inputs.view(self.accum_steps, self.micro_batch, self.hidden_dim),
-            self.targets.view(self.accum_steps, self.micro_batch, self.hidden_dim),
-        )
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        if any(v is None for v in (self.model, self.inputs, self.targets, self.optimizer, self.criterion)):
+            raise RuntimeError("Benchmark not configured")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("training_standard", enable=enable_nvtx):
+        with self._nvtx_range("training_standard_checkpoint"):
             self.optimizer.zero_grad(set_to_none=True)
-            chunk_iter = self._chunks
-            for inputs, targets in chunk_iter:
+            for inputs, targets in zip(
+                self.inputs.view(self.accum_steps, self.micro_batch, self.hidden_dim),
+                self.targets.view(self.accum_steps, self.micro_batch, self.hidden_dim),
+            ):
                 with autocast("cuda", dtype=self.dtype):
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets) / self.accum_steps
                 loss.backward()
             self.optimizer.step()
-            self._chunks = zip(
-                self.inputs.view(self.accum_steps, self.micro_batch, self.hidden_dim),
-                self.targets.view(self.accum_steps, self.micro_batch, self.hidden_dim),
-            )
+        self._synchronize()
 
-    
     def teardown(self) -> None:
         """Cleanup."""
-        del self.model, self.inputs, self.targets, self.optimizer, self.criterion
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        self.model = None
+        self.inputs = None
+        self.targets = None
+        self.optimizer = None
+        self.criterion = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark-specific config."""
@@ -136,6 +104,9 @@ class OptimizedCheckpointBenchmark(Benchmark):
             iterations=20,
             warmup=5,
         )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -156,32 +127,7 @@ class OptimizedCheckpointBenchmark(Benchmark):
             return f"Model forward pass failed: {e}"
         return None
 
-def get_benchmark() -> Benchmark:
+
+def get_benchmark() -> OptimizedCheckpointBenchmark:
     """Factory function for harness discovery."""
     return OptimizedCheckpointBenchmark()
-
-def main() -> None:
-    """Standalone execution with timing."""
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=20, warmup=5)
-    )
-    benchmark = OptimizedCheckpointBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print("Optimized: Gradient Checkpointing")
-    print("=" * 70)
-    print(f"Model: {benchmark.num_layers} layers, {benchmark.hidden_dim} hidden dim")
-    print(f"Batch: {benchmark.batch_size}")
-    print("Mode: Checkpointing (recomputes activations)")
-    print("Note: Same workload size as baseline\n")
-    
-    print(f"Average time per iteration: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-    print("Status: Checkpointing (30-50% memory reduction, 10-30% slower)")
-    print("Benefit: Enables training larger models")
-
-if __name__ == "__main__":
-    main()

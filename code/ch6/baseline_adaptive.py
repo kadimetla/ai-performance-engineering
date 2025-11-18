@@ -1,53 +1,35 @@
-"""baseline_adaptive.py - Baseline without adaptive optimization.
-
-Demonstrates operations with static configuration (no runtime adaptation).
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_adaptive.py - Baseline without adaptive optimization."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
-from typing import Optional
 import torch.nn.functional as F
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch6")
-    return torch.device("cuda")
-
-
-class BaselineAdaptiveBenchmark(Benchmark):
-    """Baseline: Static configuration (no adaptive optimization)."""
+class BaselineAdaptiveBenchmark(BaseBenchmark):
+    """Baseline: static configuration (no runtime adaptation)."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.input = None
-        self.output = None
+        super().__init__()
+        self.input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.N = 4_000_000
         self.static_chunk = 2048
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize with static configuration."""
         torch.manual_seed(42)
-        # Baseline: Static configuration
-        # Adaptive optimization adjusts parameters at runtime based on workload
-        # This baseline uses fixed configuration that doesn't adapt
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
 
     def _transform(self, tensor: torch.Tensor) -> torch.Tensor:
         """Shared math used by both baseline and optimized variants."""
@@ -56,26 +38,15 @@ class BaselineAdaptiveBenchmark(Benchmark):
         return F.silu(out)
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Static configuration operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_adaptive", enable=enable_nvtx):
-            # Baseline: iterate with a fixed micro-chunk regardless of device characteristics.
-            # Each chunk launches several tiny kernels, which under-utilizes modern GPUs.
+        """Benchmark: static configuration operations."""
+        assert self.input is not None and self.output is not None
+        with self._nvtx_range("baseline_adaptive"):
             for start in range(0, self.N, self.static_chunk):
                 end = min(start + self.static_chunk, self.N)
                 window = self.input[start:end]
                 transformed = self._transform(window)
                 self.output[start:end].copy_(transformed)
-            torch.cuda.synchronize()
-
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -90,6 +61,9 @@ class BaselineAdaptiveBenchmark(Benchmark):
             warmup=10,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.output is None:
@@ -97,19 +71,6 @@ class BaselineAdaptiveBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineAdaptiveBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Adaptive (Static): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print("  Note: Uses static configuration, does not adapt to workload")

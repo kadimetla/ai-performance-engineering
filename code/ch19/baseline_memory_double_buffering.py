@@ -4,33 +4,30 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional, List
+
+import torch
+import torch.nn as nn
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
+from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch19")
-    return torch.device("cuda")
-
-
-class MemoryDoubleBufferingBenchmark(Benchmark):
+class MemoryDoubleBufferingBenchmark(BaseBenchmark):
     """Baseline: single stream, single buffer (no overlap)."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.buffer: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
@@ -38,8 +35,13 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
         self.batch_size = 4
         self.seq_len = 1024
         self.hidden_dim = 1024
-        self.host_batches: list[torch.Tensor] = []
+        self.host_batches: List[torch.Tensor] = []
         self.micro_batches = 16
+        tokens = self.batch_size * self.seq_len * self.micro_batches
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         """Setup: Initialize single-GPU tensors."""
@@ -73,15 +75,8 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
 
     def benchmark_fn(self) -> None:
         """Benchmark: Single-GPU stream-ordered operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
         assert (
             self.model is not None
             and self.buffer is not None
@@ -95,7 +90,6 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
                     with torch.cuda.stream(self.stream):
                         self.output = self.model(self.buffer)
                     self.stream.synchronize()
-
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -112,6 +106,9 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
             warmup=5,
         )
 
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.output is None:
@@ -119,19 +116,17 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return MemoryDoubleBufferingBenchmark()
 
 
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    benchmark = get_benchmark()
+if __name__ == "__main__":
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
+        config=MemoryDoubleBufferingBenchmark().get_config(),
     )
+    benchmark = get_benchmark()
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Memory double buffering (Single GPU): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
     print(" Note: Single-GPU operation, no distributed computing")

@@ -18,7 +18,7 @@ from common.python.env_defaults import apply_env_defaults
 apply_env_defaults()
 
 import torch
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
 from common.python.discovery import discover_all_chapters
 from common.python.profiling_runner import (
@@ -157,7 +157,7 @@ class TestProfilingWorkflowIntegration:
         # We're just testing that the workflow doesn't crash
         config = BenchmarkConfig(
             iterations=3,  # Minimal iterations for profiling test
-            warmup=0,
+            warmup=1,
             enable_profiling=True,
             enable_nsys=True,
             profiling_output_dir=str(output_dir),

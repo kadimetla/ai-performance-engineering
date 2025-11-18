@@ -1,37 +1,14 @@
-"""optimized_training_single.py - Optimized training loop (optimized).
-
-Uses fused AdamW, Ampere mixed precision, and compilation to simulate
-high-throughput training even on a single GPU.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_training_single.py - Optimized training loop."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch20")
-    return torch.device("cuda")
 
 class SimpleModel(nn.Module):
     """Simple model for training demonstration."""
@@ -47,23 +24,28 @@ class SimpleModel(nn.Module):
         x = self.fc2(x)
         return x
 
-class OptimizedTrainingDistributedBenchmark(Benchmark):
+
+class OptimizedTrainingDistributedBenchmark(BaseBenchmark):
     """Optimized training loop leveraging AMP, fused optimizers, and compilation."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        self.inputs = None
-        self.targets = None
-        self.optimizer = None
-        self.criterion = None
-        self.scaler = None
+        super().__init__()
+        self.model: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
+        self.targets: Optional[torch.Tensor] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.criterion: Optional[nn.Module] = None
+        self.scaler: Optional[torch.cuda.amp.GradScaler] = None
         self.batch_size = 8
         self.hidden_dim = 4096
         self.train_steps = 4
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize optimized single-GPU training stack."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
@@ -90,17 +72,13 @@ class OptimizedTrainingDistributedBenchmark(Benchmark):
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-            torch.cuda.synchronize()
-        torch.cuda.synchronize()
+            self._synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark - optimized training."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("training", enable=enable_nvtx):
+        assert self.model is not None and self.inputs is not None and self.targets is not None
+        assert self.optimizer is not None and self.criterion is not None and self.scaler is not None
+        with self._nvtx_range("training_optimized"):
             self.optimizer.zero_grad(set_to_none=True)
             with torch.autocast("cuda", dtype=torch.float16):
                 outputs = self.model(self.inputs)
@@ -108,15 +86,18 @@ class OptimizedTrainingDistributedBenchmark(Benchmark):
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
-
+            self._synchronize()
     
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.model, self.inputs, self.targets, self.optimizer, self.criterion, self.scaler
+        self.model = None
+        self.inputs = None
+        self.targets = None
+        self.optimizer = None
+        self.criterion = None
+        self.scaler = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=50,
             warmup=10,
@@ -124,25 +105,14 @@ class OptimizedTrainingDistributedBenchmark(Benchmark):
             enable_profiling=False,
         )
     
+    def get_workload_metadata(self):
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
-    return OptimizedTrainingDistributedBenchmark()
 
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    timing = result.timing
-    if timing:
-        print(f"\nOptimized Distributed Training: {timing.mean_ms:.3f} ms")
-    else:
-        print("No timing data available")
+def get_benchmark() -> BaseBenchmark:
+    return OptimizedTrainingDistributedBenchmark()

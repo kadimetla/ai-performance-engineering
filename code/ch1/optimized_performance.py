@@ -1,8 +1,4 @@
-"""optimized_performance.py - Optimized performance benchmark with larger batch size.
-
-Demonstrates how larger batch sizes improve GEMM efficiency.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_performance.py - Optimized performance benchmark with larger batch size."""
 
 from __future__ import annotations
 
@@ -24,30 +20,21 @@ except ImportError:
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 from ch1.workload_config import WORKLOAD
 
 
-def resolve_device() -> torch.device:
-    """Return a usable device, falling back to CPU if CUDA is unavailable or unsupported."""
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        torch.zeros(1, device="cuda")
-        return torch.device("cuda")
-    except Exception as exc:
-        print(f"WARNING: CUDA unavailable or unsupported ({exc}); falling back to CPU.")
-        return torch.device("cpu")
-
-
-class OptimizedPerformanceBatchBenchmark(Benchmark):
+class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
     """Benchmark implementation with larger batch size optimization."""
     
     def __init__(self, batch_size: int = 32):
-        self.device = resolve_device()
+        super().__init__()
         self.workload = WORKLOAD
         self.batch_size = batch_size if batch_size != 32 else self.workload.microbatch_size
         self.model = None
@@ -55,6 +42,11 @@ class OptimizedPerformanceBatchBenchmark(Benchmark):
         self.targets = None
         self.optimizer = None
         self.fusion = 4
+        tokens = self.batch_size * self.workload.performance_microbatches * 256
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.workload.performance_microbatches),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: initialize model and data with larger batch."""
@@ -129,7 +121,7 @@ class OptimizedPerformanceBatchBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("optimized_performance_batch", enable=enable_nvtx):
+        with self._nvtx_range("optimized_performance_batch"):
             # Optimization: Larger batch size improves GPU utilization
             # Process more samples per forward pass, reducing overhead per sample
             # This is the key optimization - larger batches are more efficient
@@ -139,8 +131,7 @@ class OptimizedPerformanceBatchBenchmark(Benchmark):
                 loss = torch.nn.functional.cross_entropy(logits, target)
                 loss.backward()
                 self.optimizer.step()
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
+        self._synchronize()
             
             # Optimization: Larger batch benefits
             # - Better GPU utilization (more parallelism)
@@ -163,6 +154,9 @@ class OptimizedPerformanceBatchBenchmark(Benchmark):
             warmup=1,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -184,7 +178,7 @@ class OptimizedPerformanceBatchBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedPerformanceBatchBenchmark(batch_size=32)
 

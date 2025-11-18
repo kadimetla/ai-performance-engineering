@@ -1,74 +1,44 @@
-"""baseline_warp_divergence_ilp.py - Baseline ILP with warp divergence.
-
-Demonstrates ILP operations that cause warp divergence, limiting parallelism.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_warp_divergence_ilp.py - Baseline ILP with warp divergence."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
-from typing import Optional
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch6.workload_config import WORKLOAD
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch6")
-    return torch.device("cuda")
-
-
-class BaselineWarpDivergenceILPBenchmark(Benchmark):
+class BaselineWarpDivergenceILPBenchmark(BaseBenchmark):
     """Baseline: ILP limited by warp divergence."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.routing_logits = None
+        super().__init__()
+        self.input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        self.routing_logits: Optional[torch.Tensor] = None
         self.workload = WORKLOAD
         self.N = self.workload.warp_elements
         self.branch_iterations = self.workload.warp_branch_iterations
         self._checksum = 0.0
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.branch_iterations),
+            tokens_per_iteration=float(self.N * self.branch_iterations),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
         torch.manual_seed(42)
-        # Baseline: ILP operations with warp divergence
-        # Warp divergence occurs when threads in a warp take different paths
-        # This limits instruction-level parallelism
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         self.routing_logits = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: ILP operations with warp divergence."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_warp_divergence_ilp", enable=enable_nvtx):
-            # Baseline: ILP limited by warp divergence
-            # Warp divergence causes serialization of divergent paths
-            # This reduces instruction-level parallelism
-            # Threads in same warp take different execution paths
+        assert self.input is not None and self.output is not None and self.routing_logits is not None
+        with self._nvtx_range("baseline_warp_divergence_ilp"):
             mask_source = self.routing_logits
             result = self.input.clone()
             for iteration in range(self.branch_iterations):
@@ -88,12 +58,11 @@ class BaselineWarpDivergenceILPBenchmark(Benchmark):
                 result[~mask] = negative
 
                 mask_source = 0.92 * mask_source + 0.08 * torch.roll(result, shifts=iteration + 1, dims=0)
-                torch.cuda.synchronize()
+                self._synchronize()
 
             self.output = result
             self.routing_logits = mask_source
             self._checksum = float(result.sum().item())
-    
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -108,6 +77,9 @@ class BaselineWarpDivergenceILPBenchmark(Benchmark):
             warmup=self.workload.ilp_warmup,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.output is None:
@@ -115,19 +87,6 @@ class BaselineWarpDivergenceILPBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for harness discovery."""
     return BaselineWarpDivergenceILPBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Warp Divergence ILP: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print("  Note: Warp divergence limits instruction-level parallelism")

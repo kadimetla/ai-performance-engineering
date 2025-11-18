@@ -1,85 +1,51 @@
-"""baseline_memory_standard.py - Standard memory access baseline (baseline).
-
-Standard memory access patterns without HBM3e optimizations.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_memory_standard.py - Standard memory access baseline."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch20")
-    return torch.device("cuda")
-
-
-class BaselineMemoryStandardBenchmark(Benchmark):
-    """Standard memory access baseline - no HBM3e optimizations."""
+class BaselineMemoryStandardBenchmark(BaseBenchmark):
+    """Standard memory access patterns without HBM3e optimizations."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.data = None
-        self.result = None
+        super().__init__()
+        self.data: Optional[torch.Tensor] = None
+        self.result: Optional[torch.Tensor] = None
         self.size_mb = 100  # 100 MB
-        self.access_pattern = "sequential"  # Standard sequential access
+        num_elements = (self.size_mb * 1024 * 1024) // 4
+        self.num_elements = num_elements
+        bytes_per_iter = num_elements * 4 * 2  # read + write
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(num_elements),
+            bytes_per_iteration=float(bytes_per_iter),
+        )
     
     def setup(self) -> None:
-        """Setup: Allocate memory and prepare data."""
         torch.manual_seed(42)
-        
-        # Allocate standard memory (not optimized for HBM3e)
-        num_elements = (self.size_mb * 1024 * 1024) // 4  # float32 = 4 bytes
-        self.data = torch.randn(num_elements, device=self.device, dtype=torch.float32)
+        self.data = torch.randn(self.num_elements, device=self.device, dtype=torch.float32)
         self.result = torch.zeros_like(self.data)
-        
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark - standard memory access."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_memory_standard", enable=enable_nvtx):
-            # Standard sequential memory access (not optimized for HBM3e)
-            # Simple element-wise operations
+        assert self.data is not None
+        with self._nvtx_range("baseline_memory_standard"):
             self.result = self.data * 2.0 + 1.0
-            # Force memory write
-            self.result += 0.1
-
+            if self.result is not None:
+                self.result += 0.1
+            self._synchronize()
     
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.data, self.result
+        self.data = None
+        self.result = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=100,
             warmup=10,
@@ -87,24 +53,14 @@ class BaselineMemoryStandardBenchmark(Benchmark):
             enable_profiling=False,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.data is None:
             return "Data not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaseBenchmark:
     return BaselineMemoryStandardBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Standard Memory: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 
 from common.python.allocator_tuning import log_allocator_guidance
-from common.python.benchmark_harness import BaseBenchmark, Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
 class BaselineDockerBenchmark(BaseBenchmark):
@@ -81,7 +81,7 @@ class BaselineDockerBenchmark(BaseBenchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return BaselineDockerBenchmark()
 
 

@@ -2,31 +2,19 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Optional
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
 
 import torch
 import torch.nn as nn
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch11")
-    return torch.device("cuda")
-
-
-class BaselineStreamOrderedBenchmark(Benchmark):
+class BaselineStreamOrderedBenchmark(BaseBenchmark):
     """Sequential work on the default stream (no overlap)."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.requests: Optional[list[torch.Tensor]] = None
         self.outputs: Optional[list[torch.Tensor]] = None
@@ -50,27 +38,28 @@ class BaselineStreamOrderedBenchmark(Benchmark):
             for _ in range(self.num_streams)
         ]
         self.outputs = [torch.empty_like(req) for req in self.requests]
-        torch.cuda.synchronize()
+        self._synchronize()
+        tokens = float(self.batch_size * self.hidden_dim * self.num_streams)
+        self.register_workload_metadata(
+            tokens_per_iteration=tokens,
+            requests_per_iteration=float(self.num_streams),
+        )
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
         assert self.model is not None
         assert self.requests is not None and self.outputs is not None
 
-        with nvtx_range("stream_ordered", enable=enable_nvtx):
+        with self._nvtx_range("stream_ordered"):
             with torch.no_grad():
                 for request, output in zip(self.requests, self.outputs):
                     output.copy_(self.model(request))
-            torch.cuda.synchronize()
+        self._synchronize()
 
     def teardown(self) -> None:
         self.model = None
         self.requests = None
         self.outputs = None
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=5)
@@ -81,16 +70,5 @@ class BaselineStreamOrderedBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaselineStreamOrderedBenchmark:
     return BaselineStreamOrderedBenchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5),
-    )
-    result = harness.benchmark(get_benchmark())
-    print(f"\nBaseline Stream Ordered: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

@@ -2,7 +2,7 @@
 
 Complex math operations with high arithmetic intensity.
 AI > 250 FLOP/Byte (compute-bound, exceeds roofline ridge point).
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -20,18 +20,12 @@ import triton.language as tl
 from typing import Optional
 from common.python import triton_compat  # noqa: F401
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch9")
-    return torch.device("cuda")
 
 
 @triton.jit
@@ -51,37 +45,40 @@ def _compute_bound_kernel(x_ptr, y_ptr, n_elements, BLOCK: tl.constexpr):
     tl.store(y_ptr + offsets, fused, mask=mask)
 
 
-class OptimizedComputeBoundBenchmark(Benchmark):
+class OptimizedComputeBoundBenchmark(BaseBenchmark):
     """Compute-bound kernel - high arithmetic intensity through fusion."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.data: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self.N = 10_000_000  # Same size as baseline
         self.block_size = 4096
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors and validate fused kernel."""
         torch.manual_seed(42)
         self.data = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.output = torch.empty_like(self.data)
-        torch.cuda.synchronize()
+        self._synchronize()
         self._validate_kernel_correctness()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Triton-fused operations (single kernel)."""
         if self.data is None or self.output is None:
             raise RuntimeError("CUDA tensors not initialized")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("optimized_compute_bound", enable=enable_nvtx):
+        with self._nvtx_range("optimized_compute_bound"):
             self._launch_kernel(self.data, self.output)
-            torch.cuda.synchronize()
+            self._synchronize()
             self.data, self.output = self.output, self.data
 
     
@@ -89,7 +86,7 @@ class OptimizedComputeBoundBenchmark(Benchmark):
         """Teardown: Clean up resources."""
         self.data = None
         self.output = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def _launch_kernel(self, src: torch.Tensor, dst: torch.Tensor) -> None:
         grid = lambda META: (triton.cdiv(self.N, META["BLOCK"]),)
@@ -141,7 +138,7 @@ class OptimizedComputeBoundBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedComputeBoundBenchmark()
 

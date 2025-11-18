@@ -1,9 +1,4 @@
-"""optimized_cuda_graphs.py - CUDA graph replay (optimized).
-
-Demonstrates CUDA graph capture and replay for reduced launch overhead.
-Uses PyTorch CUDA extension for accurate GPU timing with CUDA Events.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_cuda_graphs.py - CUDA graph replay (optimized)."""
 
 from __future__ import annotations
 
@@ -18,32 +13,30 @@ import torch
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 from ch12.cuda_extensions import load_cuda_graphs_extension
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch12")
-    return torch.device("cuda")
-
-
-class OptimizedCudaGraphsBenchmark(Benchmark):
+class OptimizedCudaGraphsBenchmark(BaseBenchmark):
     """CUDA graph replay - reduced launch overhead through graph optimization (uses CUDA extension)."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.data = None
         self.N = 1 << 18  # Match baseline problem size.
         self.iterations = 200
         self._extension = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N * self.iterations),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
@@ -56,7 +49,7 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
         
         torch.manual_seed(42)
         self.data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         # Warm up graph replay so capture/instantiation happens before measurement.
         self._extension.graph_replay(self.data, 1)
         torch.cuda.synchronize()
@@ -66,8 +59,6 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUDA graph replay."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
@@ -77,7 +68,7 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
 
         with nvtx_range("cuda_graphs", enable=enable_nvtx):
             self._extension.graph_replay(self.data, self.iterations)
-            torch.cuda.synchronize(self.device)
+            self._synchronize()
 
     
     def teardown(self) -> None:
@@ -96,6 +87,9 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
             measurement_timeout_seconds=120,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.data is None:
@@ -107,7 +101,7 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedCudaGraphsBenchmark()
 

@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, TYPE_CHECKING,
 
 # Use TYPE_CHECKING to avoid circular import at type-checking time
 if TYPE_CHECKING:
-    from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+    from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
     from common.python.metrics_extractor import NcuMetrics, NsysMetrics
 else:
     NsysMetrics = Any
@@ -62,14 +62,12 @@ def _unavailable_wrapper(*args, **kwargs) -> Optional[Path]:
     return None
 
 METRICS_EXTRACTOR_AVAILABLE = False
-DEFAULT_PROFILER_CONFIG: Optional[Any] = None
 create_benchmark_wrapper: WrapperFactory = _unavailable_wrapper
 
 try:
     from common.python.metrics_extractor import extract_nsys_metrics, extract_ncu_metrics
     from common.python import profiler_config as _profiler_config
     from common.python.profiler_wrapper import create_benchmark_wrapper as _create_wrapper
-    DEFAULT_PROFILER_CONFIG = _profiler_config.DEFAULT_PROFILER_CONFIG
     create_benchmark_wrapper = cast(WrapperFactory, _create_wrapper)
     METRICS_EXTRACTOR_AVAILABLE = True
 except ImportError:
@@ -78,6 +76,7 @@ except ImportError:
     
     def extract_ncu_metrics(ncu_rep_path: Path, timeout: int = 60) -> NcuMetrics:
         raise ImportError("metrics_extractor not available")
+    _profiler_config = None
 
 
 def check_nsys_available() -> bool:
@@ -143,8 +142,12 @@ def run_nsys_profiling(
     if not BENCHMARK_AVAILABLE or not METRICS_EXTRACTOR_AVAILABLE:
         return None
     
-    if profiler_config is None:
-        profiler_config = DEFAULT_PROFILER_CONFIG
+    if profiler_config is None and _profiler_config is not None:
+        profiler_config = _profiler_config.build_profiler_config_from_benchmark(
+            config,
+            benchmark_module=benchmark_module,
+            benchmark_class=benchmark_class,
+        )
     if profiler_config is None:
         return None
     
@@ -164,6 +167,7 @@ def run_nsys_profiling(
         nsys_command = profiler_config.get_nsys_command(
             str(nsys_output),
             str(wrapper_script),
+            nvtx_includes=getattr(profiler_config, "nvtx_includes", None),
         )
         
         # Run nsys
@@ -222,8 +226,12 @@ def run_ncu_profiling(
     if not BENCHMARK_AVAILABLE or not METRICS_EXTRACTOR_AVAILABLE:
         return None
     
-    if profiler_config is None:
-        profiler_config = DEFAULT_PROFILER_CONFIG
+    if profiler_config is None and _profiler_config is not None:
+        profiler_config = _profiler_config.build_profiler_config_from_benchmark(
+            config,
+            benchmark_module=benchmark_module,
+            benchmark_class=benchmark_class,
+        )
     if profiler_config is None:
         return None
     
@@ -246,7 +254,8 @@ def run_ncu_profiling(
         ncu_command = profiler_config.get_ncu_command(
             str(ncu_output),
             str(wrapper_script),
-            metrics=metrics_list
+            metrics=metrics_list,
+            nvtx_includes=getattr(profiler_config, "nvtx_includes", None),
         )
         
         # Run ncu
@@ -336,6 +345,14 @@ def run_profiling_orchestration(
     if benchmark_module is None:
         benchmark_module = inspect.getmodule(benchmark.__class__)
     
+    prof_cfg = profiler_config
+    if prof_cfg is None and _profiler_config is not None:
+        prof_cfg = _profiler_config.build_profiler_config_from_benchmark(
+            config,
+            benchmark_module=benchmark_module,
+            benchmark_class=benchmark_class,
+        )
+    
     # Run timing benchmark first
     times_ms = timing_fn(benchmark.benchmark_fn, config)
     
@@ -355,7 +372,7 @@ def run_profiling_orchestration(
                 nsys_timeout = getattr(config, 'profiling_timeout_seconds', None) or config.nsys_timeout_seconds
             nsys_result = run_nsys_profiling(
                 benchmark, benchmark_module, benchmark_class, prof_dir, config,
-                profiler_config=profiler_config,
+                profiler_config=prof_cfg,
                 timeout_seconds=nsys_timeout
             )
             if nsys_result:
@@ -377,7 +394,7 @@ def run_profiling_orchestration(
                 ncu_timeout = getattr(config, 'profiling_timeout_seconds', None) or config.ncu_timeout_seconds
             ncu_result = run_ncu_profiling(
                 benchmark, benchmark_module, benchmark_class, prof_dir, config,
-                profiler_config=profiler_config,
+                profiler_config=prof_cfg,
                 timeout_seconds=ncu_timeout
             )
             if ncu_result:

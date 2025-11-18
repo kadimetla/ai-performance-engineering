@@ -1,8 +1,4 @@
-"""baseline_warp_specialization.py - Baseline without warp specialization.
-
-Demonstrates sequential processing without warp specialization.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_warp_specialization.py - Baseline without warp specialization."""
 
 from __future__ import annotations
 
@@ -18,27 +14,21 @@ import torch.nn as nn
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 from ch10.workload_config import WORKLOAD
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch10")
-    return torch.device("cuda")
-
-
-class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
+class BaselineWarpSpecializationPipelineBenchmark(BaseBenchmark):
     """Baseline: Sequential processing without warp specialization or pipelining."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.inputs_host = None
         self.workload = WORKLOAD
@@ -46,6 +36,11 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
         self.chunk_tokens = self.workload.pipeline_chunk_tokens
         self.hidden_dim = self.workload.pipeline_hidden_dim
         self._checksum = 0.0
+        tokens = self.micro_batches * self.chunk_tokens
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model without warp specialization."""
@@ -65,16 +60,11 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
             self.hidden_dim,
             pin_memory=True,
         )
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Sequential forward pass."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("baseline_warp_specialization_pipeline", enable=enable_nvtx):
+        with self._nvtx_range("baseline_warp_specialization_pipeline"):
             with torch.no_grad():
                 # Baseline: Sequential processing
                 # All warps do the same work - no specialization
@@ -84,7 +74,7 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
                     device_chunk = host_chunk.to(self.device, non_blocking=False)
                     output = self.model(device_chunk)
                     total += float(output.sum().item())
-                    torch.cuda.synchronize()
+                    self._synchronize()
                 self._checksum = total
     
     def teardown(self) -> None:
@@ -100,6 +90,9 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -109,7 +102,7 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineWarpSpecializationPipelineBenchmark()
 

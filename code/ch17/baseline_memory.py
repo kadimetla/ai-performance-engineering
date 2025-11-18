@@ -1,29 +1,14 @@
-"""baseline_memory.py - Baseline standard GPU memory allocation.
-
-Demonstrates standard GPU memory allocation without optimization.
-Memory: This baseline uses standard cudaMalloc without memory optimization.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_memory.py - Baseline standard GPU memory allocation."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
+from typing import Optional
 import warnings
 
 import torch
 import torch.nn as nn
-from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 BATCH_SIZE = 512
 INPUT_DIM = 2048
@@ -31,18 +16,11 @@ HIDDEN_DIM = 2048
 REPETITIONS = 8
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch17")
-    return torch.device("cuda")
-
-
-class BaselineMemoryBenchmark(Benchmark):
+class BaselineMemoryBenchmark(BaseBenchmark):
     """Baseline: Standard GPU memory allocation."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.batch_size = BATCH_SIZE
         self.input_dim = INPUT_DIM
@@ -52,6 +30,11 @@ class BaselineMemoryBenchmark(Benchmark):
         self._prev_interop_threads: Optional[int] = None
         self._threads_overridden = False
         self._interop_overridden = False
+        tokens = self.batch_size * self.input_dim * self.repetitions
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.repetitions),
+            tokens_per_iteration=float(tokens),
+        )
     
     @staticmethod
     def _safe_set_thread_fn(setter, value: int, label: str, warn=True) -> bool:
@@ -65,7 +48,6 @@ class BaselineMemoryBenchmark(Benchmark):
             return False
     
     def setup(self) -> None:
-        """Setup: Initialize model with standard memory allocation."""
         torch.manual_seed(42)
         self._prev_threads = torch.get_num_threads()
         self._prev_interop_threads = torch.get_num_interop_threads()
@@ -75,9 +57,6 @@ class BaselineMemoryBenchmark(Benchmark):
         self._interop_overridden = self._safe_set_thread_fn(
             torch.set_num_interop_threads, 1, "num_interop_threads"
         )
-        # Baseline: Standard GPU memory allocation
-        # Memory optimization techniques include custom allocators, memory pooling, etc.
-        # This baseline uses standard PyTorch memory allocation
         self.model = nn.Sequential(
             nn.Linear(self.input_dim, HIDDEN_DIM),
             nn.GELU(),
@@ -95,20 +74,13 @@ class BaselineMemoryBenchmark(Benchmark):
             )
             for _ in range(self.repetitions)
         ]
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Standard memory allocation."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        # Baseline: Standard memory allocation and usage
-        # No memory optimization - uses default PyTorch allocator
-        with nvtx_range("baseline_memory", enable=enable_nvtx):
+        if self.model is None:
+            raise RuntimeError("Benchmark not configured")
+        with self._nvtx_range("baseline_memory"):
             with torch.no_grad():
-                # Naive path: CPU transforms + synchronous host->device transfer.
                 for compressed in self.host_batches:
                     host_batch = compressed.to(dtype=torch.float32)
                     host_batch.mul_(1.0 / 255.0)
@@ -117,51 +89,31 @@ class BaselineMemoryBenchmark(Benchmark):
                     host_batch.tanh_()
                     device_batch = host_batch.to(self.device, non_blocking=False)
                     _ = self.model(device_batch)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
+        if self._threads_overridden and self._prev_threads is not None:
+            self._safe_set_thread_fn(torch.set_num_threads, self._prev_threads, "num_threads", warn=False)
+        if self._interop_overridden and self._prev_interop_threads is not None:
+            self._safe_set_thread_fn(torch.set_num_interop_threads, self._prev_interop_threads, "num_interop_threads", warn=False)
         self.model = None
         self.host_batches = []
-        if self._prev_threads is not None and self._threads_overridden:
-            self._safe_set_thread_fn(
-                torch.set_num_threads, self._prev_threads, "num_threads reset", warn=False
-            )
-        if self._prev_interop_threads is not None and self._interop_overridden:
-            self._safe_set_thread_fn(
-                torch.set_num_interop_threads,
-                self._prev_interop_threads,
-                "num_interop_threads reset",
-                warn=False,
-            )
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=200,
-            warmup=10,
+            iterations=10,
+            warmup=2,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaselineMemoryBenchmark:
     return BaselineMemoryBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(result)

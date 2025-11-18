@@ -1,46 +1,24 @@
-"""baseline_matmul.py - Baseline FP32 matmul with serial tiling.
-
-Demonstrates an intentionally under-optimized GEMM that processes tiles
-sequentially with FP32 accumulate. Highlights the cost of redundant reads,
-lack of tensor cores, and absence of CUDA Graph capture.
-"""
+"""baseline_matmul.py - Baseline FP32 matmul with serial tiling."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 
 try:
-    import ch10.arch_config  # noqa: F401 - Apply chapter defaults
+    import ch10.arch_config  # noqa: F401
 except ImportError:
     pass
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch10")
-    return torch.device("cuda")
-
-
-class BaselineMatmulBenchmark(Benchmark):
+class BaselineMatmulBenchmark(BaseBenchmark):
     """Baseline: FP32 matmul with serialized tiling and no tensor cores."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A: torch.Tensor | None = None
         self.B: torch.Tensor | None = None
         self.C: torch.Tensor | None = None
@@ -54,7 +32,7 @@ class BaselineMatmulBenchmark(Benchmark):
         self.B = torch.randn(self.n, self.n, device=self.device, dtype=torch.float32)
         self.C = torch.zeros(self.n, self.n, device=self.device, dtype=torch.float32)
         self._chunked_matmul()
-        torch.cuda.synchronize()
+        self._synchronize()
 
     def _chunked_matmul(self) -> None:
         """Multiply using many FP32 tiles to emphasize poor reuse."""
@@ -69,27 +47,18 @@ class BaselineMatmulBenchmark(Benchmark):
 
     def benchmark_fn(self) -> None:
         """Benchmark: serialized FP32 matmul tiles."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("matmul", enable=enable_nvtx):
-            if self.A is None or self.B is None or self.C is None:
-                raise RuntimeError("Matrices not initialized")
+        if self.A is None or self.B is None or self.C is None:
+            raise RuntimeError("Matrices not initialized")
+        with self._nvtx_range("matmul_baseline_fp32"):
             self._chunked_matmul()
-            torch.cuda.synchronize(self.device)
-
+        self._synchronize()
 
     def teardown(self) -> None:
         """Teardown: clean up tensors."""
         self.A = None
         self.B = None
         self.C = None
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -105,19 +74,6 @@ class BaselineMatmulBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaselineMatmulBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineMatmulBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Matmul (Tiled FP32): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(" Note: Serialized addmm tiles emulate poor scheduling and FP32 only math.")

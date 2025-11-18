@@ -1,82 +1,52 @@
-"""baseline_storage_cpu.py - CPU-mediated storage I/O (baseline).
-
-Traditional approach: Storage → CPU → GPU (double copy overhead).
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_storage_cpu.py - CPU-mediated storage I/O (baseline)."""
 
 from __future__ import annotations
 
-import sys
-import tempfile
 import os
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
-import torch
-import numpy as np
-
+import tempfile
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
+import numpy as np
+import torch
+
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch5")
-    return torch.device("cuda")
-
-
-class BaselineStorageCpuBenchmark(Benchmark):
-    """CPU-mediated I/O - double copy overhead."""
+class BaselineStorageCpuBenchmark(BaseBenchmark):
+    """CPU-mediated I/O - double copy overhead (storage→CPU→GPU)."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.data = None
-        self.filepath = None
+        super().__init__()
+        self.data: Optional[torch.Tensor] = None
+        self.filepath: Optional[str] = None
         self.size_mb = 64  # Smaller for faster benchmark
-        self.size = self.size_mb * 1024 * 1024 // 4  # float32
+        self.size = self.size_mb * 1024 * 1024 // 4  # float32 elements
+        bytes_per_iter = self.size * 4 * 2  # write + read
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.size),
+            bytes_per_iteration=float(bytes_per_iter),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize data and create temp file."""
         torch.manual_seed(42)
         self.data = torch.randn(self.size, device=self.device, dtype=torch.float32)
         
-        # Create temp file
-        f = tempfile.NamedTemporaryFile(suffix='.npy', delete=False)
+        f = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
         self.filepath = f.name
         f.close()
-        
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: CPU-mediated I/O."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("storage_cpu", enable=enable_nvtx):
-            # Write: GPU → CPU → Storage
+        assert self.data is not None and self.filepath is not None
+        with self._nvtx_range("storage_cpu"):
             cpu_data = self.data.cpu().numpy()
             np.save(self.filepath, cpu_data)
-            
-            # Read: Storage → CPU → GPU
             cpu_loaded = np.load(self.filepath)
             self.data = torch.from_numpy(cpu_loaded).to(self.device)
-
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -95,6 +65,9 @@ class BaselineStorageCpuBenchmark(Benchmark):
             enable_profiling=False,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.data is None:
@@ -106,17 +79,6 @@ class BaselineStorageCpuBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineStorageCpuBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Storage CPU: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

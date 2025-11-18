@@ -1,8 +1,4 @@
-"""optimized_kernel_launches.py - CUDA Graphs optimization.
-
-Demonstrates CUDA Graphs to reduce kernel launch overhead.
-All operations captured in single graph → single launch overhead.
-"""
+"""optimized_kernel_launches.py - CUDA Graphs optimization."""
 
 from __future__ import annotations
 
@@ -18,32 +14,31 @@ import torch
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
-    BenchmarkMode
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch12")
-    return torch.device("cuda")
-
-
-class OptimizedKernelLaunchesBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+class OptimizedKernelLaunchesBenchmark(BaseBenchmark):
+    """Benchmark implementation following BaseBenchmark."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.x_template = None
         self.x_capture = None
         self.graph = None
         self.replay_fn = None
         self.size = (1024, 1024)
         self.iterations = 1000
+        tokens = self.size[0] * self.size[1]
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: initialize tensor and capture CUDA graph."""
@@ -63,7 +58,7 @@ class OptimizedKernelLaunchesBenchmark(Benchmark):
                 x_warmup = x_warmup + 1.0
                 x_warmup = x_warmup * 0.99
                 x_warmup = torch.relu(x_warmup)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         
         # Capture graph
         self.graph = torch.cuda.CUDAGraph()
@@ -83,8 +78,6 @@ class OptimizedKernelLaunchesBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
@@ -95,6 +88,7 @@ class OptimizedKernelLaunchesBenchmark(Benchmark):
         with nvtx_range("kernel_launches", enable=enable_nvtx):
             with torch.no_grad():
                 _ = self.replay_fn()
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
@@ -109,6 +103,9 @@ class OptimizedKernelLaunchesBenchmark(Benchmark):
             warmup=10,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.x_template is None:
@@ -120,7 +117,7 @@ class OptimizedKernelLaunchesBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedKernelLaunchesBenchmark()
 

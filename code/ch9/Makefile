@@ -5,18 +5,26 @@ include ../common/cuda_arch.mk
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
-CUDA_SOURCES = $(wildcard *.cu)
+# Build NVCC binaries for all CUDA sources except the PyTorch extensions.
+CUDA_SOURCES = $(filter-out warp_specialized_cuda.cu warp_specialized_kernel.cu,$(wildcard *.cu))
 BASE_TARGETS = $(CUDA_SOURCES:.cu=)
-TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+EXT_TARGETS = warp_specialized_cuda$(SUFFIX)
+TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS)) $(EXT_TARGETS)
 
 .PHONY: all clean compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all $(TARGETS)
+
+# Build the Torch extension with python so headers/linking resolve correctly.
+$(EXT_TARGETS): warp_specialized_cuda.cu warp_specialized_setup.py
+	@echo "Building warp_specialized_cuda extension via PyTorch (build_ext --inplace)..."
+	@python3 warp_specialized_setup.py build_ext --inplace
+	@touch $@
 
 all: $(TARGETS)
 	@echo "Building Chapter 9 examples with $(ARCH) (CUDA $(CUDA_VERSION))"
 	@echo "✓ Targeting $(ARCH_NAME)"
 	@echo "Built targets: $(TARGETS)"
 
-$(TARGETS): %$(SUFFIX): %.cu
+$(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu
 	@echo "Building $@..."
 	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
 		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $<; \
@@ -79,3 +87,4 @@ profile-all: $(TARGETS)
 clean:
 	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) *.o *.so *.a
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*
+	rm -rf build warp_specialized_cuda.cpython-*.so

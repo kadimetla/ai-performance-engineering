@@ -1,83 +1,51 @@
-"""optimized_launch_bounds.py - Kernel with launch bounds annotation (optimized).
-
-Demonstrates kernel execution with __launch_bounds__ annotation for occupancy tuning.
-Uses PyTorch CUDA extension for accurate GPU timing with CUDA Events.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_launch_bounds.py - Kernel with launch bounds annotation (optimized)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
-# Import CUDA extension
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch6.cuda_extensions import load_launch_bounds_extension
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch6")
-    return torch.device("cuda")
 
-class OptimizedLaunchBoundsBenchmark(Benchmark):
+class OptimizedLaunchBoundsBenchmark(BaseBenchmark):
     """Kernel with launch bounds annotation (optimized)."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.input_data = None
-        self.output_data = None
+        super().__init__()
+        self.input_data: Optional[torch.Tensor] = None
+        self.output_data: Optional[torch.Tensor] = None
         self.N = 1024 * 1024  # 1M elements
         self.iterations = 5
         self._extension = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize tensors and load CUDA extension."""
-        
-        # Load CUDA extension (will compile on first call)
+        """Initialize tensors and load CUDA extension."""
         self._extension = load_launch_bounds_extension()
         
         torch.manual_seed(42)
         self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
         self._extension.launch_bounds_optimized(self.input_data, self.output_data, 1)
-        torch.cuda.synchronize()
+        self._synchronize()
         torch.manual_seed(42)
         self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Kernel with launch bounds."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("optimized_launch_bounds", enable=enable_nvtx):
-            # Call CUDA extension (already synchronizes internally)
+        """Benchmark: kernel with launch bounds."""
+        assert self._extension is not None and self.input_data is not None and self.output_data is not None
+        with self._nvtx_range("optimized_launch_bounds"):
             self._extension.launch_bounds_optimized(self.input_data, self.output_data, self.iterations)
-            # Additional synchronization to catch any errors
-            torch.cuda.synchronize()
-
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -95,6 +63,9 @@ class OptimizedLaunchBoundsBenchmark(Benchmark):
             setup_timeout_seconds=120,  # CUDA extension compilation can take time
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.input_data is None or self.output_data is None:
@@ -105,15 +76,7 @@ class OptimizedLaunchBoundsBenchmark(Benchmark):
             return "Output contains non-finite values"
         return None
 
-def get_benchmark() -> Benchmark:
+
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedLaunchBoundsBenchmark()
-
-if __name__ == '__main__':
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Launch Bounds (with annotation): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

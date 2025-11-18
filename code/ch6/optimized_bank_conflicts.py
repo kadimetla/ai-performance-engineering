@@ -1,86 +1,54 @@
-"""optimized_bank_conflicts.py - Padding solution to eliminate bank conflicts (optimized).
-
-Demonstrates padding solution to eliminate shared memory bank conflicts.
-Uses PyTorch CUDA extension for accurate GPU timing with CUDA Events.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_bank_conflicts.py - Padding solution to eliminate bank conflicts (optimized)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
-# Import CUDA extension
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch6.cuda_extensions import load_bank_conflicts_extension
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch6")
-    return torch.device("cuda")
 
-class OptimizedBankConflictsBenchmark(Benchmark):
+class OptimizedBankConflictsBenchmark(BaseBenchmark):
     """Padding solution - no bank conflicts (uses CUDA extension)."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.input = None
-        self.output = None
+        super().__init__()
+        self.input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.N = 8_000_000
         self._extension = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize tensors and load CUDA extension."""
-        
-        # Load CUDA extension (will compile on first call)
+        """Initialize tensors and load CUDA extension."""
         self._extension = load_bank_conflicts_extension()
         
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
         # Warm up optimized padded kernel before timing.
         self._extension.bank_conflicts_padded(self.output, self.input)
-        torch.cuda.synchronize()
+        self._synchronize()
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Padding eliminates bank conflicts."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("bank_conflicts", enable=enable_nvtx):
-            # Call CUDA extension kernel with padding
+        """Benchmark: padding eliminates bank conflicts."""
+        assert self._extension is not None and self.output is not None and self.input is not None
+        with self._nvtx_range("bank_conflicts_optimized"):
             self._extension.bank_conflicts_padded(self.output, self.input)
-            # Synchronize to catch any CUDA errors immediately
-            torch.cuda.synchronize()
-
+            self._synchronize()
     
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
+        """Clean up resources."""
         self.input = None
         self.output = None
         torch.cuda.empty_cache()
@@ -95,6 +63,9 @@ class OptimizedBankConflictsBenchmark(Benchmark):
             setup_timeout_seconds=120,  # CUDA extension compilation can take time
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.output is None:
@@ -107,15 +78,7 @@ class OptimizedBankConflictsBenchmark(Benchmark):
             return "Output contains non-finite values"
         return None
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
-    return OptimizedBankConflictsBenchmark()
 
-if __name__ == '__main__':
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Bank Conflicts (CUDA Extension): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for harness discovery."""
+    return OptimizedBankConflictsBenchmark()

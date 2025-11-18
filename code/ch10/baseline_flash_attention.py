@@ -1,10 +1,4 @@
-"""baseline_flash_attention.py - Baseline attention without FlashAttention in GEMM context.
-
-Demonstrates standard attention computation without FlashAttention optimization.
-Flash attention: This baseline does not use FlashAttention.
-Uses standard attention with quadratic memory complexity.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_flash_attention.py - Baseline attention without FlashAttention in GEMM context."""
 
 from __future__ import annotations
 
@@ -20,20 +14,16 @@ import torch.nn as nn
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch10")
-    return torch.device("cuda")
-
-
-class BaselineFlashAttentionBenchmark(Benchmark):
+class BaselineFlashAttentionBenchmark(BaseBenchmark):
     """Baseline: Standard attention without FlashAttention.
     
     Flash attention: This baseline does not use FlashAttention.
@@ -41,9 +31,16 @@ class BaselineFlashAttentionBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.input = None
+        self.batch_size = 4
+        self.seq_len = 512
+        tokens = self.batch_size * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize attention model without FlashAttention."""
@@ -62,31 +59,15 @@ class BaselineFlashAttentionBenchmark(Benchmark):
         ).to(self.device).eval()
         
         # Input sequence
-        batch_size = 4
-        seq_len = 512  # Long sequence to show FlashAttention benefit
-        self.input = torch.randn(batch_size, seq_len, hidden_dim, device=self.device)
-        torch.cuda.synchronize()
+        self.input = torch.randn(self.batch_size, self.seq_len, hidden_dim, device=self.device)
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard attention without FlashAttention."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_flash_attention", enable=enable_nvtx):
+        with self._nvtx_range("baseline_flash_attention"):
             with torch.no_grad():
-                # Baseline: Standard attention (no FlashAttention)
-                # Computes full attention matrix: O(seq_len^2) memory
-                # FlashAttention would use tiling to reduce memory
-                output, _ = self.model(self.input, self.input, self.input)
-                
-                # Baseline: No FlashAttention benefits
-                # Quadratic memory complexity for long sequences
+                _output, _ = self.model(self.input, self.input, self.input)
+            self._synchronize()
 
     
     def teardown(self) -> None:
@@ -102,6 +83,9 @@ class BaselineFlashAttentionBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -110,7 +94,7 @@ class BaselineFlashAttentionBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineFlashAttentionBenchmark()
 

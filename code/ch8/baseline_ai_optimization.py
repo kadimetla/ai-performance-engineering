@@ -28,7 +28,7 @@ def get_benchmark() -> AiOptimizationBenchmarkBase:
 
 
 def main() -> None:
-    from common.python.benchmark_harness import BenchmarkConfig, BenchmarkHarness, BenchmarkMode
+    from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,

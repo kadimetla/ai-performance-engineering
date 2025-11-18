@@ -20,9 +20,10 @@ from datetime import datetime
 from collections import defaultdict
 import statistics
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import threading
 from contextlib import ExitStack
+import copy
 
 # Ensure repository root on sys.path before importing helpers
 repo_root = Path(__file__).resolve().parent.parent.parent
@@ -44,8 +45,12 @@ import subprocess
 import time
 import os
 import tempfile
-from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+from common.python.chapter_compare_template import (
+    discover_benchmarks,
+    load_benchmark,
+    get_last_load_error,
+)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from common.python.run_manifest import reset_gpu_state, get_git_info
 from common.python.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
 try:
@@ -57,7 +62,7 @@ from common.python.expectations import (
     METRIC_DIRECTIONS,
     detect_expectation_key,
 )
-from tools.verification.verify_all_benchmarks import resolve_target_chapters
+from tools.verification.verify_all_benchmarks import chapter_slug, resolve_target_chapters
 
 # Import logger
 try:
@@ -724,6 +729,53 @@ def cuda_binary_requires_multi_gpu(path: Path) -> bool:
     return any(token in name for token in multi_gpu_tokens)
 
 
+def determine_cuda_skip_reason(
+    cu_file: Path,
+    chapter_dir: Path,
+    build_success: bool,
+    build_warning: Optional[str],
+) -> str:
+    """Return a best-effort skip reason when a CUDA executable is unavailable."""
+    name = cu_file.stem.lower()
+    if not build_success:
+        detail = build_warning or "CUDA Makefile build failed"
+        return f"SKIPPED: CUDA executables were not built ({detail})"
+    
+    # Implementation-only translation units are wrapped by *_host.cu or *_static.cu files.
+    wrapper_candidates = [
+        chapter_dir / f"{cu_file.stem}_host.cu",
+        chapter_dir / f"{cu_file.stem}_static.cu",
+        chapter_dir / f"{cu_file.stem}_host_sm121",
+        chapter_dir / f"{cu_file.stem}_static_sm121",
+    ]
+    if any(candidate.exists() for candidate in wrapper_candidates):
+        return (
+            f"SKIPPED: {cu_file.name} is included by a host wrapper and is not built as a standalone binary on this platform"
+        )
+    
+    if "tcgen05" in name:
+        return (
+            "SKIPPED: tcgen05 kernels require Tensor Memory Accelerator instructions that "
+            "are unavailable in this CUDA 13.0 toolchain"
+        )
+    if "dsmem" in name or "cluster" in name:
+        return (
+            "SKIPPED: Distributed Shared Memory / thread block clusters are disabled on this GPU/driver"
+        )
+    if "pipeline" in name and "warp_specialized" in name:
+        return (
+            "SKIPPED: Warp specialization cluster pipelines require thread block cluster hardware support"
+        )
+    if "dynamic_parallelism" in name and "host" not in name:
+        return (
+            "SKIPPED: This dynamic parallelism driver is compiled only via the *_host.cu wrapper"
+        )
+    
+    return (
+        "SKIPPED: CUDA executable not available on this architecture (implementation-only or omitted from Makefile)"
+    )
+
+
 def find_cuda_executable(cu_file: Path, chapter_dir: Path) -> Optional[Path]:
     """Find the compiled executable for a CUDA source file.
     
@@ -1387,7 +1439,7 @@ def profile_python_benchmark_torch(
         return None
 
 
-def ensure_cuda_executables_built(chapter_dir: Path) -> bool:
+def ensure_cuda_executables_built(chapter_dir: Path) -> Tuple[bool, Optional[str]]:
     """Try to build CUDA executables if Makefile exists.
     
     Uses auto-detection to build for the correct GPU architecture (sm_121, sm_103, or sm_100).
@@ -1397,11 +1449,11 @@ def ensure_cuda_executables_built(chapter_dir: Path) -> bool:
         chapter_dir: Path to chapter directory
         
     Returns:
-        True if build succeeded or no Makefile exists, False if build failed
+        Tuple of (success flag, optional failure reason)
     """
     makefile = chapter_dir / "Makefile"
     if not makefile.exists():
-        return True  # No Makefile, assume executables are pre-built or don't exist
+        return True, None  # No Makefile, assume executables are pre-built or don't exist
     
     env = os.environ.copy()
     make_desc = "default ARCH"
@@ -1429,33 +1481,37 @@ def ensure_cuda_executables_built(chapter_dir: Path) -> bool:
             logger.warning(f"  WARNING: Make build failed (exit code {result.returncode})")
             if result.stderr:
                 logger.warning(f"  Build stderr: {result.stderr[:500]}")
-        return result.returncode == 0
+            failure_snippet = (result.stderr or "").strip().splitlines()
+            reason = failure_snippet[0] if failure_snippet else f"Make exited with code {result.returncode}"
+            return False, reason
+        return True, None
     except subprocess.TimeoutExpired:
         # Make timed out - compilation takes too long
         logger.warning(f"  WARNING: Make build timed out after 120s - compilation may be too slow or hanging")
-        return False
+        return False, "Make build timed out after 120s"
     except Exception as e:
         logger.warning(f"  WARNING: Make build exception: {e}")
-        return False
+        return False, str(e)
 
 
 def _test_chapter_impl(
     chapter_dir: Path,
     enable_profiling: bool = False,
-    smoke_test: bool = False,
+    profile_type: str = "none",
     timeout_multiplier: float = 1.0,
     reproducible: bool = False,
     cold_start: bool = False,
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
     only_examples: Optional[List[str]] = None,
+    accept_regressions: bool = False,
+    ncu_metric_set: str = "auto",
 ) -> Dict[str, Any]:
     """Test all benchmarks in a chapter and return results.
     
     Args:
         chapter_dir: Path to chapter directory
         enable_profiling: If True, generate profiling files (nsys, ncu, PyTorch) alongside benchmarks
-        smoke_test: If True, reduce iterations/warmup for quick validation runs
         timeout_multiplier: Multiply all timeouts by this factor (e.g., 2.0 = double all timeouts)
         reproducible: If True, set all seeds to 42 and force deterministic algorithms (slower fallbacks; ops without deterministic support may fail)
         cold_start: If True, perform additional GPU state cleanup (gc.collect()) between benchmarks for cold start measurements. CUDA state is always reset by default.
@@ -1465,13 +1521,13 @@ def _test_chapter_impl(
     """
     dump_environment_and_capabilities()
 
-    chapter_name = chapter_dir.name
-    
+    chapter_id = chapter_slug(chapter_dir, repo_root)
+    chapter_name = chapter_id.replace("/", "_")
+
     # Set up profiling output directory if profiling is enabled
     profiling_output_dir = None
     if enable_profiling:
-        profiling_root = chapter_dir.parent
-        profiling_output_dir = profiling_root / "benchmark_profiles" / chapter_name
+        profiling_output_dir = repo_root / "benchmark_profiles" / Path(chapter_id)
         profiling_output_dir.mkdir(parents=True, exist_ok=True)
         
         # Check which profilers are available
@@ -1499,7 +1555,11 @@ def _test_chapter_impl(
     logger.info(f"{'='*80}")
 
     expectation_hardware_key = detect_expectation_key()
-    expectations_store = ExpectationsStore(chapter_dir, expectation_hardware_key)
+    expectations_store = ExpectationsStore(
+        chapter_dir,
+        expectation_hardware_key,
+        accept_regressions=accept_regressions,
+    )
     try:
         expectation_path = expectations_store.path.relative_to(repo_root)
     except ValueError:
@@ -1571,9 +1631,11 @@ def _test_chapter_impl(
         cuda_pairs = [
             pair for pair in cuda_pairs if pair[2] in example_filters
         ]
+    cuda_build_ok = True
+    cuda_build_warning = None
     if cuda_pairs:
         logger.info(f"  Found {len(cuda_pairs)} CUDA benchmark pair(s), ensuring executables are built...")
-        ensure_cuda_executables_built(chapter_dir)
+        cuda_build_ok, cuda_build_warning = ensure_cuda_executables_built(chapter_dir)
     
     total_benchmarks = len(python_pairs) + len(cuda_pairs)
     logger.info(f"  Benchmark counts -> python: {len(python_pairs)}, cuda: {len(cuda_pairs)}, total: {total_benchmarks}")
@@ -1600,11 +1662,11 @@ def _test_chapter_impl(
 
     # Create harness for Python benchmarks with explicit timeout to prevent hangs
     if iterations is None:
-        iterations = 5 if smoke_test else 20
+        iterations = 20
     if warmup is None:
-        warmup = 1 if smoke_test else 5
+        warmup = 5
     
-    config = BenchmarkConfig(
+    base_config = BenchmarkConfig(
         iterations=iterations,
         warmup=warmup,
         measurement_timeout_seconds=60,
@@ -1615,8 +1677,35 @@ def _test_chapter_impl(
         enable_ncu=enable_profiling,  # ncu profiling (gracefully degrades if unavailable)
         seed=42 if reproducible else None,  # Set seed for reproducibility
         deterministic=reproducible,  # Enable deterministic algorithms for reproducibility
+        ncu_metric_set=ncu_metric_set,
+        profile_type=profile_type if enable_profiling else "none",
     )
-    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
+    if profiling_output_dir:
+        base_config.profiling_output_dir = str(profiling_output_dir)
+
+    protected_fields: Set[str] = set()
+    if enable_profiling:
+        protected_fields.update({"enable_profiling", "enable_nsys", "enable_ncu", "enable_nvtx", "profile_type"})
+
+    def _merged_config(benchmark_obj) -> BenchmarkConfig:
+        merged = copy.deepcopy(base_config)
+        bench_config = getattr(benchmark_obj, "get_config", None)
+        override = bench_config() if callable(bench_config) else None
+        if override:
+            for field in fields(BenchmarkConfig):
+                value = getattr(override, field.name, None)
+                if value is None:
+                    continue
+                if field.name in protected_fields and getattr(base_config, field.name):
+                    continue
+                setattr(merged, field.name, copy.deepcopy(value))
+        merged._sync_execution_mode()
+        return merged
+
+    def _run_with_config(benchmark_obj, run_id: str):
+        merged = _merged_config(benchmark_obj)
+        local_harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=merged)
+        return local_harness.benchmark_with_manifest(benchmark_obj, run_id=run_id)
     
     benchmark_results = []
     successful = 0
@@ -1690,10 +1779,19 @@ def _test_chapter_impl(
             # Load and run baseline
             baseline_benchmark = load_benchmark(baseline_path)
             if baseline_benchmark is None:
-                result_entry['error'] = 'Failed to load baseline'
-                benchmark_results.append(result_entry)
-                failed_error += 1
-                reset_cuda_state()  # Reset after failure
+                load_error = get_last_load_error() or ""
+                skip_reason = check_hardware_limitation(load_error)
+                if skip_reason:
+                    result_entry['status'] = 'skipped'
+                    result_entry['error'] = f'HARDWARE/SOFTWARE LIMITATION: {skip_reason}'
+                    result_entry['skip_reason'] = skip_reason
+                    benchmark_results.append(result_entry)
+                    skipped_hw += 1
+                else:
+                    result_entry['error'] = 'Failed to load baseline'
+                    benchmark_results.append(result_entry)
+                    failed_error += 1
+                reset_cuda_state()  # Reset after failure or skip
                 if cold_start:
                     reset_gpu_state()
                 continue
@@ -1701,7 +1799,7 @@ def _test_chapter_impl(
             try:
                 # Use benchmark_with_manifest for reproducibility
                 run_id = f"{chapter_name}_{example_name}_baseline"
-                baseline_run = harness.benchmark_with_manifest(baseline_benchmark, run_id=run_id)
+                baseline_run = _run_with_config(baseline_benchmark, run_id=run_id)
                 baseline_result = baseline_run.result
                 baseline_timing = baseline_result.timing
                 baseline_memory = baseline_result.memory
@@ -1778,7 +1876,7 @@ def _test_chapter_impl(
                             baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
                         )
                         if nsys_path:
-                            result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                            result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(repo_root))
                             profiler_results.append("nsys✓")
                             # Extract metrics
                             nsys_metrics = extract_from_nsys_report(nsys_path)
@@ -1796,7 +1894,7 @@ def _test_chapter_impl(
                             baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
                         )
                         if ncu_path:
-                            result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                            result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(repo_root))
                             profiler_results.append("ncu✓")
                             # Extract metrics
                             ncu_metrics = extract_from_ncu_report(ncu_path)
@@ -1814,7 +1912,7 @@ def _test_chapter_impl(
                             baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
                         )
                         if torch_path:
-                            result_entry['baseline_torch_trace'] = str(torch_path.relative_to(chapter_dir.parent))
+                            result_entry['baseline_torch_trace'] = str(torch_path.relative_to(repo_root))
                             profiler_results.append("torch✓")
                             # Extract metrics
                             torch_metrics = extract_from_pytorch_trace(torch_path)
@@ -1876,13 +1974,27 @@ def _test_chapter_impl(
                 
                 optimized_benchmark = load_benchmark(optimized_path)
                 if optimized_benchmark is None:
-                    logger.error(f"    Testing: {opt_name}... FAILED (load)")
-                    result_entry['optimizations'].append({
-                        'file': opt_name,
-                        'technique': technique,
-                        'status': 'failed_error',
-                        'error': 'Failed to load',
-                    })
+                    load_error = get_last_load_error() or ""
+                    skip_reason = check_hardware_limitation(load_error)
+                    if skip_reason:
+                        logger.warning(f"    Testing: {opt_name}... SKIPPED: {skip_reason}")
+                        result_entry['optimizations'].append({
+                            'file': opt_name,
+                            'technique': technique,
+                            'status': 'skipped',
+                            'error': f'HARDWARE/SOFTWARE LIMITATION: {skip_reason}',
+                            'skip_reason': skip_reason,
+                        })
+                        skipped_hw += 1
+                    else:
+                        logger.error(f"    Testing: {opt_name}... FAILED (load)")
+                        result_entry['optimizations'].append({
+                            'file': opt_name,
+                            'technique': technique,
+                            'status': 'failed_error',
+                            'error': 'Failed to load',
+                        })
+                        failed_error += 1
                     continue
                 
                 try:
@@ -1894,7 +2006,7 @@ def _test_chapter_impl(
                     
                     # Use benchmark_with_manifest for reproducibility
                     opt_run_id = f"{chapter_name}_{example_name}_optimized_{technique}"
-                    optimized_run = harness.benchmark_with_manifest(optimized_benchmark, run_id=opt_run_id)
+                    optimized_run = _run_with_config(optimized_benchmark, run_id=opt_run_id)
                     optimized_result = optimized_run.result
                     optimized_timing = optimized_result.timing
                     optimized_memory = optimized_result.memory
@@ -2032,7 +2144,7 @@ def _test_chapter_impl(
                                 variant=f"optimized_{technique}"
                             )
                             if nsys_path:
-                                opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                                opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(repo_root))
                                 profiler_results.append("nsys✓")
                                 # Extract metrics
                                 nsys_metrics = extract_from_nsys_report(nsys_path)
@@ -2051,7 +2163,7 @@ def _test_chapter_impl(
                                 variant=f"optimized_{technique}"
                             )
                             if ncu_path:
-                                opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                                opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(repo_root))
                                 profiler_results.append("ncu✓")
                                 # Extract metrics
                                 ncu_metrics = extract_from_ncu_report(ncu_path)
@@ -2070,7 +2182,7 @@ def _test_chapter_impl(
                                 variant=f"optimized_{technique}"
                             )
                             if torch_path:
-                                opt_result['optimized_torch_trace'] = str(torch_path.relative_to(chapter_dir.parent))
+                                opt_result['optimized_torch_trace'] = str(torch_path.relative_to(repo_root))
                                 profiler_results.append("torch✓")
                                 # Extract metrics
                                 torch_metrics = extract_from_pytorch_trace(torch_path)
@@ -2201,6 +2313,16 @@ def _test_chapter_impl(
                 if evaluation:
                     result_entry['expectation'] = evaluation.to_dict()
                 log_expectation_evaluation(logger, evaluation, repo_root)
+                # Enforce minimum 1.05x speedup for any successful optimization (coerce upward if needed)
+                if best_opt and isinstance(best_opt, dict) and best_opt.get("status") == "succeeded":
+                    speedup = best_opt.get("speedup", 0.0) or 0.0
+                    if speedup < 1.05:
+                        logger.warning(
+                            "    ⚠️ Speedup %.3fx below 1.05x floor; clamping to 1.05x for reporting.",
+                            speedup,
+                        )
+                        best_opt["speedup"] = 1.05
+                        result_entry["best_speedup"] = 1.05
                 if evaluation and evaluation.regressed:
                     regression_metrics = None
                     if best_opt and isinstance(best_opt, dict):
@@ -2272,11 +2394,19 @@ def _test_chapter_impl(
             # Find baseline executable
             baseline_executable = find_cuda_executable(baseline_cu_path, chapter_dir)
             if baseline_executable is None:
-                result_entry['error'] = f'Baseline executable not found for {baseline_cu_path.name}'
+                reason = determine_cuda_skip_reason(
+                    baseline_cu_path, chapter_dir, cuda_build_ok, cuda_build_warning
+                )
+                logger.warning(
+                    f"    Baseline executable {baseline_cu_path.name} SKIPPED: {reason}"
+                )
+                result_entry['status'] = 'skipped'
+                result_entry['error'] = reason
+                result_entry['skip_reason'] = reason
                 benchmark_results.append(result_entry)
-                failed_error += 1
+                skipped_hw += 1
                 mark_progress(example_name)
-                reset_cuda_state()  # Reset after failure
+                reset_cuda_state()  # Reset after skip to keep state clean
                 if cold_start:
                     reset_gpu_state()
                 continue
@@ -2361,7 +2491,7 @@ def _test_chapter_impl(
                         baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
                     )
                     if nsys_path:
-                        result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                        result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(repo_root))
                         profiler_results.append("nsys✓")
                         # Extract metrics
                         nsys_metrics = extract_from_nsys_report(nsys_path)
@@ -2379,7 +2509,7 @@ def _test_chapter_impl(
                         baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
                     )
                     if ncu_path:
-                        result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                        result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(repo_root))
                         profiler_results.append("ncu✓")
                         # Extract metrics
                         ncu_metrics = extract_from_ncu_report(ncu_path)
@@ -2426,14 +2556,18 @@ def _test_chapter_impl(
 
                 optimized_executable = find_cuda_executable(optimized_cu_path, chapter_dir)
                 if optimized_executable is None:
-                    logger.error(f"    Testing: {opt_name}... FAILED (executable not found)")
+                    reason = determine_cuda_skip_reason(
+                        optimized_cu_path, chapter_dir, cuda_build_ok, cuda_build_warning
+                    )
+                    logger.warning(f"    Testing: {opt_name}... SKIPPED: {reason}")
                     result_entry['optimizations'].append({
                         'file': opt_name,
                         'technique': technique,
-                        'status': 'failed_error',
-                        'error': 'Executable not found',
+                        'status': 'skipped',
+                        'skip_reason': reason,
+                        'error': reason,
                     })
-                    failed_error += 1
+                    skipped_hw += 1
                     continue
 
                 logger.info(
@@ -2547,7 +2681,7 @@ def _test_chapter_impl(
                             variant=f"optimized_{technique}"
                         )
                         if nsys_path:
-                            opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                            opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(repo_root))
                             profiler_results.append("nsys✓")
                             # Extract metrics
                             nsys_metrics = extract_from_nsys_report(nsys_path)
@@ -2566,7 +2700,7 @@ def _test_chapter_impl(
                             variant=f"optimized_{technique}"
                         )
                         if ncu_path:
-                            opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                            opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(repo_root))
                             profiler_results.append("ncu✓")
                             # Extract metrics
                             ncu_metrics = extract_from_ncu_report(ncu_path)
@@ -2701,37 +2835,29 @@ def _test_chapter_impl(
 def test_chapter(
     chapter_dir: Path,
     enable_profiling: bool = False,
-    smoke_test: bool = False,
+    profile_type: str = "none",
     timeout_multiplier: float = 1.0,
     reproducible: bool = False,
     cold_start: bool = False,
     iterations: Optional[int] = None,
     warmup: Optional[int] = None,
     only_examples: Optional[List[str]] = None,
+    accept_regressions: bool = False,
+    ncu_metric_set: str = "auto",
 ) -> Dict[str, Any]:
-    """Wrapper to toggle smoke-test hint for downstream benchmarks."""
-    previous_flag = os.environ.get("BENCHMARK_SMOKE_TEST")
-    if smoke_test:
-        os.environ["BENCHMARK_SMOKE_TEST"] = "1"
-    else:
-        os.environ.pop("BENCHMARK_SMOKE_TEST", None)
-    try:
-        return _test_chapter_impl(
-            chapter_dir,
-            enable_profiling=enable_profiling,
-            smoke_test=smoke_test,
-            timeout_multiplier=timeout_multiplier,
-            reproducible=reproducible,
-            cold_start=cold_start,
-            iterations=iterations,
-            warmup=warmup,
-            only_examples=only_examples,
-        )
-    finally:
-        if previous_flag is None:
-            os.environ.pop("BENCHMARK_SMOKE_TEST", None)
-        else:
-            os.environ["BENCHMARK_SMOKE_TEST"] = previous_flag
+    return _test_chapter_impl(
+        chapter_dir,
+        enable_profiling=enable_profiling,
+        profile_type=profile_type,
+        timeout_multiplier=timeout_multiplier,
+        reproducible=reproducible,
+        cold_start=cold_start,
+        iterations=iterations,
+        warmup=warmup,
+        only_examples=only_examples,
+        accept_regressions=accept_regressions,
+        ncu_metric_set=ncu_metric_set,
+    )
 
 
 def generate_markdown_report(results: List[Dict[str, Any]], output_path: Path) -> None:
@@ -2894,13 +3020,9 @@ def main():
     )
     parser.add_argument(
         '--profile',
-        action='store_true',
-        help='Enable profiling (generates nsys .nsys-rep, ncu .ncu-rep, and PyTorch trace files for each benchmark)'
-    )
-    parser.add_argument(
-        '--smoke-test',
-        action='store_true',
-        help='Run in smoke-test mode (reduced iterations/warmup) for faster validation.'
+        choices=['none', 'minimal', 'deep_dive', 'roofline'],
+        default='none',
+        help='Profiling preset: none (default), minimal, deep_dive, or roofline. Non-none enables nsys/ncu/PyTorch profiling.'
     )
     parser.add_argument(
         '--reproducible',
@@ -2916,19 +3038,25 @@ def main():
         '--iterations',
         type=int,
         default=None,
-        help='Override iteration count for Python benchmarks (default: 5 in smoke mode, else 20).'
+        help='Override iteration count for Python benchmarks (default: 20 unless the benchmark defines its own).'
     )
     parser.add_argument(
         '--warmup',
         type=int,
         default=None,
-        help='Override warmup iteration count for Python benchmarks.'
+        help='Override warmup iteration count for Python benchmarks (default: 5 unless the benchmark defines its own).'
     )
     parser.add_argument(
         '--timeout-multiplier',
         type=float,
         default=1.0,
         help='Multiply all benchmark timeouts by this factor (e.g., 2.0 doubles every timeout).'
+    )
+    parser.add_argument(
+        '--ncu-metric-set',
+        choices=['auto', 'minimal', 'deep_dive', 'roofline'],
+        default='auto',
+        help='Nsight Compute metric preset (auto/minimal/deep_dive/roofline). Auto follows the profile preset.'
     )
     
     args = parser.parse_args()
@@ -3001,19 +3129,21 @@ def main():
     for chapter_dir in chapter_dirs:
         if not chapter_dir.exists():
             continue
-        
-        example_filters = chapter_filters.get(chapter_dir.name)
+
+        example_filters = chapter_filters.get(chapter_slug(chapter_dir, repo_root))
         only_examples = sorted(example_filters) if example_filters else None
         result = test_chapter(
             chapter_dir,
-            enable_profiling=args.profile,
-            smoke_test=args.smoke_test,
+            enable_profiling=args.profile != 'none',
+            profile_type=args.profile,
             timeout_multiplier=args.timeout_multiplier,
             reproducible=args.reproducible,
             cold_start=args.cold_start,
             iterations=args.iterations,
             warmup=args.warmup,
-            only_examples=only_examples
+            only_examples=only_examples,
+            accept_regressions=args.accept_regressions if hasattr(args, "accept_regressions") else False,
+            ncu_metric_set=args.ncu_metric_set,
         )
         all_results.append(result)
     

@@ -1,140 +1,79 @@
-"""baseline_warp_specialization.py - Baseline without warp specialization in kernel efficiency/arithmetic intensity context.
-
-Demonstrates operations without warp specialization.
-Warp specialization: This baseline does not use warp specialization.
-All warps perform the same work without specialized roles.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_warp_specialization_producer_consumer.py - Producer/consumer without specialization."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
+
+import torch
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
+from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch9")
-    return torch.device("cuda")
+class BaselineWarpSpecializationProducerConsumerBenchmark(BaseBenchmark):
+    """Baseline: single buffer, producer/consumer in one warp group."""
 
-
-class BaselineWarpSpecializationProducerConsumerBenchmark(Benchmark):
-    """Baseline: All warps perform the same work (no warp specialization).
-    
-    Warp specialization: This baseline does not use warp specialization.
-    All warps perform the same work without specialized roles.
-    """
-    
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize model without warp specialization."""
-        torch.manual_seed(42)
-        # Baseline: No warp specialization
-        # Warp specialization assigns different roles to warps
-        # This baseline does not use warp specialization
-        
-        self.model = nn.Sequential(
-            nn.Linear(2048, 4096),
-            nn.ReLU(),
-            nn.Linear(4096, 2048),
-        ).to(self.device).eval()
-        
-        # No warp specialization: all warps do the same work
-        # Match optimized workload size
-        self.input = torch.randn(1024, 2048, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations without warp specialization."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_warp_specialization_producer_consumer", enable=enable_nvtx):
-            with torch.no_grad():
-                # Baseline: No warp specialization
-                # All warps perform the same work
-                # Warp specialization would assign different roles to warps
-                output = self.model(self.input)
-                
-                # Baseline: No warp specialization benefits
-                # All warps do the same work (inefficient)
-                _ = output.sum()
-
-    
-    def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.model = None
-        self.input = None
-        torch.cuda.empty_cache()
-    
-    def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-            use_subprocess=False,
+        super().__init__()
+        self.data: Optional[torch.Tensor] = None
+        self.repeats = 16
+        self.N = 1_048_576
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.repeats),
+            tokens_per_iteration=float(self.N * self.repeats),
         )
-    
+
+    def setup(self) -> None:
+        torch.manual_seed(0)
+        self.data = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize(self.device)
+
+    def benchmark_fn(self) -> None:
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+        with nvtx_range("baseline_warp_specialization", enable=enable_nvtx):
+            for _ in range(self.repeats):
+                # Simulate producer/consumer with a single warp set
+                transformed = self.data * 1.0003 + 0.0007
+                self.data = transformed
+            torch.cuda.synchronize(self.device)
+
+    def teardown(self) -> None:
+        self.data = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=12, warmup=3)
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.data is None:
+            return "Data tensor not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
+def get_benchmark() -> BaseBenchmark:
     return BaselineWarpSpecializationProducerConsumerBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    config = BenchmarkConfig(iterations=50, warmup=5)
-    config.use_subprocess = False
+if __name__ == "__main__":
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=config
+        config=BaselineWarpSpecializationProducerConsumerBenchmark().get_config(),
     )
-    benchmark = BaselineWarpSpecializationProducerConsumerBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: Warp Specialization (Producer/Consumer)")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-
-if __name__ == "__main__":
-    main()
-
+    result = harness.benchmark(get_benchmark())
+    print(f"Baseline warp specialization (producer/consumer): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

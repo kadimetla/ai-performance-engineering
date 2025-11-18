@@ -1,7 +1,7 @@
 """optimized_memory_double_buffering.py - Optimized memory management with double buffering.
 
 Demonstrates double buffering (ping-pong) for overlapping memory operations.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import torch.nn as nn
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
@@ -31,10 +31,11 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch19")
     return torch.device("cuda")
 
-class OptimizedMemoryDoubleBufferingBenchmark(Benchmark):
+class OptimizedMemoryDoubleBufferingBenchmark(BaseBenchmark):
     """Optimized: double buffering for overlapping operations."""
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
 
@@ -157,7 +158,7 @@ class OptimizedMemoryDoubleBufferingBenchmark(Benchmark):
             return "Buffers not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedMemoryDoubleBufferingBenchmark()
 

@@ -1,6 +1,6 @@
 """Chapter 19: Compare baseline vs optimized implementations using formal harness.
 
-Uses the Benchmark protocol - benchmarks provide get_benchmark() function,
+Uses the BaseBenchmark - benchmarks provide get_benchmark() function,
 harness measures directly (no subprocess, no output parsing).
 """
 
@@ -15,6 +15,7 @@ sys.path.insert(0, str(repo_root))
 import torch
 
 from common.python.benchmark_harness import (
+    BaseBenchmark,
     BenchmarkConfig,
 )
 from common.python.chapter_compare_template import (

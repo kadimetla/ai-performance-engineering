@@ -1,39 +1,16 @@
-"""optimized_memory_profiling.py - Optimized memory profiling (optimized).
-
-Memory profiling with gradient checkpointing to reduce peak memory.
-Trades compute for memory by recomputing activations during backward.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_memory_profiling.py - Optimized memory profiling (optimized)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from typing import Optional
-
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
 
 class OptimizedModel(nn.Module):
     """Model with gradient checkpointing for memory optimization."""
@@ -43,24 +20,21 @@ class OptimizedModel(nn.Module):
         self.fc1 = nn.Linear(hidden_dim, hidden_dim * 2)
         self.fc2 = nn.Linear(hidden_dim * 2, hidden_dim)
         self.relu = nn.ReLU()
-        self.model_hidden_dim = hidden_dim
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Gradient checkpointing: recompute activations in backward
-        # Saves memory by not storing intermediate activations
         x = checkpoint(self._fc1_relu, x, preserve_rng_state=False)
         x = self.fc2(x)
         return x
     
     def _fc1_relu(self, x: torch.Tensor) -> torch.Tensor:
-        """Helper function for checkpointing."""
         return self.relu(self.fc1(x))
 
-class OptimizedMemoryProfilingBenchmark(Benchmark):
+
+class OptimizedMemoryProfilingBenchmark(BaseBenchmark):
     """Optimized memory profiling - uses gradient checkpointing + CUDA graphs."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[OptimizedModel] = None
         self.inputs: Optional[torch.Tensor] = None
         self.targets: Optional[torch.Tensor] = None
@@ -72,9 +46,13 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
         self.capture_stream: Optional[torch.cuda.Stream] = None
         self.static_input: Optional[torch.Tensor] = None
         self.static_target: Optional[torch.Tensor] = None
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize model and data."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
@@ -88,9 +66,8 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
         self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
         self.criterion = nn.MSELoss()
         
-        # Warmup
         _ = self.model(self.inputs)
-        torch.cuda.synchronize()
+        self._synchronize()
         torch.cuda.reset_peak_memory_stats()
 
         self.static_input = self.inputs.clone()
@@ -113,15 +90,6 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
         loss.backward()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark - memory profiling with checkpointing."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
         if (
             self.graph is None
             or self.static_input is None
@@ -130,44 +98,41 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
         ):
             raise RuntimeError("CUDA graph not initialized")
 
-        with nvtx_range("optimized_memory_profiling", enable=enable_nvtx):
+        with self._nvtx_range("optimized_memory_profiling"):
             self.static_input.copy_(self.inputs)
             self.static_target.copy_(self.targets)
             self.model.zero_grad(set_to_none=True)
             self.graph.replay()
             self.peak_memory_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+        self._synchronize()
 
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.model, self.inputs, self.targets, self.criterion
-        torch.cuda.empty_cache()
+        self.model = None
+        self.inputs = None
+        self.targets = None
+        self.criterion = None
+        self.graph = None
+        self.static_input = None
+        self.static_target = None
+        self.capture_stream = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=50,
             warmup=10,
             enable_memory_tracking=True,
             enable_profiling=False,
         )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.peak_memory_mb <= 0:
-            return "Peak memory not recorded"
         return None
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
-    return OptimizedMemoryProfilingBenchmark()
 
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-    mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Memory Profiling: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Peak Memory: {benchmark.peak_memory_mb:.2f} MB")
+def get_benchmark() -> OptimizedMemoryProfilingBenchmark:
+    return OptimizedMemoryProfilingBenchmark()

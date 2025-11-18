@@ -1,93 +1,46 @@
-"""optimized_expert_parallelism.py - Vectorized MoE dispatch."""
+"""optimized_expert_parallelism.py - Expert parallelism with tensor parallel routing."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import Optional, Tuple
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 from common.python.compile_utils import enable_tf32
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
+class ExpertLayer(nn.Module):
+    """Single expert module."""
 
-
-class Expert(nn.Module):
-    def __init__(self, hidden_size: int):
+    def __init__(self, hidden_size: int = 256):
         super().__init__()
-        self.block = nn.Sequential(
+        self.expert = nn.Sequential(
             nn.Linear(hidden_size, hidden_size * 2),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Linear(hidden_size * 2, hidden_size),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.block(x)
+        return self.expert(x)
 
 
-class TopKDispatchMoE(nn.Module):
-    """Vectorized top-k MoE dispatch with index_add aggregation."""
-
-    def __init__(self, hidden_size: int, num_experts: int, top_k: int):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_experts = num_experts
-        self.top_k = top_k
-        self.router = nn.Linear(hidden_size, num_experts, bias=False)
-        self.experts = nn.ModuleList([Expert(hidden_size) for _ in range(num_experts)])
-
-    def _prepare_dispatch(
-        self, logits: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        scores, indices = torch.topk(logits, self.top_k, dim=-1)
-        probs = torch.softmax(scores, dim=-1).to(logits.dtype)
-        expert_ids = indices.reshape(-1)
-        weights = probs.reshape(-1)
-        token_ids = torch.arange(logits.shape[0], device=logits.device).repeat_interleave(self.top_k)
-        order = torch.argsort(expert_ids)
-        return expert_ids[order], weights[order], token_ids[order]
-
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-        router_logits = self.router(tokens)
-        expert_ids, weights, token_ids = self._prepare_dispatch(router_logits)
-        if expert_ids.numel() == 0:
-            return torch.zeros_like(tokens)
-
-        output = torch.zeros_like(tokens)
-        unique_ids, counts = torch.unique_consecutive(expert_ids, return_counts=True)
-        cursor = 0
-        for expert_id, count in zip(unique_ids.tolist(), counts.tolist()):
-            shard_tokens = token_ids[cursor : cursor + count]
-            shard_weights = weights[cursor : cursor + count].unsqueeze(-1).to(tokens.dtype)
-            expert_input = tokens.index_select(0, shard_tokens)
-            expert_output = self.experts[expert_id](expert_input)
-            output.index_add_(0, shard_tokens, expert_output * shard_weights)
-            cursor += count
-        return output
-
-
-class OptimizedExpertParallelismBenchmark(Benchmark):
-    """Optimized expert parallelism using vectorized dispatchers."""
+class OptimizedExpertParallelismBenchmark(BaseBenchmark):
+    """Optimized: simplified expert parallel routing on a single device."""
 
     def __init__(self):
-        self.device = resolve_device()
-        self.hidden_size = 256
+        super().__init__()
+        self.experts = None
+        self.router = None
+        self.input_data = None
         self.num_experts = 8
         self.top_k = 2
-        self.batch_size = 32
-        self.model: Optional[TopKDispatchMoE] = None
-        self.tokens: Optional[torch.Tensor] = None
+        tokens = 32 * 256
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         if torch.cuda.is_available():
@@ -95,58 +48,56 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
             torch.backends.cudnn.deterministic = False
             enable_tf32()
         torch.manual_seed(42)
-        self.model = TopKDispatchMoE(self.hidden_size, self.num_experts, self.top_k).to(
-            self.device, dtype=torch.bfloat16
-        )
-        self.model.eval()
-        self.tokens = torch.randn(
-            self.batch_size,
-            self.hidden_size,
-            device=self.device,
-            dtype=torch.bfloat16,
-        )
-        torch.cuda.synchronize()
+
+        self.experts = nn.ModuleList([
+            ExpertLayer(256).to(self.device) for _ in range(self.num_experts)
+        ])
+        self.router = nn.Linear(256, self.num_experts).to(self.device)
+        self.input_data = torch.randn(32, 256, device=self.device)
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        if self.experts is None or self.router is None or self.input_data is None:
+            raise RuntimeError("Benchmark not configured")
 
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        if self.model is None or self.tokens is None:
-            raise RuntimeError("Model/tokens not initialized")
-
-        with nvtx_range("optimized_expert_parallelism", enable=enable_nvtx):
+        with self._nvtx_range("optimized_expert_parallelism"):
             with torch.no_grad():
-                _ = self.model(self.tokens)
-        torch.cuda.synchronize()
+                router_logits = self.router(self.input_data)
+                top_k_weights, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
+                top_k_weights = torch.softmax(top_k_weights, dim=-1)
+
+                outputs = torch.zeros_like(self.input_data)
+                for expert_id in range(self.num_experts):
+                    expert_mask = (top_k_indices == expert_id).any(dim=-1)
+                    if expert_mask.any():
+                        expert_input = self.input_data[expert_mask]
+                        expert_output = self.experts[expert_id](expert_input)
+                        outputs[expert_mask] += expert_output
+        self._synchronize()
 
     def teardown(self) -> None:
-        self.model = None
-        self.tokens = None
-        torch.cuda.empty_cache()
+        self.experts = None
+        self.router = None
+        self.input_data = None
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=2)
+        return BenchmarkConfig(
+            iterations=20,
+            warmup=3,
+        )
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
-        if self.model is None:
-            return "Model missing"
-        if self.tokens is None:
-            return "Input missing"
+        if self.experts is None or len(self.experts) == 0:
+            return "Experts not initialized"
+        if self.router is None:
+            return "Router not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> OptimizedExpertParallelismBenchmark:
+    """Factory function for harness discovery."""
     return OptimizedExpertParallelismBenchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=10, warmup=2),
-    )
-    result = harness.benchmark(get_benchmark())
-    print(result)

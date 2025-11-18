@@ -1,6 +1,6 @@
 """Chapter 1: Performance Basics - Compare baseline vs optimized implementations.
 
-Uses the Benchmark protocol - benchmarks provide get_benchmark() function,
+Uses the BaseBenchmark - benchmarks provide get_benchmark() function,
 harness measures directly (no subprocess, no output parsing).
 """
 
@@ -20,6 +20,7 @@ except ImportError:
     pass
 
 from common.python.benchmark_harness import (
+    BaseBenchmark,
     BenchmarkConfig,
 )
 from common.python.chapter_compare_template import (

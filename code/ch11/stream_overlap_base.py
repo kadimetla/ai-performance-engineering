@@ -6,7 +6,7 @@ from typing import List
 
 import torch
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
 
@@ -16,7 +16,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class StridedStreamBaseline(Benchmark):
+class StridedStreamBaseline(BaseBenchmark):
     """Baseline workload that executes strided copies on a single stream."""
 
     def __init__(
@@ -25,6 +25,7 @@ class StridedStreamBaseline(Benchmark):
         num_elements: int = 8_000_000,
         num_segments: int = 8,
     ):
+        super().__init__()
         self.device = resolve_device()
         self.label = nvtx_label
         self.N = num_elements
@@ -70,7 +71,7 @@ class StridedStreamBaseline(Benchmark):
         return None
 
 
-class ConcurrentStreamOptimized(Benchmark):
+class ConcurrentStreamOptimized(BaseBenchmark):
     """Optimized workload that splits data across multiple CUDA streams."""
 
     def __init__(
@@ -80,6 +81,7 @@ class ConcurrentStreamOptimized(Benchmark):
         num_streams: int = 8,
         chunk_dtype: torch.dtype = torch.float16,
     ):
+        super().__init__()
         self.device = resolve_device()
         self.label = nvtx_label
         self.N = num_elements

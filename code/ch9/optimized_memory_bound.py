@@ -14,29 +14,27 @@ import torch
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch9")
-    return torch.device("cuda")
-
-
-class OptimizedMemoryBoundBenchmark(Benchmark):
+class OptimizedMemoryBoundBenchmark(BaseBenchmark):
     """Keeps data resident on the GPU and fuses updates via torch.compile."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.data = None
         self.N = 4_000_000  # Same size as baseline
         self.step_fn = None
         self._compiled = False
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors and compile the fused update."""
@@ -52,29 +50,25 @@ class OptimizedMemoryBoundBenchmark(Benchmark):
 
         self.step_fn = fused_step
         self._compiled = False
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Fused operations (high AI)."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("memory_bound", enable=enable_nvtx):
-            assert self.data is not None and self.step_fn is not None
+        assert self.data is not None and self.step_fn is not None
+        with self._nvtx_range("memory_bound"):
             # Fused in-place style update that never leaves GPU memory.
             self.data = self.step_fn(self.data)
+        self._synchronize()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.data = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -96,7 +90,7 @@ class OptimizedMemoryBoundBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedMemoryBoundBenchmark()
 

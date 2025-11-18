@@ -12,7 +12,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.extension_loader_template import load_cuda_extension
 
 THRESHOLD_SECONDARY_SCALE = 1.5
@@ -20,12 +20,13 @@ THRESHOLD_INNER_SCALE = 0.85
 THRESHOLD_OUTER_SCALE = 1.25
 
 
-class ThresholdBenchmarkBase(Benchmark):
+class ThresholdBenchmarkBase(BaseBenchmark):
     rows: int = 1 << 22  # 4M elements
     threshold: float = 2.5
     nvtx_label: str = "threshold"
 
     def __init__(self) -> None:
+        super().__init__()
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA required for Chapter 8 threshold benchmarks")
         self.device = torch.device("cuda")

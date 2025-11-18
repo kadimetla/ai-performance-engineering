@@ -2,26 +2,15 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import Optional
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional, Tuple
 
 import torch
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from common.python.compile_utils import configure_tf32, restore_tf32
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch2 cublas example")
-    return torch.device("cuda")
-
-
-class BaselineCublasBenchmark(Benchmark):
+class BaselineCublasBenchmark(BaseBenchmark):
     """
     Baseline: FP32 matmul with TF32 disabled.
 
@@ -30,72 +19,50 @@ class BaselineCublasBenchmark(Benchmark):
     """
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.m = 2048
         self.n = 2048
         self.k = 2048
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
-        self._prev_matmul_precision: Optional[str] = None
-        self._prev_cudnn_precision: Optional[str] = None
-        self._legacy_matmul_flag: Optional[bool] = None
-        self._legacy_cudnn_flag: Optional[bool] = None
+        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
+        tokens = self.m * self.n
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         """Allocate FP32 matrices and disable TF32 acceleration."""
-        matmul_backend = getattr(torch.backends.cuda, "matmul", None)
-        cudnn_backend = getattr(torch.backends.cudnn, "conv", None)
-
-        if matmul_backend is not None and hasattr(matmul_backend, "fp32_precision"):
-            self._prev_matmul_precision = matmul_backend.fp32_precision  # type: ignore[attr-defined]
-            matmul_backend.fp32_precision = "ieee"  # type: ignore[attr-defined]
-        else:
-            # Fallback for older PyTorch releases that still expose allow_tf32
-            self._legacy_matmul_flag = torch.backends.cuda.matmul.allow_tf32
-            torch.backends.cuda.matmul.allow_tf32 = False
-
-        if cudnn_backend is not None and hasattr(cudnn_backend, "fp32_precision"):
-            self._prev_cudnn_precision = cudnn_backend.fp32_precision  # type: ignore[attr-defined]
-            cudnn_backend.fp32_precision = "ieee"  # type: ignore[attr-defined]
-        else:
-            self._legacy_cudnn_flag = torch.backends.cudnn.allow_tf32
-            torch.backends.cudnn.allow_tf32 = False
+        self._tf32_state = configure_tf32(matmul_precision="highest", cudnn_precision="highest")
 
         torch.manual_seed(42)
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
         """Plain cuBLAS FP32 matmul."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-        with nvtx_range("baseline_cublas_fp32", enable=enable_nvtx):
+        assert self.A is not None and self.B is not None
+        with self._nvtx_range("baseline_cublas_fp32"):
             _ = torch.matmul(self.A, self.B)
+        self._synchronize()
 
     def teardown(self) -> None:
         """Restore TF32 settings and free tensors."""
         self.A = None
         self.B = None
-        matmul_backend = getattr(torch.backends.cuda, "matmul", None)
-        cudnn_backend = getattr(torch.backends.cudnn, "conv", None)
-
-        if self._prev_matmul_precision is not None and matmul_backend is not None and hasattr(matmul_backend, "fp32_precision"):
-            matmul_backend.fp32_precision = self._prev_matmul_precision  # type: ignore[attr-defined]
-        elif self._legacy_matmul_flag is not None:
-            torch.backends.cuda.matmul.allow_tf32 = self._legacy_matmul_flag
-
-        if self._prev_cudnn_precision is not None and cudnn_backend is not None and hasattr(cudnn_backend, "fp32_precision"):
-            cudnn_backend.fp32_precision = self._prev_cudnn_precision  # type: ignore[attr-defined]
-        elif self._legacy_cudnn_flag is not None:
-            torch.backends.cudnn.allow_tf32 = self._legacy_cudnn_flag
+        if self._tf32_state is not None:
+            restore_tf32(self._tf32_state)
+            self._tf32_state = None
 
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=5)
+
+    def get_workload_metadata(self):
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
         if self.A is None or self.B is None:
@@ -103,18 +70,5 @@ class BaselineCublasBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return BaselineCublasBenchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5),
-    )
-    result = harness.benchmark(benchmark)
-    timing = result.timing.mean_ms if result.timing else 0.0
-    print(f"\nBaseline cuBLAS (FP32, TF32 disabled): {timing:.3f} ms")

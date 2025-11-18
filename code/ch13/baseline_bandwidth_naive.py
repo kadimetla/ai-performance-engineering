@@ -3,7 +3,7 @@
 Naive memory access patterns with poor bandwidth utilization.
 Uncoalesced access, unnecessary memory transfers.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -21,29 +21,28 @@ import torch
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
-
-
-class BaselineBandwidthNaiveBenchmark(Benchmark):
+class BaselineBandwidthNaiveBenchmark(BaseBenchmark):
     """Naive bandwidth usage - poor memory access patterns."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A = None
         self.B = None
         self.C = None
         self.size = 10_000_000  # Large vector for bandwidth measurement
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.size),
+            bytes_per_iteration=float(self.size * 4 * 3),  # read A/B, write C
+        )
     
     def setup(self) -> None:
         """Setup: Initialize large tensors."""
@@ -56,20 +55,17 @@ class BaselineBandwidthNaiveBenchmark(Benchmark):
         
         # Warmup
         self.C = self.A + self.B
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+            bytes_per_iteration=self._workload.bytes_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - naive bandwidth usage."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_bandwidth_naive", enable=enable_nvtx):
+        assert self.A is not None and self.B is not None and self.C is not None
+        with self._nvtx_range("baseline_bandwidth_naive"):
             # Naive pattern: uncoalesced access via strided operations
             # This pattern results in poor bandwidth utilization
             for i in range(0, self.size, 1024):  # Strided access
@@ -78,12 +74,13 @@ class BaselineBandwidthNaiveBenchmark(Benchmark):
             # Additional unnecessary memory transfers
             temp = self.C.clone()  # Unnecessary copy
             self.C = temp * 0.5    # Write back
+        self._synchronize()
 
     
     def teardown(self) -> None:
         """Cleanup."""
         del self.A, self.B, self.C
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -101,7 +98,7 @@ class BaselineBandwidthNaiveBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineBandwidthNaiveBenchmark()
 
@@ -114,4 +111,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Bandwidth Naive: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

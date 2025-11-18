@@ -1,36 +1,30 @@
 """baseline_inference_monolithic.py - Monolithic inference (baseline).
 
 Single service handles both prefill and decode - blocks each other.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
+from typing import Dict, List, Optional
+
+import torch
+import torch.nn as nn
 
 # Add repo root to path for imports
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch15")
-    return torch.device("cuda")
+from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
 class SimpleLLM(nn.Module):
@@ -65,102 +59,94 @@ class SimpleLLM(nn.Module):
         return torch.cat(outputs, dim=1)
 
 
-class BaselineInferenceMonolithicBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+class BaselineInferenceMonolithicBenchmark(BaseBenchmark):
+    """Monolithic inference baseline using the shared harness conventions."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        self.prompt = None
-        self.kv_cache = None
+        super().__init__()
+        self.model: Optional[SimpleLLM] = None
+        self.prompt: Optional[torch.Tensor] = None
+        self.kv_cache: Optional[torch.Tensor] = None
+        self._history: Dict[str, List[float]] = {"ttft": [], "tpot": []}
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=256 + 16,
+        )
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
         self.model = SimpleLLM(hidden_dim=1024, num_layers=12).to(self.device).to(torch.bfloat16).eval()
         self.prompt = torch.randint(0, 10000, (1, 256), device=self.device)
         
-        # Pre-compute KV cache
         with torch.no_grad():
             self.kv_cache = self.model.prefill(self.prompt)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> Optional[dict]:
-        """Function to benchmark - monolithic (prefill blocks decode).
-        
-        Returns:
-            Optional dict with 'ttft_times_ms' and 'tpot_times_ms' keys for inference timing,
-            or None if not measuring inference timing.
-        """
-        # Use conditional NVTX ranges - only enabled when profiling
+        if self.model is None or self.prompt is None:
+            raise RuntimeError("Model or prompt not initialized")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-        import time
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
+        enable_nvtx = get_nvtx_enabled(self.get_config())
 
         with nvtx_range("inference_monolithic", enable=enable_nvtx):
             with torch.no_grad():
-                # Measure TTFT: Time from request start to first token generation
-                request_start = time.perf_counter()
+                request_start = self._record_start()
                 
-                # Prefill phase (simulates processing prompt to get first token)
-                # In real inference, this would be the prefill computation
-                torch.cuda.synchronize()
-                prefill_start = time.perf_counter()
+                torch.cuda.synchronize(self.device)
+                prefill_start = self._record_start()
                 kv_cache = self.model.prefill(self.prompt)
-                torch.cuda.synchronize()
-                prefill_end = time.perf_counter()
+                torch.cuda.synchronize(self.device)
+                ttft_ms = self._record_stop(request_start)
                 
-                # TTFT is the time from request start to first token ready
-                ttft_ms = (prefill_end - request_start) * 1000
-                
-                # Measure TPOT: Time per token during decode phase
                 num_tokens = 16
                 tpot_times_ms = []
                 
-                decode_start = time.perf_counter()
                 for i in range(num_tokens):
-                    token_start = time.perf_counter()
-                    # Simulate generating one token
+                    token_start = self._record_start()
                     if i == 0:
-                        # First token uses kv_cache from prefill
                         token_output = self.model.decode(kv_cache, num_tokens=1)
                     else:
-                        # Subsequent tokens use previous output
                         token_output = self.model.decode(token_output[:, -1:, :], num_tokens=1)
-                    torch.cuda.synchronize()
-                    token_end = time.perf_counter()
-                    
-                    # TPOT is the time per token during decode
-                    tpot_ms = (token_end - token_start) * 1000
-                    tpot_times_ms.append(tpot_ms)
+                    torch.cuda.synchronize(self.device)
+                    tpot_times_ms.append(self._record_stop(token_start))
                 
-                # Return inference timing data
+                self._history["ttft"].append(ttft_ms)
+                self._history["tpot"].extend(tpot_times_ms)
                 return {
                     "ttft_times_ms": [ttft_ms],
                     "tpot_times_ms": tpot_times_ms,
                 }
 
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.model, self.prompt, self.kv_cache
+        self.model = None
+        self.prompt = None
+        self.kv_cache = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark-specific config."""
-        return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
-        )
+        return BenchmarkConfig(iterations=20, warmup=5)
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[Dict[str, float]]:
+        if not self._history["ttft"]:
+            return None
+        return {
+            "monolithic.ttft_ms": float(sum(self._history["ttft"]) / len(self._history["ttft"])),
+            "monolithic.tpot_mean_ms": float(sum(self._history["tpot"]) / len(self._history["tpot"])),
+        }
+
     def validate_result(self) -> Optional[str]:
-        """Optional validation."""
+        if not self._history["ttft"]:
+            return "No TTFT samples recorded"
+        if not self._history["tpot"]:
+            return "No TPOT samples recorded"
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineInferenceMonolithicBenchmark()
 

@@ -16,13 +16,13 @@ from torch.amp import autocast
 from torch.cuda.amp import GradScaler
 
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-
-
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13 precisionfp8")
-    return torch.device("cuda")
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 
 
 class SimpleModel(nn.Module):
@@ -47,11 +47,11 @@ def fake_fp8_cast(tensor: torch.Tensor) -> torch.Tensor:
     return tensor.to(torch.float16)
 
 
-class OptimizedFP8Benchmark(Benchmark):
+class OptimizedFP8Benchmark(BaseBenchmark):
     """Optimized FP8 path using PyTorch AMP + fake FP8 activations."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         self.targets: Optional[torch.Tensor] = None
@@ -60,6 +60,11 @@ class OptimizedFP8Benchmark(Benchmark):
         self.scaler: Optional[GradScaler] = None
         self.batch_size = 256
         self.hidden_dim = 4096
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         enable_tf32()
@@ -85,8 +90,12 @@ class OptimizedFP8Benchmark(Benchmark):
 
         for _ in range(5):
             self._train_step()
-        torch.cuda.synchronize()
+        self._synchronize()
         self.optimizer.zero_grad(set_to_none=True)
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
 
     def _train_step(self) -> None:
         assert self.model and self.inputs is not None and self.targets is not None
@@ -101,12 +110,9 @@ class OptimizedFP8Benchmark(Benchmark):
         self.scaler.update()
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-        with nvtx_range("optimized_precisionfp8", enable=enable_nvtx):
+        with self._nvtx_range("optimized_precisionfp8"):
             self._train_step()
+        self._synchronize()
 
     def teardown(self) -> None:
         self.model = None
@@ -115,10 +121,15 @@ class OptimizedFP8Benchmark(Benchmark):
         self.optimizer = None
         self.criterion = None
         self.scaler = None
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=50, warmup=10)
+        return BenchmarkConfig(
+            iterations=50,
+            warmup=10,
+            enable_memory_tracking=False,
+            enable_profiling=False,
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.model is None:
@@ -126,7 +137,7 @@ class OptimizedFP8Benchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return OptimizedFP8Benchmark()
 
 

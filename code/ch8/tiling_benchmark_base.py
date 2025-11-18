@@ -12,7 +12,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.extension_loader_template import load_cuda_extension
 
 def resolve_device() -> torch.device:
@@ -22,7 +22,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class TilingBenchmarkBase(Benchmark):
+class TilingBenchmarkBase(BaseBenchmark):
     """Base class that pre-loads the CUDA tiling extension and inputs."""
 
     extension_name = "ch8_tiling_kernels"
@@ -37,6 +37,7 @@ class TilingBenchmarkBase(Benchmark):
     shared_dim: int = 2048
 
     def __init__(self) -> None:
+        super().__init__()
         self.device = resolve_device()
         self.extension = None
         self.matrix_a: Optional[torch.Tensor] = None

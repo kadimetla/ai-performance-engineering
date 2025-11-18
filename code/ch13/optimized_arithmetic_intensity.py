@@ -4,7 +4,7 @@ Compute-bound kernel with high arithmetic intensity.
 Many compute operations relative to memory operations.
 Optimized for maximum FLOPs per byte accessed.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -23,31 +23,30 @@ from typing import Optional
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
-
-
-class OptimizedArithmeticIntensityBenchmark(Benchmark):
+class OptimizedArithmeticIntensityBenchmark(BaseBenchmark):
     """High arithmetic intensity optimization - compute-bound."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A: torch.Tensor | None = None
         self.B: torch.Tensor | None = None
         self.C: torch.Tensor | None = None
         self.M = 2048
         self.K = 2048
         self.N = 2048
+        tokens = self.M * self.N
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors for compute-bound operation."""
@@ -67,7 +66,11 @@ class OptimizedArithmeticIntensityBenchmark(Benchmark):
 
         # Warmup high-AI matmul so autotuning occurs before measurement.
         self._fast_matmul()
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
 
     def _fast_matmul(self) -> None:
         assert self.A is not None and self.B is not None and self.C is not None
@@ -75,26 +78,17 @@ class OptimizedArithmeticIntensityBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - high arithmetic intensity (compute-bound)."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("optimized_arithmetic_intensity", enable=enable_nvtx):
+        with self._nvtx_range("optimized_arithmetic_intensity"):
             if self.A is None or self.B is None or self.C is None:
                 raise RuntimeError("Benchmark not initialized")
             # High arithmetic intensity: full fused matmul, single launch.
             self._fast_matmul()
-            torch.cuda.synchronize(self.device)
+            self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
         del self.A, self.B, self.C
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -111,7 +105,7 @@ class OptimizedArithmeticIntensityBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedArithmeticIntensityBenchmark()
 

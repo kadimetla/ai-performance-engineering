@@ -1,18 +1,8 @@
-"""optimized_warp_divergence_ilp.py - Optimized ILP avoiding warp divergence.
-
-Demonstrates ILP optimization by avoiding warp divergence (predication).
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_warp_divergence_ilp.py - Optimized ILP avoiding warp divergence."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import Optional, Callable, Tuple
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Callable, Optional, Tuple
 
 import torch
 
@@ -22,11 +12,7 @@ from common.python.inductor_guard import (
     disable_inductor_cudagraph_features,
     restore_inductor_cudagraph_features,
 )
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch6.workload_config import WORKLOAD
 
 _MARK_CUDAGRAPH_STEP = getattr(torch.compiler, "cudagraph_mark_step_begin", None)
@@ -35,12 +21,6 @@ _MARK_CUDAGRAPH_STEP = getattr(torch.compiler, "cudagraph_mark_step_begin", None
 def _mark_cudagraph_step() -> None:
     if callable(_MARK_CUDAGRAPH_STEP):
         _MARK_CUDAGRAPH_STEP()
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch6")
-    return torch.device("cuda")
 
 
 def _branchless_kernel(
@@ -65,11 +45,11 @@ def _branchless_kernel(
     return result, mask_source
 
 
-class OptimizedWarpDivergenceILPBenchmark(Benchmark):
+class OptimizedWarpDivergenceILPBenchmark(BaseBenchmark):
     """Optimized: High ILP by avoiding warp divergence."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.workload = WORKLOAD
         self.N = self.workload.warp_elements
         self.branch_iterations = self.workload.warp_branch_iterations
@@ -80,7 +60,12 @@ class OptimizedWarpDivergenceILPBenchmark(Benchmark):
         self.streams: list[torch.cuda.Stream] = []
         self._compiled_step: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None
         self._branchless_fn: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None
-        self._inductor_state: InductorCudagraphState = None
+        self._inductor_state: Optional[InductorCudagraphState] = None
+        token_count = self.N * self.branch_iterations
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.branch_iterations),
+            tokens_per_iteration=float(token_count),
+        )
 
     def setup(self) -> None:
         torch.manual_seed(42)
@@ -95,8 +80,6 @@ class OptimizedWarpDivergenceILPBenchmark(Benchmark):
             return _branchless_kernel(chunk, logits, self.branch_iterations)
 
         self._branchless_fn = branchless_fn
-        # Inductor's cudagraph helpers reuse static buffers that aren't stream-safe.
-        # Keep them disabled while this multi-stream benchmark is active to avoid replay errors.
         if self._inductor_state is None:
             self._inductor_state = disable_inductor_cudagraph_features()
         self._compiled_step = compile_callable(
@@ -104,16 +87,11 @@ class OptimizedWarpDivergenceILPBenchmark(Benchmark):
             fullgraph=True,
             mode="reduce-overhead",
         )
-        torch.cuda.synchronize()
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("optimized_warp_divergence_ilp", enable=enable_nvtx):
-            assert self.input is not None and self.routing_logits is not None
+        assert self.input is not None and self.routing_logits is not None
+        with self._nvtx_range("optimized_warp_divergence_ilp"):
             chunked_inputs = torch.chunk(self.input, len(self.streams))
             chunked_logits = torch.chunk(self.routing_logits, len(self.streams))
             updated_chunks: list[torch.Tensor] = [torch.empty(0, device=self.device)] * len(self.streams)
@@ -132,7 +110,7 @@ class OptimizedWarpDivergenceILPBenchmark(Benchmark):
                     updated_chunks[idx] = out_chunk
                     updated_logits[idx] = out_logits
 
-            torch.cuda.synchronize()
+            self._synchronize()
             self.output = torch.cat(updated_chunks, dim=0)
             self.routing_logits = torch.cat(updated_logits, dim=0)
             self._checksum = float(self.output.sum().item())
@@ -152,24 +130,14 @@ class OptimizedWarpDivergenceILPBenchmark(Benchmark):
             warmup=self.workload.ilp_warmup,
         )
 
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
         if self.output is None:
             return "Output tensor not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return OptimizedWarpDivergenceILPBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Warp Divergence ILP: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print("  Tip: Avoiding warp divergence maximizes instruction-level parallelism")

@@ -1,8 +1,4 @@
-"""baseline_no_overlap.py - DDP without communication overlap (baseline).
-
-DDP implementation without gradient overlap optimization.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_no_overlap.py - DDP without communication overlap (baseline)."""
 
 from __future__ import annotations
 
@@ -34,19 +30,13 @@ except ImportError:
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda:0")
 
 
 class MultiLayerNet(nn.Module):
@@ -64,11 +54,11 @@ class MultiLayerNet(nn.Module):
         return self.fc3(x)
 
 
-class BaselineNoOverlapBenchmark(Benchmark):
+class BaselineNoOverlapBenchmark(BaseBenchmark):
     """DDP without communication overlap - baseline."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.optimizer = None
         self.data = None
@@ -76,6 +66,13 @@ class BaselineNoOverlapBenchmark(Benchmark):
         self.rank = 0
         self.world_size = 1
         self.initialized = False
+        self.batch_size = 128
+        self.hidden_size = 1024
+        tokens = self.batch_size * self.hidden_size
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize distributed environment and model."""
@@ -91,7 +88,7 @@ class BaselineNoOverlapBenchmark(Benchmark):
         torch.cuda.set_device(0)
         
         torch.manual_seed(42)
-        model = MultiLayerNet(1024).to(self.device)
+        model = MultiLayerNet(self.hidden_size).to(self.device)
         
         if self.world_size > 1:
             self.model = nn.parallel.DistributedDataParallel(
@@ -103,22 +100,17 @@ class BaselineNoOverlapBenchmark(Benchmark):
         
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
         
-        batch_size = 128
-        self.data = torch.randn(batch_size, 1024, device=self.device)
-        self.target = torch.randn(batch_size, 1, device=self.device)
+        self.data = torch.randn(self.batch_size, self.hidden_size, device=self.device)
+        self.target = torch.randn(self.batch_size, 1, device=self.device)
         
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: DDP training step without overlap."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
 
         with nvtx_range("no_overlap", enable=enable_nvtx):
             output = self.model(self.data)
@@ -134,6 +126,7 @@ class BaselineNoOverlapBenchmark(Benchmark):
             
             self.optimizer.step()
             self.optimizer.zero_grad()
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -155,6 +148,9 @@ class BaselineNoOverlapBenchmark(Benchmark):
             enable_profiling=False,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -174,7 +170,7 @@ class BaselineNoOverlapBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineNoOverlapBenchmark()
 

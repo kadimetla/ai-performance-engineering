@@ -1,40 +1,13 @@
-"""optimized_pipeline_sequential.py - Pipeline overlap optimization (optimized).
-
-Pipeline stages execute with overlap using CUDA streams.
-Hides latency by overlapping computation stages.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_pipeline_sequential.py - Pipeline overlap optimization."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-    WorkloadMetadata,
-)
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch20")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
 class SimpleStage(nn.Module):
@@ -54,31 +27,26 @@ class SimpleStage(nn.Module):
         return self.norm(out + x)
 
 
-class OptimizedPipelineOverlapBenchmark(Benchmark):
+class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
     """Pipeline overlap - stages execute concurrently."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.stages = None
-        self.stage_streams = None
-        self.inputs = None
+        super().__init__()
+        self.stages: Optional[nn.ModuleList] = None
+        self.stage_streams: Optional[list[torch.cuda.Stream]] = None
+        self.inputs: Optional[torch.Tensor] = None
         self.batch_size = 256
         self.hidden_dim = 1024
         self.num_stages = 4
         self.num_micro_batches = 8
         self.repeats = 4
-    
-    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
-        """Describe workload units processed per iteration."""
-        return WorkloadMetadata(
+        self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(self.batch_size),
             samples_per_iteration=float(self.batch_size),
         )
     
     def setup(self) -> None:
-        """Setup: Initialize pipeline stages and streams."""
-        
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
@@ -93,30 +61,14 @@ class OptimizedPipelineOverlapBenchmark(Benchmark):
             self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16
         )
         
-        # Warmup each stage individually
         data = self.inputs
         with torch.no_grad():
             for stage in self.stages:
                 data = stage(data)
-        torch.cuda.synchronize()
+        self._synchronize()
     
-    def benchmark_fn(self) -> None:
-        """Function to benchmark - pipeline with overlap."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("pipeline_sequential", enable=enable_nvtx):
-            micro_batches = list(self.inputs.chunk(self.num_micro_batches))
-            with torch.no_grad():
-                for _ in range(self.repeats):
-                    self._run_pipeline(micro_batches)
-            torch.cuda.synchronize()
-
     def _run_pipeline(self, micro_batches: list[torch.Tensor]) -> None:
-        if self.stage_streams is None or self.stages is None:
-            raise RuntimeError("Pipeline stages not initialized")
+        assert self.stage_streams is not None and self.stages is not None
         num_micro = len(micro_batches)
         ready_events = [
             [torch.cuda.Event(blocking=False) for _ in range(num_micro)]
@@ -142,15 +94,23 @@ class OptimizedPipelineOverlapBenchmark(Benchmark):
         for ev in ready_events[-1]:
             ev.synchronize()
         activations[-1].clear()
-
     
+    def benchmark_fn(self) -> None:
+        assert self.inputs is not None and self.stages is not None
+        with self._nvtx_range("pipeline_sequential_optimized"):
+            micro_batches = list(self.inputs.chunk(self.num_micro_batches))
+            with torch.no_grad():
+                for _ in range(self.repeats):
+                    self._run_pipeline(micro_batches)
+            self._synchronize()
+
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.stages, self.stage_streams, self.inputs
+        self.stages = None
+        self.stage_streams = None
+        self.inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=50,
             warmup=10,
@@ -158,27 +118,14 @@ class OptimizedPipelineOverlapBenchmark(Benchmark):
             enable_profiling=False,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.stages is None:
             return "Stages not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaseBenchmark:
     return OptimizedPipelineOverlapBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    timing = result.timing
-    if timing:
-        print(f"\nOptimized Pipeline Overlap: {timing.mean_ms:.3f} ms")
-    else:
-        print("No timing data available")

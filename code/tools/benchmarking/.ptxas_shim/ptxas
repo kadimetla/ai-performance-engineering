@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+real_ptxas="/usr/local/cuda/bin/ptxas"
+args=()
+ptx_file=""
+for a in "$@"; do
+  args+=("${a//sm_121a/sm_121}")
+  if [[ -z "$ptx_file" && "$a" == *.ptx ]]; then
+    ptx_file="$a"
+  fi
+done
+# Rewrite PTX target if present
+if [[ -n "$ptx_file" && -f "$ptx_file" ]]; then
+  sed -i 's/sm_121a/sm_121/g' "$ptx_file"
+fi
+exec "$real_ptxas" "${args[@]}"

@@ -1,34 +1,14 @@
-"""optimized_inference_monolithic.py - Disaggregated inference (optimized).
-
-Separate prefill and decode services - parallel execution, better utilization.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_inference_monolithic.py - Disaggregated inference (optimized decode service)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add repo root to path for imports
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch15")
-    return torch.device("cuda")
 
 class SimpleLLM(nn.Module):
     """Simplified LLM for inference simulation."""
@@ -36,114 +16,74 @@ class SimpleLLM(nn.Module):
     def __init__(self, hidden_dim=1024, num_layers=12):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.layers = nn.ModuleList([
+        self.layers = nn.ModuleList(
             nn.Linear(hidden_dim, hidden_dim)
             for _ in range(num_layers)
-        ])
-    
-    def prefill(self, prompt_tokens):
-        """Prefill: Process full prompt (compute-bound)."""
-        x = torch.randn(prompt_tokens.size(0), prompt_tokens.size(1), self.hidden_dim,
-                       device=prompt_tokens.device, dtype=torch.bfloat16)
-        for layer in self.layers:
-            x = layer(x)
-            x = torch.relu(x)
-        return x[:, -1:, :]
+        )
     
     def decode(self, kv_cache, num_tokens=16):
-        """Decode: Generate tokens (memory-bound)."""
+        """Decode: generate tokens (memory-bound)."""
         outputs = []
         x = kv_cache
         for _ in range(num_tokens):
             for layer in self.layers:
-                x = layer(x)
-                x = torch.relu(x)
+                x = torch.relu(layer(x))
             outputs.append(x)
         return torch.cat(outputs, dim=1)
 
-class OptimizedInferenceDisaggregatedBenchmark(Benchmark):
-    """Benchmark implementation with disaggregated architecture."""
+
+class OptimizedInferenceDisaggregatedBenchmark(BaseBenchmark):
+    """Benchmark: optimized decode service (prefill runs elsewhere)."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.decode_model = None
-        self.kv_cache = None
+        super().__init__()
+        self.decode_model: Optional[SimpleLLM] = None
+        self.kv_cache: Optional[torch.Tensor] = None
+        self.batch = 1
+        self.num_tokens = 16
+        tokens = self.batch * self.num_tokens
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
-        """Setup: initialize separate decode model (prefill runs elsewhere)."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-        # Optimization: Disaggregated decode service is optimized for latency
-        # - BF16 precision (already applied) for faster computation
-        # - CUDA graphs for reduced kernel launch overhead
-        # - Separate from prefill (no interference)
         self.decode_model = SimpleLLM(hidden_dim=1024, num_layers=12).to(self.device).to(torch.bfloat16).eval()
+        self.kv_cache = torch.randn(self.batch, 1, 1024, device=self.device, dtype=torch.bfloat16)
         
-        # Simulate: KV cache comes from prefill service
-        self.kv_cache = torch.randn(1, 1, 1024, device=self.device, dtype=torch.bfloat16)
-        
-        # Optimization: Warmup for CUDA graph capture (reduces decode latency)
-        # In disaggregated setup, decode service is optimized for low latency
         with torch.no_grad():
             for _ in range(5):
-                _ = self.decode_model.decode(self.kv_cache, num_tokens=16)
-        torch.cuda.synchronize()
+                _ = self.decode_model.decode(self.kv_cache, num_tokens=self.num_tokens)
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark - disaggregated (decode doesn't block on prefill)."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("inference_monolithic", enable=enable_nvtx):
+        assert self.decode_model is not None and self.kv_cache is not None
+        with self._nvtx_range("inference_monolithic_optimized"):
             with torch.no_grad():
-                # Decode runs independently (can overlap with other prefills)
-                _ = self.decode_model.decode(self.kv_cache, num_tokens=16)
-
+                _ = self.decode_model.decode(self.kv_cache, num_tokens=self.num_tokens)
+            self._synchronize()
+    
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.decode_model, self.kv_cache
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        self.decode_model = None
+        self.kv_cache = None
+        torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark-specific config."""
         return BenchmarkConfig(
             iterations=20,
             warmup=5,
         )
+
+    def get_workload_metadata(self):
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
-        """Optional validation."""
         return None
 
-def get_benchmark() -> Benchmark:
+
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedInferenceDisaggregatedBenchmark()
-
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=20, warmup=5)
-    )
-    benchmark = OptimizedInferenceDisaggregatedBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print("Optimized: Disaggregated Inference")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-if __name__ == "__main__":
-    main()

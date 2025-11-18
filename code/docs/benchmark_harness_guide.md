@@ -57,6 +57,8 @@ ch*/baseline_*.py  →  ch*/optimized_*.py
 python tools/cli/benchmark_cli.py run
 ```
 
+Use `--accept-regressions` when you intentionally want to refresh expectation files on improvements only, or `--update-expectations` to force-write observed metrics even if they are slower (full refresh). The harness will surface **SKIPPED** for known hardware gaps like DSMEM-only cluster kernels on GB10, NVFP4-only trainers on non-FP4 parts, or TF32 being disabled via the new helper APIs—those no longer count as failures.
+
 ---
 
 ### 2. **Multiple Execution Modes**
@@ -631,6 +633,25 @@ Every benchmark produces:
 - ✅ Rich error messages with diagnostics
 - ✅ Structured output (JSON + Markdown)
 - ✅ Integration with existing tools (nsys-ui, ncu-ui, Chrome tracing)
+
+## Profiling Presets (Minimal vs Deep-Dive)
+
+- **Minimal (default)** keeps profiler overhead low for baseline/optimized A/B runs. Harness emits:
+  - Nsight Systems: `nsys profile --force-overwrite=true -o <out> -t cuda,nvtx,osrt --sample=cpu --backtrace=none [--nvtx-include <range> ...] python <wrapper>`.
+  - Nsight Compute: `ncu --set speed-of-light --metrics sm__throughput.avg.pct_of_peak_sustained_elapsed,gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed,gpu__time_duration.avg --replay-mode application --pm-sampling-interval 75000 --target-processes all [--nvtx-include <range> ...] -o <out> python <wrapper>`.
+  - PyTorch profiler (CUDA-only, sparse schedule): 
+    ```python
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CUDA],
+        record_shapes=False, profile_memory=False,
+        with_stack=False, with_flops=False,
+        schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1),
+    ) as prof:
+        for _ in range(min(config.iterations, 10)):
+            fn(); prof.step()
+    ```
+- NVTX filters are auto-derived from the benchmark’s NVTX ranges (prefill/decode/router/moe_ep, etc.) so the traces stay focused; override with `BenchmarkConfig(nsys_nvtx_include=["prefill","decode"])`.
+- Switch to a fuller capture with `profile_type="deep_dive"` (CLI: `--profile deep_dive`) and optionally `ncu_metric_set="deep_dive"`—the metric set auto-switches when profile_type is deep_dive. Keep the same preset for both baseline_ and optimized_ when comparing. Use `--profile minimal|roofline` and `--ncu-metric-set auto|minimal|deep_dive|roofline` to tune mix vs. overhead.
 
 ---
 

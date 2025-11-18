@@ -1,9 +1,4 @@
-"""optimized_graph_bandwidth.py - CUDA graphs for bandwidth measurement (optimized).
-
-Demonstrates bandwidth measurement within CUDA graphs.
-Uses PyTorch CUDA extension for accurate GPU timing with CUDA Events.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_graph_bandwidth.py - CUDA graphs for bandwidth measurement (optimized)."""
 
 from __future__ import annotations
 
@@ -19,34 +14,32 @@ import torch
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 # Import CUDA extension
 from ch12.cuda_extensions import load_graph_bandwidth_extension
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch12")
-    return torch.device("cuda")
-
-
-class OptimizedGraphBandwidthBenchmark(Benchmark):
+class OptimizedGraphBandwidthBenchmark(BaseBenchmark):
     """CUDA graphs - measures bandwidth within graphs (uses CUDA extension)."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.src = None
         self.dst = None
         self.N = 50_000_000
         self.iterations = 10
         self._extension = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N * self.iterations),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
@@ -70,7 +63,7 @@ class OptimizedGraphBandwidthBenchmark(Benchmark):
         torch.manual_seed(42)
         self.src = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.dst = torch.empty_like(self.src)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         # Dry run so CUDA graph capture / kernel launch overhead happens before timing.
         self._extension.graph_kernel(self.dst, self.src, 1)
         torch.cuda.synchronize()
@@ -89,6 +82,7 @@ class OptimizedGraphBandwidthBenchmark(Benchmark):
         with nvtx_range("optimized_graph_bandwidth_graph", enable=enable_nvtx):
             # Call CUDA extension with graph kernel
             self._extension.graph_kernel(self.dst, self.src, self.iterations)
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -120,7 +114,7 @@ class OptimizedGraphBandwidthBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedGraphBandwidthBenchmark()
 

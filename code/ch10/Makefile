@@ -13,12 +13,28 @@ COMMON_HEADERS = ../common/headers/arch_detection.cuh ../common/headers/tma_help
 BASE_TARGETS = baseline_cluster_group optimized_cluster_group \
                baseline_cluster_group_no_dsmem optimized_cluster_group_no_dsmem \
                optimized_cluster_group_single_cta \
-               optimized_cluster_group_dram_partial_cluster_sync_no_dsmem \
                baseline_cooperative_persistent optimized_cooperative_persistent \
                baseline_double_buffered_pipeline optimized_double_buffered_pipeline \
                baseline_warp_specialized_pipeline optimized_warp_specialized_pipeline \
                optimized_warp_specialized_pipeline_enhanced \
-               baseline_warp_specialized_cluster_pipeline optimized_warp_specialized_cluster_pipeline
+               baseline_warp_specialized_cluster_pipeline optimized_warp_specialized_cluster_pipeline \
+               tma_2d_pipeline_blackwell
+
+# Guard optional demos that are not shipped on every branch.
+ifneq ($(wildcard optimized_cluster_group_dram_partial_cluster_sync_no_dsmem.cu),)
+BASE_TARGETS += optimized_cluster_group_dram_partial_cluster_sync_no_dsmem
+else
+$(info Skipping optimized_cluster_group_dram_partial_cluster_sync_no_dsmem – source missing)
+endif
+
+# Grace-Blackwell (sm_121) exposes clusters but not DSMEM/tensormap. Skip DSMEM binaries to
+# keep the benchmark harness from treating ptxas failures as test failures.
+ifeq ($(findstring sm_121,$(ARCH)),sm_121)
+DSMEM_UNSUPPORTED := 1
+DSMEM_TARGETS := baseline_cluster_group optimized_cluster_group optimized_cluster_group_single_cta baseline_warp_specialized_cluster_pipeline optimized_warp_specialized_cluster_pipeline
+BASE_TARGETS := $(filter-out $(DSMEM_TARGETS),$(BASE_TARGETS))
+$(info Skipping DSMEM targets ($(DSMEM_TARGETS)) on $(ARCH) – DSMEM unavailable)
+endif
 
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
@@ -78,6 +94,9 @@ baseline_warp_specialized_cluster_pipeline$(SUFFIX): baseline_warp_specialized_c
 
 optimized_warp_specialized_cluster_pipeline$(SUFFIX): optimized_warp_specialized_cluster_pipeline.cu $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
+
+tma_2d_pipeline_blackwell$(SUFFIX): tma_2d_pipeline_blackwell.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(INCLUDES) -lcuda -o $@ $<
 
 # Legacy target name for double_buffered_pipeline (without suffix)
 double_buffered_pipeline: baseline_double_buffered_pipeline$(SUFFIX)

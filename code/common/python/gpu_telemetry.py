@@ -12,7 +12,7 @@ import os
 import shutil
 import subprocess
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import torch
 
@@ -45,18 +45,20 @@ def _ensure_nvml_initialized() -> bool:
 
 _NVIDIA_SMI = shutil.which("nvidia-smi")
 
-_QUERY_FIELDS = ",".join(
-    [
-        "temperature.gpu",
-        "temperature.memory",
-        "power.draw",
-        "fan.speed",
-        "utilization.gpu",
-        "utilization.memory",
-        "clocks.current.graphics",
-        "clocks.current.memory",
-    ]
-)
+_QUERY_FIELD_LIST: List[str] = [
+    "temperature.gpu",
+    "temperature.memory",
+    "power.draw",
+    "fan.speed",
+    "utilization.gpu",
+    "utilization.memory",
+    "clocks.current.graphics",
+    "clocks.current.memory",
+    # NVLink counters are sourced via NVML per-link queries, not nvidia-smi.
+]
+_QUERY_FIELDS = ",".join(_QUERY_FIELD_LIST)
+
+_NVLINK_COUNTER_CONFIGURED: Dict[int, bool] = {}
 
 
 def _resolve_physical_gpu_index(logical_index: int) -> int:
@@ -104,6 +106,12 @@ def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optiona
         "utilization_memory_pct": None,
         "graphics_clock_mhz": None,
         "memory_clock_mhz": None,
+        "nvlink_tx_gbps": None,
+        "nvlink_rx_gbps": None,
+        "nvlink_tx_bytes_total": None,
+        "nvlink_rx_bytes_total": None,
+        "nvlink_link_count": None,
+        "nvlink_status": "unknown",
     }
 
     if not torch.cuda.is_available():
@@ -115,11 +123,15 @@ def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optiona
     nvml_metrics = _query_via_nvml(logical_index)
     if nvml_metrics is not None:
         metrics.update(nvml_metrics)
+        # NVLink counters come solely from NVML; if missing, mark status.
+        if metrics["nvlink_tx_bytes_total"] is None or metrics["nvlink_rx_bytes_total"] is None:
+            metrics["nvlink_status"] = "nvlink_counters_missing"
         return metrics
 
     smi_metrics = _query_via_nvidia_smi(logical_index)
     if smi_metrics is not None:
         metrics.update(smi_metrics)
+    metrics["nvlink_status"] = "nvml_unavailable"
     return metrics
 
 
@@ -149,7 +161,7 @@ def _query_via_nvml(logical_index: int) -> Optional[Dict[str, Optional[float]]]:
     graphics_clock = safe(lambda: pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM))  # type: ignore[attr-defined]
     memory_clock = safe(lambda: pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM))  # type: ignore[attr-defined]
 
-    return {
+    metrics: Dict[str, Optional[float]] = {
         "temperature_gpu_c": float(temp_gpu) if temp_gpu is not None else None,
         "temperature_memory_c": float(temp_mem) if temp_mem is not None else None,
         "power_draw_w": float(power_draw) / 1000.0 if power_draw is not None else None,
@@ -158,9 +170,16 @@ def _query_via_nvml(logical_index: int) -> Optional[Dict[str, Optional[float]]]:
         "utilization_memory_pct": float(utilization.memory) if getattr(utilization, "memory", None) is not None else None,  # type: ignore[attr-defined]
         "graphics_clock_mhz": float(graphics_clock) if graphics_clock is not None else None,
         "memory_clock_mhz": float(memory_clock) if memory_clock is not None else None,
+        "nvlink_tx_gbps": None,
+        "nvlink_rx_gbps": None,
+        "nvlink_tx_bytes_total": None,
+        "nvlink_rx_bytes_total": None,
     }
 
-
+    nvlink_totals = _query_nvlink_counters_via_nvml(handle, logical_index)
+    if nvlink_totals:
+        metrics.update(nvlink_totals)
+    return metrics
 def _query_via_nvidia_smi(logical_index: int) -> Optional[Dict[str, Optional[float]]]:
     if _NVIDIA_SMI is None:
         return None
@@ -187,7 +206,7 @@ def _query_via_nvidia_smi(logical_index: int) -> Optional[Dict[str, Optional[flo
         return None
 
     parts = [p.strip() for p in result.stdout.strip().split(",")]
-    if len(parts) != len(_QUERY_FIELDS.split(",")):
+    if len(parts) != len(_QUERY_FIELD_LIST):
         return None
 
     def _to_float(value: str) -> Optional[float]:
@@ -198,26 +217,95 @@ def _query_via_nvidia_smi(logical_index: int) -> Optional[Dict[str, Optional[flo
         except ValueError:
             return None
 
-    (
-        temp_gpu,
-        temp_mem,
-        power_draw,
-        fan_speed,
-        util_gpu,
-        util_mem,
-        clock_graphics,
-        clock_mem,
-    ) = (_to_float(p) for p in parts)
+    values = [_to_float(p) for p in parts]
+    metrics = {
+        "temperature_gpu_c": values[0],
+        "temperature_memory_c": values[1],
+        "power_draw_w": values[2],
+        "fan_speed_pct": values[3],
+        "utilization_gpu_pct": values[4],
+        "utilization_memory_pct": values[5],
+        "graphics_clock_mhz": values[6],
+        "memory_clock_mhz": values[7],
+        "nvlink_tx_bytes_total": values[8] if len(values) > 8 else None,
+        "nvlink_rx_bytes_total": values[9] if len(values) > 9 else None,
+    }
+    return metrics
+
+
+def _extract_field_value(entry) -> Optional[float]:
+    if entry is None:
+        return None
+    if entry.nvmlReturn != getattr(pynvml, "NVML_SUCCESS", 0):
+        return None
+    value_type = entry.valueType
+    val = entry.value
+    if value_type == getattr(pynvml, "NVML_VALUE_TYPE_DOUBLE", 0):
+        return float(val.dVal)
+    if value_type == getattr(pynvml, "NVML_VALUE_TYPE_UNSIGNED_INT", 1):
+        return float(val.uiVal)
+    if value_type == getattr(pynvml, "NVML_VALUE_TYPE_UNSIGNED_LONG", 2):
+        return float(val.ulVal)
+    if value_type == getattr(pynvml, "NVML_VALUE_TYPE_UNSIGNED_LONG_LONG", 3):
+        return float(val.ullVal)
+    if value_type == getattr(pynvml, "NVML_VALUE_TYPE_SIGNED_LONG_LONG", 4):
+        return float(val.sllVal)
+    return None
+
+
+def _query_nvlink_counters_via_nvml(handle, logical_index: int) -> Optional[Dict[str, Optional[float]]]:
+    if not _NVML_AVAILABLE:
+        return None
+    try:
+        max_links = getattr(pynvml, "NVML_NVLINK_MAX_LINKS", 12)
+    except Exception:
+        max_links = 12
+
+    status = "ok"
+
+    if logical_index not in _NVLINK_COUNTER_CONFIGURED:
+        control_cls = getattr(pynvml, "nvmlNvLinkUtilizationControl_t", None)
+        unit_bytes = getattr(pynvml, "NVML_NVLINK_COUNTER_UNIT_BYTES", None)
+        pkt_all = getattr(pynvml, "NVML_NVLINK_COUNTER_PKTFILTER_ALL", None)
+        if control_cls and unit_bytes is not None and pkt_all is not None:
+            ctrl = control_cls()
+            ctrl.units = unit_bytes
+            ctrl.pktfilter = pkt_all
+            for link in range(max_links):
+                try:
+                    pynvml.nvmlDeviceSetNvLinkUtilizationControl(handle, link, 0, ctrl, 0)  # type: ignore[attr-defined]
+                except Exception:
+                    continue
+        _NVLINK_COUNTER_CONFIGURED[logical_index] = True
+
+    total_rx = 0.0
+    total_tx = 0.0
+    active_links = 0
+    for link in range(max_links):
+        try:
+            state = pynvml.nvmlDeviceGetNvLinkState(handle, link)  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        if not state:
+            continue
+        try:
+            rx, tx = pynvml.nvmlDeviceGetNvLinkUtilizationCounter(handle, link, 0)  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        total_rx += float(rx)
+        total_tx += float(tx)
+        active_links += 1
+
+    if active_links == 0:
+        status = "nvlink_disabled"
+    if total_rx == 0.0 and total_tx == 0.0:
+        status = "nvlink_counters_missing"
 
     return {
-        "temperature_gpu_c": temp_gpu,
-        "temperature_memory_c": temp_mem,
-        "power_draw_w": power_draw,
-        "fan_speed_pct": fan_speed,
-        "utilization_gpu_pct": util_gpu,
-        "utilization_memory_pct": util_mem,
-        "graphics_clock_mhz": clock_graphics,
-        "memory_clock_mhz": clock_mem,
+        "nvlink_tx_bytes_total": total_tx if total_tx > 0 else None,
+        "nvlink_rx_bytes_total": total_rx if total_rx > 0 else None,
+        "nvlink_link_count": float(active_links),
+        "nvlink_status": status,
     }
 
 

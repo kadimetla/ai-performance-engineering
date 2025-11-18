@@ -44,7 +44,7 @@ from common.python.benchmark_models import BenchmarkResult, MemoryStats
 
 PYDANTIC_AVAILABLE = True
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode, ExecutionMode
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkConfig, BenchmarkMode, ExecutionMode
 
 
 def run_benchmark_isolated(

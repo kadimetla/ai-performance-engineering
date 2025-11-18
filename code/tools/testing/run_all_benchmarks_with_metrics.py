@@ -39,7 +39,7 @@ from tools.testing.run_all_benchmarks import (
     ensure_cuda_executables_built, reset_cuda_state,
     format_time_ms
 )
-from tools.verification.verify_all_benchmarks import resolve_target_chapters
+from tools.verification.verify_all_benchmarks import chapter_slug, resolve_target_chapters
 
 
 @dataclass
@@ -334,7 +334,7 @@ def test_benchmark_pair_with_metrics(
     harness: BenchmarkHarness
 ) -> BenchmarkStatus:
     """Test a benchmark pair with full metric collection."""
-    chapter_name = chapter_dir.name
+    chapter_name = chapter_slug(chapter_dir, repo_root)
     status = BenchmarkStatus(
         chapter=chapter_name,
         example=example_name,
@@ -438,7 +438,7 @@ def test_cuda_pair_with_metrics(
     profiling_output_dir: Path
 ) -> BenchmarkStatus:
     """Test a CUDA benchmark pair with full metric collection."""
-    chapter_name = chapter_dir.name
+    chapter_name = chapter_slug(chapter_dir, repo_root)
     status = BenchmarkStatus(
         chapter=chapter_name,
         example=example_name,
@@ -526,9 +526,9 @@ def test_chapter_with_metrics(chapter_dir: Path, example_filters: Optional[Set[s
     """Test benchmarks in a chapter with full metric tracking."""
     dump_environment_and_capabilities()
     
-    chapter_name = chapter_dir.name
+    chapter_id = chapter_slug(chapter_dir, repo_root)
     print(f"\n{'='*80}")
-    print(f"Testing {chapter_name.upper()} with Full Metrics")
+    print(f"Testing {chapter_id.upper()} with Full Metrics")
     print(f"{'='*80}")
     
     if not torch.cuda.is_available():
@@ -538,7 +538,7 @@ def test_chapter_with_metrics(chapter_dir: Path, example_filters: Optional[Set[s
     reset_cuda_state()
     
     # Set up profiling output directory
-    profiling_output_dir = repo_root / "benchmark_profiles" / chapter_name
+    profiling_output_dir = repo_root / "benchmark_profiles" / Path(chapter_id)
     if check_nsys_available() or check_ncu_available():
         profiling_output_dir.mkdir(parents=True, exist_ok=True)
         print(f"  Profiling enabled: profiles saved to {profiling_output_dir}")
@@ -738,7 +738,7 @@ def main():
         if not chapter_dir.exists():
             continue
         
-        example_filters = chapter_filters.get(chapter_dir.name)
+        example_filters = chapter_filters.get(chapter_slug(chapter_dir, repo_root))
         statuses = test_chapter_with_metrics(chapter_dir, example_filters=example_filters)
         all_statuses.extend(statuses)
     

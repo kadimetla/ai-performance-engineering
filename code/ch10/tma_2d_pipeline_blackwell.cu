@@ -21,6 +21,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -54,7 +55,7 @@ __device__ void compute_on_tile(float* tile, int pitch, int rows, int cols) {
 }
 
 template <int TILE_N_VALUE, int CHUNK_M_VALUE>
-__global__ void tma_2d_pipeline_fallback_kernel(
+__global__ void tma_2d_pipeline_baseline_kernel(
     const float* __restrict__ A,
     float* __restrict__ C,
     int M,
@@ -108,7 +109,7 @@ template <int TILE_N_VALUE, int CHUNK_M_VALUE, int PIPELINE_STAGES_VALUE>
 __global__ void tma_2d_pipeline_kernel(
     const __grid_constant__ CUtensorMap in_desc,
     const __grid_constant__ CUtensorMap out_desc,
-    float* __restrict__ fallback_out,
+    float* __restrict__ baseline_out,
     int M,
     int N,
     int ldc) {
@@ -218,7 +219,7 @@ __global__ void tma_2d_pipeline_kernel(
                     if (global_col >= N) {
                         continue;
                     }
-                    fallback_out[global_row * ldc + global_col] = tile_ptr[r * TILE_N_VALUE + c];
+                    baseline_out[global_row * ldc + global_col] = tile_ptr[r * TILE_N_VALUE + c];
                 }
             }
             __syncthreads();
@@ -231,15 +232,41 @@ __global__ void tma_2d_pipeline_kernel(
     }
 }
 
-int main() {
+namespace {
+
+void print_usage(const char* argv0) {
+    std::printf("Usage: %s [--baseline-only] [--help]\n", argv0);
+    std::printf("  --baseline-only  Disable Tensor Memory Accelerator path even if supported.\n");
+    std::printf("  --help           Show this message and exit.\n");
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
     std::printf("=== Blackwell TMA 2D Pipeline ===\n\n");
+
+    bool baseline_only = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--baseline-only") == 0) {
+            baseline_only = true;
+        } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else {
+            std::printf("Unrecognized argument: %s\n\n", argv[i]);
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
 
     // Check if device supports TMA (Hopper/Blackwell)
     bool tma_supported = device_supports_tma();
-    bool enable_tma = tma_supported;  // Enable by default if supported
+    bool enable_tma = tma_supported && !baseline_only;  // Enable by default if supported
     
     if (!tma_supported) {
-        std::printf("ℹ️  Device does not support Hopper/Blackwell TMA; using fallback pipeline.\n");
+        std::printf("ℹ️  Device does not support Hopper/Blackwell TMA; running baseline pipeline.\n");
+    } else if (baseline_only) {
+        std::printf("ℹ️  --baseline-only supplied. TMA path disabled for comparison.\n");
     }
 
     PFN_cuTensorMapEncodeTiled_v12000 encode = nullptr;
@@ -306,7 +333,7 @@ int main() {
             break;
         }
         if (selected.tile_n == 0) {
-            std::printf("⚠️  No viable TMA configuration fits shared-memory limits on this device; using fallback pipeline.\n");
+            std::printf("⚠️  No viable TMA configuration fits shared memory limits on this device; running baseline pipeline.\n");
             enable_tma = false;
         } else {
             std::printf("Selected TMA configuration: width=%d, chunk=%d, stages=%d (shared mem %.0f bytes)\n",
@@ -341,12 +368,12 @@ int main() {
                           selected.chunk_m,
                           CU_TENSOR_MAP_SWIZZLE_NONE);
         if (!enable_tma) {
-            std::printf("⚠️  Descriptor creation failed; reverting to fallback pipeline.\n");
+            std::printf("⚠️  Descriptor creation failed; reverting to baseline pipeline.\n");
         }
     }
 
-    const PipelineOption fallback_option = enable_tma ? selected : PipelineOption{64, 32, 1};
-    const int tile_width = enable_tma ? selected.tile_n : fallback_option.tile_n;
+    const PipelineOption baseline_option = enable_tma ? selected : PipelineOption{64, 32, 1};
+    const int tile_width = enable_tma ? selected.tile_n : baseline_option.tile_n;
 
     dim3 block(32, 4, 1);  // 128 threads
     dim3 grid(
@@ -372,28 +399,28 @@ int main() {
         check_cuda(cudaDeviceSynchronize(), "tma kernel sync");
     };
 
-    auto launch_fallback = [&](const PipelineOption& option) {
+    auto launch_baseline = [&](const PipelineOption& option) {
         if (option.tile_n == 128 && option.chunk_m == 64) {
-            tma_2d_pipeline_fallback_kernel<128, 64><<<grid, block>>>(d_in, d_out, M, N, N, N);
+            tma_2d_pipeline_baseline_kernel<128, 64><<<grid, block>>>(d_in, d_out, M, N, N, N);
         } else if (option.tile_n == 128 && option.chunk_m == 32) {
-            tma_2d_pipeline_fallback_kernel<128, 32><<<grid, block>>>(d_in, d_out, M, N, N, N);
+            tma_2d_pipeline_baseline_kernel<128, 32><<<grid, block>>>(d_in, d_out, M, N, N, N);
         } else if (option.tile_n == 64 && option.chunk_m == 64) {
-            tma_2d_pipeline_fallback_kernel<64, 64><<<grid, block>>>(d_in, d_out, M, N, N, N);
+            tma_2d_pipeline_baseline_kernel<64, 64><<<grid, block>>>(d_in, d_out, M, N, N, N);
         } else {
-            tma_2d_pipeline_fallback_kernel<64, 32><<<grid, block>>>(d_in, d_out, M, N, N, N);
+            tma_2d_pipeline_baseline_kernel<64, 32><<<grid, block>>>(d_in, d_out, M, N, N, N);
         }
-        check_cuda(cudaGetLastError(), "tma_2d_pipeline_fallback_kernel launch");
-        check_cuda(cudaDeviceSynchronize(), "fallback kernel sync");
+        check_cuda(cudaGetLastError(), "tma_2d_pipeline_baseline launch");
+        check_cuda(cudaDeviceSynchronize(), "baseline pipeline sync");
     };
 
     // Warmup
     if (enable_tma) {
         launch_tma();
     } else {
-        launch_fallback(fallback_option);
+        launch_baseline(baseline_option);
     }
     
-    // Benchmark TMA vs fallback
+    // Benchmark TMA vs baseline
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -413,25 +440,30 @@ int main() {
         tma_ms /= iterations;
     }
     
-    // Benchmark fallback path
-    float fallback_ms = 0;
+    // Benchmark baseline path
+    float baseline_ms = 0;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; ++i) {
-        launch_fallback(fallback_option);
+        launch_baseline(baseline_option);
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&fallback_ms, start, stop);
-    fallback_ms /= iterations;
+    cudaEventElapsedTime(&baseline_ms, start, stop);
+    baseline_ms /= iterations;
     
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
     
-    // Calculate speedup (if TMA available)
+    // Report measured runtimes for harness parsing.
     if (enable_tma && tma_ms > 0) {
-        float speedup = fallback_ms / tma_ms;
-        std::printf("Performance: TMA %.2f ms vs fallback %.2f ms\n", tma_ms, fallback_ms);
+        std::printf("TMA runtime: %.2f ms\n", tma_ms);
+    }
+    std::printf("Baseline runtime: %.2f ms\n", baseline_ms);
+    if (enable_tma && tma_ms > 0) {
+        float speedup = baseline_ms / tma_ms;
         std::printf("Speedup: %.2fx\n", speedup);  // PARSEABLE by game_hooks.py
+    } else {
+        std::printf("Speedup: 1.00x (TMA disabled)\n");
     }
 
     std::vector<float> h_out(TILE_M * tile_width);
@@ -450,7 +482,7 @@ int main() {
         std::printf("✓ Descriptor-backed TMA transfers with L2 promotion enabled\n");
         std::printf("✓ cuda::barrier orchestrates staging and overlap between compute and TMA IO\n");
     } else {
-        std::printf("✓ Fallback cuda::memcpy_async pipeline executed (no TMA descriptors used)\n");
+        std::printf("✓ Baseline pipeline executed with cooperative loads (no TMA descriptors used)\n");
         std::printf("✓ Kernel remains safe for profiling while descriptor support is unavailable\n");
     }
 

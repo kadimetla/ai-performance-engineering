@@ -9,6 +9,8 @@ import warnings
 from collections import defaultdict
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, cast
+import os
+from contextlib import contextmanager
 
 import torch
 
@@ -173,9 +175,174 @@ def compile_model(module: torch.nn.Module, **kwargs: Any) -> torch.nn.Module:
     if getattr(module, "_is_compiled_benchmark_module", False):
         return module
 
-    compiled = compile_callable(module, **kwargs)
+    if torch.cuda.is_available():
+        try:
+            major, _ = torch.cuda.get_device_capability()
+        except Exception:
+            major = None
+        if major is not None and major >= 12 and os.environ.get("AIPERF_FORCE_TORCH_COMPILE") != "1":
+            _log_once(
+                "torch.compile skipped on SM>=12 – Triton/Inductor kernels are not yet "
+                "available for this architecture. Set AIPERF_FORCE_TORCH_COMPILE=1 to override."
+            )
+            return module
+
+    try:
+        compiled = compile_callable(module, **kwargs)
+    except Exception as exc:
+        message = str(exc)
+        major_minor = None
+        if torch.cuda.is_available():
+            try:
+                major_minor = torch.cuda.get_device_capability()
+            except Exception:
+                major_minor = None
+        major = major_minor[0] if major_minor else None
+        if (
+            ("NoTritonConfigsError" in message)
+            or ("ptxas fatal" in message)
+            or ("sm_121" in message)
+            or (major is not None and major >= 12)
+        ):
+            _log_once(
+                "torch.compile disabled for this model – current Triton/PTX toolchain "
+                "cannot target the active SM. Falling back to eager mode."
+            )
+            return module
+        raise
     setattr(compiled, "_is_compiled_benchmark_module", True)
     return compiled
+
+
+def _current_matmul_precision() -> Optional[str]:
+    backend = getattr(torch.backends.cuda, "matmul", None)
+    if backend is not None and hasattr(backend, "fp32_precision"):
+        try:
+            return str(getattr(backend, "fp32_precision"))
+        except Exception:
+            pass
+    try:
+        return torch.get_float32_matmul_precision()
+    except Exception:
+        return None
+
+
+def _current_cudnn_precision() -> Optional[str]:
+    cudnn_conv = getattr(torch.backends.cudnn, "conv", None)
+    if cudnn_conv is not None and hasattr(cudnn_conv, "fp32_precision"):
+        try:
+            return str(getattr(cudnn_conv, "fp32_precision"))
+        except Exception:
+            pass
+    return None
+
+
+def _set_matmul_precision(precision: str) -> None:
+    matmul_backend = getattr(torch.backends.cuda, "matmul", None)
+    if matmul_backend is not None and hasattr(matmul_backend, "fp32_precision"):
+        try:
+            backend_mut = cast(Any, matmul_backend)
+            backend_mut.fp32_precision = precision
+        except RuntimeError:
+            pass
+    try:
+        torch.set_float32_matmul_precision(precision)
+    except Exception:
+        pass
+
+
+def _set_cudnn_precision(precision: str) -> None:
+    cudnn_conv = getattr(torch.backends.cudnn, "conv", None)
+    if cudnn_conv is not None and hasattr(cudnn_conv, "fp32_precision"):
+        try:
+            cudnn_mut = cast(Any, cudnn_conv)
+            cudnn_mut.fp32_precision = precision
+        except RuntimeError:
+            pass
+
+
+def _normalize_precision(value: Optional[str], enable: Optional[bool]) -> Optional[str]:
+    if value is not None:
+        normalized = value.lower()
+        if normalized in ("tf32", "high", "enable", "on", "true"):
+            return "high"
+        if normalized in ("fp32", "highest", "disable", "off", "false"):
+            return "highest"
+        if normalized in ("medium",):
+            return normalized
+        return value
+    if enable is None:
+        return None
+    return "high" if enable else "highest"
+
+
+def configure_tf32(
+    *,
+    enable_matmul: Optional[bool] = None,
+    enable_cudnn: Optional[bool] = None,
+    matmul_precision: Optional[str] = None,
+    cudnn_precision: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Apply TF32 settings via the PyTorch 2.10 precision APIs."""
+    if not torch.cuda.is_available():
+        return (None, None)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*Please use the new API settings to control TF32.*",
+            category=UserWarning,
+        )
+        _patch_legacy_tf32_attributes()
+        previous = (_current_matmul_precision(), _current_cudnn_precision())
+
+        new_matmul = _normalize_precision(matmul_precision, enable_matmul)
+        new_cudnn = _normalize_precision(cudnn_precision, enable_cudnn)
+
+        if new_matmul is not None:
+            _set_matmul_precision(new_matmul)
+        if new_cudnn is not None:
+            _set_cudnn_precision(new_cudnn)
+
+        matmul_enabled = (new_matmul or previous[0] or "").lower() == "high"
+        cudnn_enabled = (new_cudnn or previous[1] or "").lower() == "high"
+        _mirror_legacy_tf32_flags(matmul_enabled, cudnn_enabled)
+
+    return previous
+
+
+def restore_tf32(state: Tuple[Optional[str], Optional[str]]) -> None:
+    """Restore TF32 state captured via configure_tf32."""
+    if not torch.cuda.is_available():
+        return
+    prev_matmul, prev_cudnn = state
+    if prev_matmul is not None:
+        _set_matmul_precision(prev_matmul)
+    if prev_cudnn is not None:
+        _set_cudnn_precision(prev_cudnn)
+    matmul_enabled = (prev_matmul or "").lower() == "high"
+    cudnn_enabled = (prev_cudnn or "").lower() == "high"
+    _mirror_legacy_tf32_flags(matmul_enabled, cudnn_enabled)
+
+
+@contextmanager
+def tf32_override(
+    *,
+    enable_matmul: Optional[bool] = None,
+    enable_cudnn: Optional[bool] = None,
+    matmul_precision: Optional[str] = None,
+    cudnn_precision: Optional[str] = None,
+):
+    state = configure_tf32(
+        enable_matmul=enable_matmul,
+        enable_cudnn=enable_cudnn,
+        matmul_precision=matmul_precision,
+        cudnn_precision=cudnn_precision,
+    )
+    try:
+        yield
+    finally:
+        restore_tf32(state)
 
 
 def enable_tf32(
@@ -186,51 +353,21 @@ def enable_tf32(
 ) -> None:
     """
     Configure TF32 execution using the new PyTorch 2.10 APIs only.
-
-    Parameters
-    ----------
-    matmul_precision:
-        Precision setting forwarded to ``torch.backends.cuda.matmul.fp32_precision``.
-    cudnn_precision:
-        Precision setting forwarded to ``torch.backends.cudnn.conv.fp32_precision``.
-    set_global_precision:
-        When True, call ``torch.set_float32_matmul_precision('high')`` to
-        ensure matmul kernels fall back to TF32-capable tensor cores.
     """
     if not torch.cuda.is_available():
         return
 
-    # Suppress TF32 API deprecation warnings
-    # PyTorch internally uses deprecated APIs when set_float32_matmul_precision is called
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*Please use the new API settings to control TF32.*", category=UserWarning)
-
-        _patch_legacy_tf32_attributes()
-        
-        matmul_backend = getattr(torch.backends.cuda, "matmul", None)
-        if matmul_backend is not None and hasattr(matmul_backend, "fp32_precision"):
-            try:
-                backend_mut = cast(Any, matmul_backend)
-                backend_mut.fp32_precision = matmul_precision
-            except RuntimeError:
-                pass
-
-        cudnn_conv = getattr(torch.backends.cudnn, "conv", None)
-        if cudnn_conv is not None and hasattr(cudnn_conv, "fp32_precision"):
-            try:
-                cudnn_mut = cast(Any, cudnn_conv)
-                cudnn_mut.fp32_precision = cudnn_precision
-            except RuntimeError:
-                pass
-
-        # Mirror new TF32 settings onto legacy attributes without invoking the old API.
-        # This prevents PyTorch internals (e.g., torch.compile) from reading the legacy
-        # allow_tf32 accessors, which would otherwise raise a mixing error once the new
-        # API has been used.
-    _mirror_legacy_tf32_flags(
-        matmul_precision == "tf32",
-        cudnn_precision == "tf32",
+    state = configure_tf32(
+        matmul_precision=matmul_precision,
+        cudnn_precision=cudnn_precision,
     )
+    if set_global_precision:
+        target = _normalize_precision(matmul_precision, None) or "high"
+        try:
+            torch.set_float32_matmul_precision(target)
+        except Exception:
+            pass
+    # state unused but kept for signature compatibility
 
 
 @lru_cache()

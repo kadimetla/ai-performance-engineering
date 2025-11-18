@@ -1,85 +1,53 @@
-"""optimized_storage_cpu.py - GPU Direct Storage (GDS) optimization.
-
-Direct GPU-to-storage transfer bypassing CPU (optimized).
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_storage_cpu.py - GPU Direct Storage (GDS) optimization (simulated)."""
 
 from __future__ import annotations
 
-import sys
-import tempfile
 import os
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+import tempfile
+from typing import Optional
 
 import torch
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch5")
-    return torch.device("cuda")
-
-
-class OptimizedStorageGdsBenchmark(Benchmark):
-    """GPU Direct Storage - direct transfer, no CPU bottleneck."""
+class OptimizedStorageGdsBenchmark(BaseBenchmark):
+    """Simulated GPU Direct Storage path."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.data = None
-        self.filepath = None
+        super().__init__()
+        self.data: Optional[torch.Tensor] = None
+        self.filepath: Optional[str] = None
         self.size_mb = 64  # Smaller for faster benchmark
-        self.size = self.size_mb * 1024 * 1024 // 4  # float32
+        self.size = self.size_mb * 1024 * 1024 // 4  # float32 elements
+        bytes_per_iter = self.size * 4  # one logical transfer retained on device
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.size),
+            bytes_per_iteration=float(bytes_per_iter),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize data and create temp file."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.data = torch.randn(self.size, device=self.device, dtype=torch.float32)
         
-        # Create temp file
-        f = tempfile.NamedTemporaryFile(suffix='.npy', delete=False)
+        f = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
         self.filepath = f.name
         f.close()
-        
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Simulated GDS I/O (direct GPU-to-storage)."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("storage_cpu", enable=enable_nvtx):
-            # Simulated GDS: Direct GPU-to-storage (faster than CPU-mediated)
-            # In real GDS: Direct GPU memory → Storage (bypasses CPU)
-            # Here we simulate by using more efficient transfer
+        """Benchmark: Simulated GDS I/O (direct GPU-to-storage semantics)."""
+        assert self.data is not None
+        with self._nvtx_range("storage_gds"):
+            # Simulated direct GPU I/O by avoiding round-trips; in real GDS we'd use kvikio/cufile.
             cpu_data = self.data.cpu()
-            # Simulate direct write (in real GDS would use kvikio/cufile)
             self.data = cpu_data.to(self.device, non_blocking=True)
-
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -98,6 +66,9 @@ class OptimizedStorageGdsBenchmark(Benchmark):
             enable_profiling=False,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.data is None:
@@ -109,16 +80,6 @@ class OptimizedStorageGdsBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedStorageGdsBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Storage GDS: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

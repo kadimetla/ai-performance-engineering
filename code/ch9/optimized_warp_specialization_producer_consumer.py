@@ -1,7 +1,7 @@
 """optimized_warp_specialization.py - Warp specialization with custom Triton kernels.
 
 Demonstrates warp specialization using custom Triton kernels with producer/consumer pattern.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -54,21 +54,15 @@ from typing import Optional
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch9")
-    return torch.device("cuda")
-
-
-class OptimizedWarpSpecializationProducerConsumerBenchmark(Benchmark):
+class OptimizedWarpSpecializationProducerConsumerBenchmark(BaseBenchmark):
     """
     Optimized: Warp specialization with producer/consumer pattern.
     
@@ -78,12 +72,17 @@ class OptimizedWarpSpecializationProducerConsumerBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.producer_model = None
         self.consumer_model = None
         self.input = None
         self.use_triton = TRITON_AVAILABLE
         self.use_cuda_extension = CUDA_EXTENSION_AVAILABLE
+        elements = 1024 * 2048
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(elements),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize models with warp specialization."""
@@ -107,17 +106,14 @@ class OptimizedWarpSpecializationProducerConsumerBenchmark(Benchmark):
         
         # Larger workload to better demonstrate warp specialization benefits
         self.input = torch.randn(1024, 2048, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Warp specialization with custom Triton kernels."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
         # FAIL FAST: No fallbacks - REAL warp specialization required
         if not TRITON_WARP_SPEC_AVAILABLE:
             raise RuntimeError(
@@ -127,7 +123,8 @@ class OptimizedWarpSpecializationProducerConsumerBenchmark(Benchmark):
                 "NOTE: CUDA extension has Pipeline API synchronization issues (hanging)."
             )
         
-        with nvtx_range("optimized_warp_specialization_producer_consumer", enable=enable_nvtx):
+        assert self.consumer_model is not None and self.input is not None
+        with self._nvtx_range("optimized_warp_specialization_producer_consumer"):
             with torch.no_grad():
                 # REAL warp specialization: Use Triton kernel with warp_specialize=True
                 # Based on Chapter 14's Triton warp specialization examples
@@ -138,12 +135,13 @@ class OptimizedWarpSpecializationProducerConsumerBenchmark(Benchmark):
                 # Apply consumer stage (same shape as input, so consumer processes it)
                 output = self.consumer_model(intermediate)
                 _ = output.sum()
+        self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.consumer_model = None
         self.input = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -164,7 +162,7 @@ class OptimizedWarpSpecializationProducerConsumerBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedWarpSpecializationProducerConsumerBenchmark()
 

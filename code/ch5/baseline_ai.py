@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Optional
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
 
 import torch
 import torch.nn as nn
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-
-
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch5 ai example")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
 class TinyBlock(nn.Module):
@@ -33,30 +21,33 @@ class TinyBlock(nn.Module):
         return self.linear2(self.relu(self.linear1(x)))
 
 
-class BaselineAIBenchmark(Benchmark):
+class BaselineAIBenchmark(BaseBenchmark):
     """Runs several tiny blocks sequentially with CPU sync between them."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.blocks = nn.ModuleList(TinyBlock(1024).to(self.device) for _ in range(4))
         self.inputs: Optional[torch.Tensor] = None
+        self.batch = 512
+        self.hidden = 1024
+        tokens = self.batch * self.hidden
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         torch.manual_seed(0)
-        self.inputs = torch.randn(512, 1024, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self.inputs = torch.randn(self.batch, self.hidden, device=self.device, dtype=torch.float32)
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
         assert self.inputs is not None
-        with nvtx_range("baseline_ai", enable=enable_nvtx):
+        with self._nvtx_range("baseline_ai"):
             out = self.inputs
             for block in self.blocks:
                 out = block(out)
-                torch.cuda.synchronize()
+                self._synchronize()
         return out
 
     def teardown(self) -> None:
@@ -66,22 +57,14 @@ class BaselineAIBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=40, warmup=5)
 
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
         if self.inputs is None:
             return "Inputs missing"
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return BaselineAIBenchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=5, warmup=1),
-    )
-    result = harness.benchmark(get_benchmark())
-    print(f"\nBaseline AI latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

@@ -1,9 +1,4 @@
-"""baseline_graph_bandwidth.py - Separate kernel launches for bandwidth measurement (baseline).
-
-Demonstrates bandwidth measurement with separate kernel launches.
-Uses PyTorch CUDA extension for accurate GPU timing with CUDA Events.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_graph_bandwidth.py - Separate kernel launches for bandwidth measurement (baseline)."""
 
 from __future__ import annotations
 
@@ -19,34 +14,32 @@ import torch
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 # Import CUDA extension
 from ch12.cuda_extensions import load_graph_bandwidth_extension
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch12")
-    return torch.device("cuda")
-
-
-class BaselineGraphBandwidthBenchmark(Benchmark):
+class BaselineGraphBandwidthBenchmark(BaseBenchmark):
     """Separate kernel launches - measures bandwidth without graphs (uses CUDA extension)."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.src = None
         self.dst = None
         self.N = 50_000_000
         self.iterations = 10
         self._extension = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N * self.iterations),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
@@ -56,7 +49,7 @@ class BaselineGraphBandwidthBenchmark(Benchmark):
         torch.manual_seed(42)
         self.src = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.dst = torch.empty_like(self.src)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         # Dry run to amortize first-use overhead (extension launch/cuda events)
         self._extension.separate_kernel_launches(self.dst, self.src, 1)
         torch.cuda.synchronize()
@@ -75,7 +68,7 @@ class BaselineGraphBandwidthBenchmark(Benchmark):
         with nvtx_range("graph_bandwidth", enable=enable_nvtx):
             for _ in range(self.iterations):
                 self._extension.separate_kernel_launches(self.dst, self.src, 1)
-                torch.cuda.synchronize()
+                self._synchronize()
 
     
     def teardown(self) -> None:
@@ -94,6 +87,9 @@ class BaselineGraphBandwidthBenchmark(Benchmark):
             setup_timeout_seconds=120,  # CUDA extension compilation can take time
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.dst is None:
@@ -107,7 +103,7 @@ class BaselineGraphBandwidthBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineGraphBandwidthBenchmark()
 

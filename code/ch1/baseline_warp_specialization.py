@@ -1,4 +1,4 @@
-"""baseline warp specialization - Baseline without warp specialization. Implements Benchmark protocol for harness integration."""
+"""baseline warp specialization - Baseline without warp specialization. Implements BaseBenchmark for harness integration."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ except ImportError:
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
 )
 from ch1.workload_config import WORKLOAD
@@ -33,7 +33,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class BaselineWarpSpecializationBenchmark(Benchmark):
+class BaselineWarpSpecializationBenchmark(BaseBenchmark):
     """Baseline: No warp specialization - all warps do same work.
     
     Warp specialization: This baseline does not use warp specialization.
@@ -41,6 +41,7 @@ class BaselineWarpSpecializationBenchmark(Benchmark):
     """
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
         self.inputs = None
@@ -114,7 +115,7 @@ class BaselineWarpSpecializationBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineWarpSpecializationBenchmark()
 

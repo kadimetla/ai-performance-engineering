@@ -1,4 +1,4 @@
-"""Python harness wrapper for baseline_cutlass_gemm.cu."""
+"""Python harness wrapper for baseline CUTLASS GEMM binary."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from common.python.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
 class BaselineCutlassGemmBenchmark(CudaBinaryBenchmark):
-    """Wraps the baseline CUTLASS GEMM driver."""
+    """Wraps the baseline CUTLASS GEMM kernel."""
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
@@ -22,7 +22,7 @@ class BaselineCutlassGemmBenchmark(CudaBinaryBenchmark):
             chapter_dir=chapter_dir,
             binary_name="baseline_cutlass_gemm",
             friendly_name="Baseline CUTLASS GEMM",
-            iterations=3,
+            iterations=5,
             warmup=1,
             timeout_seconds=120,
         )
@@ -41,4 +41,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline CUTLASS GEMM: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

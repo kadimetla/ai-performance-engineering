@@ -1,6 +1,6 @@
 """baseline_performance.py - Baseline performance benchmark (goodput measurement).
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from common.python.compile_utils import compile_model  # Local helper applies TF
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
 )
 from ch1.workload_config import WORKLOAD
@@ -51,10 +51,11 @@ def _should_use_compile(device: torch.device) -> bool:
     return major < 12
 
 
-class BaselinePerformanceBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+class BaselinePerformanceBenchmark(BaseBenchmark):
+    """Benchmark implementation following BaseBenchmark."""
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
         self.data = None
@@ -162,7 +163,7 @@ class BaselinePerformanceBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselinePerformanceBenchmark()
 

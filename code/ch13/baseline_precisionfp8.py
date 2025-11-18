@@ -3,7 +3,7 @@
 Training with full FP32 precision.
 Higher memory usage and slower computation compared to mixed precision.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -18,15 +18,16 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-
-from typing import Optional
+from typing import Optional, Tuple
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
+from common.python.compile_utils import configure_tf32, restore_tf32
 
 
 def resolve_device() -> torch.device:
@@ -51,11 +52,11 @@ class SimpleModel(nn.Module):
         return x
 
 
-class BaselinePrecisionFP8Benchmark(Benchmark):
+class BaselinePrecisionFP8Benchmark(BaseBenchmark):
     """FP32 precision - full precision training."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.inputs = None
         self.targets = None
@@ -63,20 +64,21 @@ class BaselinePrecisionFP8Benchmark(Benchmark):
         self.criterion = None
         self.batch_size = 256
         self.hidden_dim = 4096
-        self._prev_tf32_matmul: Optional[bool] = None
-        self._prev_tf32_cudnn: Optional[bool] = None
+        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
         self._prev_precision: Optional[str] = None
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize FP32 model and data."""
         torch.manual_seed(42)
 
-        self._prev_tf32_matmul = torch.backends.cuda.matmul.allow_tf32
-        self._prev_tf32_cudnn = torch.backends.cudnn.allow_tf32
         self._prev_precision = torch.get_float32_matmul_precision()
 
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
         torch.set_float32_matmul_precision("highest")
         
         # FP32 model (full precision)
@@ -90,36 +92,31 @@ class BaselinePrecisionFP8Benchmark(Benchmark):
         for _ in range(3):
             self.optimizer.zero_grad()
             _ = self.model(self.inputs)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - FP32 precision."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_precisionfp8", enable=enable_nvtx):
+        with self._nvtx_range("baseline_precisionfp8"):
             self.optimizer.zero_grad()
             outputs = self.model(self.inputs)  # FP32 computation
             loss = self.criterion(outputs, self.targets)
             loss.backward()
             self.optimizer.step()
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.inputs, self.targets, self.optimizer, self.criterion
-        if self._prev_tf32_matmul is not None:
-            torch.backends.cuda.matmul.allow_tf32 = self._prev_tf32_matmul
-        if self._prev_tf32_cudnn is not None:
-            torch.backends.cudnn.allow_tf32 = self._prev_tf32_cudnn
+        if self._tf32_state is not None:
+            restore_tf32(self._tf32_state)
+            self._tf32_state = None
         if self._prev_precision is not None:
             torch.set_float32_matmul_precision(self._prev_precision)  # type: ignore[arg-type]
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -136,7 +133,7 @@ class BaselinePrecisionFP8Benchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselinePrecisionFP8Benchmark()
 

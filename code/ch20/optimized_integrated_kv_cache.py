@@ -3,7 +3,7 @@
 Optimized KV cache integration with paged memory management.
 Efficient memory reuse and reduced fragmentation.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Optional
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
@@ -181,10 +181,11 @@ class AttentionLayer(nn.Module):
         attn_out = attn_out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
         return self.proj(attn_out)
 
-class OptimizedIntegratedKVCacheBenchmark(Benchmark):
+class OptimizedIntegratedKVCacheBenchmark(BaseBenchmark):
     """Integrated KV cache in full inference pipeline."""
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.layers = None
         # Optimization: Compile model for kernel fusion and optimization
@@ -281,7 +282,7 @@ class OptimizedIntegratedKVCacheBenchmark(Benchmark):
             return "Model layers not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedIntegratedKVCacheBenchmark()
 

@@ -18,7 +18,7 @@ apply_env_defaults()
 
 import torch
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkConfig, BenchmarkMode
 from ch20.optimized_autotuning import OptimizedAutotuningBenchmark
 from ch20.optimized_end_to_end_bandwidth import OptimizedEndToEndBandwidthBenchmark
 from ch20.optimized_moe import OptimizedMoeBenchmark
@@ -105,7 +105,7 @@ def test_ch20_compiled_benchmarks_run_with_subprocess(triton_cfg_guard, benchmar
         mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=1,
             enable_profiling=False,
             enable_memory_tracking=False,
         ),

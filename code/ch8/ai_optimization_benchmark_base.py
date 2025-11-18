@@ -12,16 +12,17 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.extension_loader_template import load_cuda_extension
 
 
-class AiOptimizationBenchmarkBase(Benchmark):
+class AiOptimizationBenchmarkBase(BaseBenchmark):
     rows: int = 1 << 13  # 8192 samples
     cols: int = 512
     nvtx_label: str = "ai_optimization"
 
     def __init__(self) -> None:
+        super().__init__()
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA required for Chapter 8 AI optimization benchmarks")
         self.device = torch.device("cuda")

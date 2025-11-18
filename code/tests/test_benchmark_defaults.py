@@ -11,7 +11,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from common.python.benchmark_defaults import BenchmarkDefaults, get_defaults, set_defaults
-from common.python.benchmark_harness import BenchmarkConfig, ExecutionMode
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, ExecutionMode
 
 
 class TestBenchmarkDefaults:

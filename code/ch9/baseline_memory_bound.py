@@ -1,107 +1,78 @@
-"""baseline_memory_bound.py - Memory-bound kernel (low arithmetic intensity).
-
-Simple element-wise operations with low arithmetic intensity.
-AI = 1 FLOP / 8 bytes = 0.125 FLOP/Byte (memory-bound).
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_memory_bound.py - Memory-bound kernel (low arithmetic intensity)."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
+
+import torch
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
+from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch9")
-    return torch.device("cuda")
+class BaselineMemoryBoundBenchmark(BaseBenchmark):
+    """Simple element-wise ops with low arithmetic intensity."""
 
-
-class BaselineMemoryBoundBenchmark(Benchmark):
-    """Memory-bound kernel - low arithmetic intensity."""
-    
     def __init__(self):
-        self.device = resolve_device()
-        self.data = None
-        self.N = 4_000_000  # 4M elements keep runtime reasonable
-    
-    def setup(self) -> None:
-        """Setup: Initialize tensors."""
-        torch.manual_seed(42)
-        self.data = torch.randn(self.N, dtype=torch.float32, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Memory-bound operation (low AI)."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("memory_bound", enable=enable_nvtx):
-            assert self.data is not None
-            # Simulate a poor data-ingest path that round-trips to host memory every step.
-            host_copy = self.data.cpu()  # Blocking device→host copy
-            host_copy.add_(1.0)
-            self.data = host_copy.to(self.device, non_blocking=False)
-            torch.cuda.synchronize()
-
-    
-    def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.data = None
-        torch.cuda.empty_cache()
-    
-    def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
-            enable_memory_tracking=False,
-            enable_profiling=False,
+        super().__init__()
+        self.tensor: Optional[torch.Tensor] = None
+        self.repeats = 64
+        self.N = 16_777_216  # ~64 MB
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.repeats),
+            tokens_per_iteration=float(self.N * self.repeats),
         )
-    
+
+    def setup(self) -> None:
+        torch.manual_seed(42)
+        self.tensor = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize(self.device)
+
+    def benchmark_fn(self) -> None:
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+        with nvtx_range("baseline_memory_bound", enable=enable_nvtx):
+            t = self.tensor
+            for _ in range(self.repeats):
+                t = t * 1.0001 + 0.0001
+            torch.cuda.synchronize(self.device)
+
+    def teardown(self) -> None:
+        self.tensor = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=20, warmup=5)
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.data is None:
-            return "Data tensor not initialized"
-        if self.data.shape[0] != self.N:
-            return f"Data size mismatch: expected {self.N}, got {self.data.shape[0]}"
-        if not torch.isfinite(self.data).all():
-            return "Data contains non-finite values"
+        if self.tensor is None:
+            return "Tensor not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaseBenchmark:
     return BaselineMemoryBoundBenchmark()
 
 
 if __name__ == "__main__":
-    benchmark = get_benchmark()
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
+        config=BaselineMemoryBoundBenchmark().get_config(),
     )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Memory Bound: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+    result = harness.benchmark(get_benchmark())
+    print(f"Baseline memory-bound: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

@@ -12,18 +12,19 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.extension_loader_template import load_cuda_extension
 
 DOUBLE_BUFFER_INNER_LOOPS = 16
 
 
-class DoubleBufferingBenchmarkBase(Benchmark):
+class DoubleBufferingBenchmarkBase(BaseBenchmark):
     block = 256
     tile = 4
     nvtx_label = "double_buffering"
 
     def __init__(self) -> None:
+        super().__init__()
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA required for double buffering benchmarks")
         self.device = torch.device("cuda")

@@ -1,40 +1,17 @@
-"""optimized_dataloader_default.py - Tuned DataLoader optimization (optimized).
-
-Optimized DataLoader with num_workers>0, pin_memory=True, and prefetch_factor.
-Overlaps data loading with GPU computation for better GPU utilization.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_dataloader_default.py - Tuned DataLoader optimization (optimized)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional, Iterator
+from collections import abc
 
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
-from collections.abc import Iterator
-from typing import Optional
-
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
 
 class SyntheticDataset(Dataset):
     """Synthetic dataset for DataLoader benchmarking."""
@@ -54,6 +31,7 @@ class SyntheticDataset(Dataset):
         normalized = enriched - enriched.mean()
         return normalized, self.labels[idx]
 
+
 class SimpleModel(nn.Module):
     """Simple model for training demonstration."""
     
@@ -68,115 +46,79 @@ class SimpleModel(nn.Module):
         x = self.fc2(x)
         return x
 
-class OptimizedDataloaderTunedBenchmark(Benchmark):
+
+class OptimizedDataloaderTunedBenchmark(BaseBenchmark):
     """Optimized DataLoader - tuned for performance."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
-        self.dataloader = None
+        self.dataloader: Optional[DataLoader] = None
         self.optimizer = None
         self.criterion = None
         self.dataset_size = 500
         self.batch_size = 32
         self.feature_dim = 1024
         self._data_iter: Optional[Iterator] = None
-        self._next_batch: Optional[tuple[torch.Tensor, torch.Tensor]] = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.dataset_size // self.batch_size),
+            tokens_per_iteration=float(self.dataset_size * self.feature_dim),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize model and optimized DataLoader."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         torch.manual_seed(42)
         
-        # Keep the model in eager mode so data pipeline overlap dominates the benchmark.
         self.model = SimpleModel(input_dim=self.feature_dim).to(self.device)
         
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.CrossEntropyLoss()
         
-        # Optimized DataLoader with optimal settings
-        # num_workers>0: Multi-threaded data loading (overlaps with GPU computation)
-        # pin_memory=True: Pinned memory for faster CPU-GPU transfer
-        # prefetch_factor: Prefetch batches ahead to hide I/O latency
-        # persistent_workers: Keep workers alive to avoid startup overhead
         dataset = SyntheticDataset(num_samples=self.dataset_size, feature_dim=self.feature_dim)
         self.dataloader = DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=False,  # Disable shuffle for consistent benchmarking
-            num_workers=4,  # Multi-threaded data loading
-            pin_memory=True,  # Pinned memory for faster transfer
-            prefetch_factor=4,  # Increased prefetch for better overlap
-            persistent_workers=True,  # Keep workers alive
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True,
+            prefetch_factor=4,
+            persistent_workers=True,
         )
-        self._data_iter = iter(self.dataloader)
-        self._next_batch: Optional[tuple[torch.Tensor, torch.Tensor]] = None
         
-        # Warmup a few iterations to prime worker pool and the prefetch queue.
-        self._prime_iterator(steps=3)
-        self._next_batch = self._prefetch_next_batch()
+        self._data_iter = iter(self.dataloader)
+
+        for _ in range(2):
+            data, labels = self._next_batch()
+            _ = self.model(data)
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark - optimized DataLoader with overlapping."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        if any(v is None for v in (self.model, self.optimizer, self.criterion, self._data_iter)):
+            raise RuntimeError("Benchmark not configured")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("dataloader_default", enable=enable_nvtx):
-            # Process one batch (optimized DataLoader: overlapped loading)
-            if self._next_batch is None:
-                self._next_batch = self._prefetch_next_batch()
-            data, labels = self._next_batch
-            self._next_batch = self._prefetch_next_batch()
+        with self._nvtx_range("optimized_dataloader_default"):
+            data, labels = self._next_batch()
+            
             self.optimizer.zero_grad()
             outputs = self.model(data)
             loss = self.criterion(outputs, labels)
             loss.backward()
             self.optimizer.step()
+        self._synchronize()
 
     def teardown(self) -> None:
-        """Cleanup."""
-        iterator = getattr(self, "_data_iter", None)
-        if iterator is not None:
-            shutdown = getattr(iterator, "_shutdown_workers", None)
-            if callable(shutdown):
-                try:
-                    shutdown()
-                except Exception:
-                    pass
-        del self.model, self.dataloader, self.optimizer, self.criterion
+        self.model = None
+        self.dataloader = None
+        self.optimizer = None
+        self.criterion = None
         self._data_iter = None
-        self._next_batch = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
-    def _prime_iterator(self, steps: int = 2) -> None:
-        if self._data_iter is None:
-            self._data_iter = iter(self.dataloader)
-        for _ in range(steps):
-            batch = self._prefetch_next_batch()
-            self.optimizer.zero_grad(set_to_none=True)
-            outputs = self.model(batch[0])
-            loss = self.criterion(outputs, batch[1])
-            loss.backward()
-            self.optimizer.step()
-        torch.cuda.synchronize()
-        self._data_iter = iter(self.dataloader)
-    
-    def _prefetch_next_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _next_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+        assert self.dataloader is not None
         if self._data_iter is None:
             self._data_iter = iter(self.dataloader)
         try:
@@ -184,33 +126,25 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
         except StopIteration:
             self._data_iter = iter(self.dataloader)
             data, labels = next(self._data_iter)
-        data = data.to(self.device, non_blocking=True)
-        labels = labels.to(self.device, non_blocking=True)
-        return data, labels
+        return data.to(self.device, non_blocking=True), labels.to(self.device, non_blocking=True)
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=100,
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
         )
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
-    return OptimizedDataloaderTunedBenchmark()
 
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Tuned DataLoader: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+def get_benchmark() -> OptimizedDataloaderTunedBenchmark:
+    """Factory function for harness discovery."""
+    return OptimizedDataloaderTunedBenchmark()

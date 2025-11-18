@@ -17,6 +17,15 @@ from typing import Dict, Optional
 
 import torch
 
+if torch.cuda.is_available():
+    try:
+        _CC_MAJOR, _CC_MINOR = torch.cuda.get_device_capability()
+    except Exception:  # pragma: no cover - defensive
+        _CC_MAJOR = 0
+    _ARCH_PREFERS_BF16 = _CC_MAJOR >= 9
+else:  # CPU-only fallback
+    _ARCH_PREFERS_BF16 = False
+
 try:
     from transformers.cache_utils import QuantizedCacheConfig
     _TRANSFORMERS_HAS_QUANTIZED = True
@@ -138,4 +147,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

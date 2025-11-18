@@ -1,39 +1,13 @@
-"""baseline_autograd_standard.py - Standard autograd baseline (baseline).
-
-Standard PyTorch autograd without compilation.
-No optimization of backward pass.
-
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_autograd_standard.py - Standard autograd baseline (baseline)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
 class SimpleModel(nn.Module):
@@ -51,59 +25,61 @@ class SimpleModel(nn.Module):
         return x
 
 
-class BaselineAutogradStandardBenchmark(Benchmark):
+class BaselineAutogradStandardBenchmark(BaseBenchmark):
     """Standard autograd - no compilation."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        self.inputs = None
-        self.targets = None
-        self.optimizer = None
-        self.criterion = None
+        super().__init__()
+        self.model: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
+        self.targets: Optional[torch.Tensor] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.criterion: Optional[nn.Module] = None
         self.batch_size = 32
         self.hidden_dim = 1024
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and data."""
         torch.manual_seed(42)
         
-        # Standard model without compilation
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().train()
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
         self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
         
-        # Warmup
         for _ in range(3):
             self.optimizer.zero_grad()
             _ = self.model(self.inputs)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - standard autograd."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        if any(v is None for v in (self.model, self.inputs, self.targets, self.optimizer, self.criterion)):
+            raise RuntimeError("Benchmark not configured")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_autograd_standard", enable=enable_nvtx):
+        with self._nvtx_range("baseline_autograd_standard"):
             self.optimizer.zero_grad()
             outputs = self.model(self.inputs)
             loss = self.criterion(outputs, self.targets)
-            loss.backward()  # Standard backward pass
+            loss.backward()
             self.optimizer.step()
+        self._synchronize()
 
     
     def teardown(self) -> None:
         """Cleanup."""
-        del self.model, self.inputs, self.targets, self.optimizer, self.criterion
-        torch.cuda.empty_cache()
+        self.model = None
+        self.inputs = None
+        self.targets = None
+        self.optimizer = None
+        self.criterion = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -112,7 +88,11 @@ class BaselineAutogradStandardBenchmark(Benchmark):
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
+            setup_timeout_seconds=180,
         )
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -121,17 +101,6 @@ class BaselineAutogradStandardBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaselineAutogradStandardBenchmark:
+    """Factory function for harness discovery."""
     return BaselineAutogradStandardBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Autograd Standard: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

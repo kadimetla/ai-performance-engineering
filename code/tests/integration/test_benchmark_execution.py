@@ -19,7 +19,7 @@ from common.python.env_defaults import apply_env_defaults
 apply_env_defaults()
 
 import torch
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
 from common.python.discovery import discover_all_chapters
 from common.python.artifact_manager import ArtifactManager
@@ -137,7 +137,7 @@ class TestBenchmarkExecutionPipeline:
         benchmark = FailingBenchmark()
         config = BenchmarkConfig(
             iterations=5,
-            warmup=0,
+            warmup=1,
             enable_profiling=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)

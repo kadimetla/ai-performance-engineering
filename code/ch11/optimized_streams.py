@@ -1,39 +1,17 @@
 """optimized_streams.py - Concurrent kernel execution with streams (optimized).
 
-Demonstrates overlapping kernel execution using CUDA streams.
-Implements Benchmark protocol for harness integration.
-"""
+Demonstrates overlapping kernel execution using CUDA streams."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch11")
-    return torch.device("cuda")
-
-
-class OptimizedStreamsBenchmark(Benchmark):
+class OptimizedStreamsBenchmark(BaseBenchmark):
     """Concurrent execution - kernels overlap.
     
     Note: For warp specialization examples, see optimized_streams_warp_specialized.cu
@@ -41,7 +19,7 @@ class OptimizedStreamsBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.data1 = None
         self.data2 = None
         self.data3 = None
@@ -67,20 +45,16 @@ class OptimizedStreamsBenchmark(Benchmark):
         self.stream2 = torch.cuda.Stream()
         self.stream3 = torch.cuda.Stream()
         
-        torch.cuda.synchronize()
+        self._synchronize()
+        processed = float(self.N * 3)
+        self.register_workload_metadata(
+            tokens_per_iteration=processed,
+            requests_per_iteration=1.0,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Concurrent kernel execution with streams."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("streams", enable=enable_nvtx):
+        with self._nvtx_range("streams"):
             # Launch kernels on different streams - they can overlap
             with torch.cuda.stream(self.stream1):
                 self.data1 = self.data1 * 2.0
@@ -95,6 +69,7 @@ class OptimizedStreamsBenchmark(Benchmark):
             self.stream1.synchronize()
             self.stream2.synchronize()
             self.stream3.synchronize()
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -105,7 +80,7 @@ class OptimizedStreamsBenchmark(Benchmark):
         self.stream1 = None
         self.stream2 = None
         self.stream3 = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -133,18 +108,7 @@ class OptimizedStreamsBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> OptimizedStreamsBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedStreamsBenchmark()
-
-
-if __name__ == '__main__':
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nOptimized Streams: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-
 

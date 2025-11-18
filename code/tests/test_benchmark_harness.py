@@ -21,7 +21,7 @@ from common.python.env_defaults import apply_env_defaults
 apply_env_defaults()
 
 import torch
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig, Benchmark, BaseBenchmark
+from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig, BaseBenchmark
 from common.python.benchmark_models import BenchmarkResult, TimingStats, MemoryStats
 
 
@@ -101,7 +101,7 @@ class TestSubprocessTimeoutKill:
         benchmark = SlowBenchmark()
         config = BenchmarkConfig(
             iterations=100,  # Enough iterations to exceed timeout
-            warmup=0,
+            warmup=1,
             measurement_timeout_seconds=1,  # Very short timeout (1 second)
             enable_profiling=False,
             enable_memory_tracking=False,
@@ -129,7 +129,7 @@ class TestSubprocessTimeoutKill:
         benchmark = FailingBenchmark()
         config = BenchmarkConfig(
             iterations=5,
-            warmup=0,
+            warmup=1,
             enable_profiling=False,
             enable_memory_tracking=False,
         )
@@ -209,7 +209,7 @@ class TestTimeoutMultiplierPropagation:
     def test_harness_preserves_explicit_timeouts_when_cloning_config(self):
         config = BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=1,
             measurement_timeout_seconds=2,
             timeout_multiplier=5.0,
             enable_profiling=False,
@@ -395,7 +395,7 @@ class TestErrorHandling:
                 pass
         
         benchmark = NoSetupBenchmark()
-        config = BenchmarkConfig(iterations=5, warmup=0, enable_profiling=False, use_subprocess=False)
+        config = BenchmarkConfig(iterations=5, warmup=1, enable_profiling=False, use_subprocess=False)
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
         # Should not crash - setup() is optional
@@ -412,7 +412,7 @@ class TestErrorHandling:
                 return "Validation failed"
         
         benchmark = InvalidBenchmark()
-        config = BenchmarkConfig(iterations=5, warmup=0, enable_profiling=False, use_subprocess=False)
+        config = BenchmarkConfig(iterations=5, warmup=1, enable_profiling=False, use_subprocess=False)
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
         result = harness.benchmark(benchmark)

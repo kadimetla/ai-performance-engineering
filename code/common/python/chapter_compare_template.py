@@ -2,11 +2,11 @@
 
 All chapters should use these functions to ensure consistency:
 - discover_benchmarks() - Find baseline/optimized pairs
-- load_benchmark() - Load Benchmark instances from files
+- load_benchmark() - Load BaseBenchmark instances from files
 - create_profile_template() - Standard profile() function structure
 
 All compare.py modules must:
-1. Import BenchmarkHarness, Benchmark, BenchmarkMode, BenchmarkConfig
+1. Import BenchmarkHarness, BaseBenchmark, BenchmarkMode, BenchmarkConfig
 2. Use discover_benchmarks() to find pairs
 3. Use load_benchmark() to instantiate benchmarks
 4. Run via harness.benchmark(benchmark_instance)
@@ -29,7 +29,7 @@ warnings.filterwarnings("ignore", message=".*Found GPU.*cuda capability.*", cate
 warnings.filterwarnings("ignore", message=".*Minimum and Maximum cuda capability.*", category=UserWarning)
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkHarness,
     BenchmarkMode,
     BenchmarkConfig,
@@ -45,21 +45,24 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 # Re-export for backward compatibility
-__all__ = ['discover_benchmarks', 'load_benchmark', 'create_standard_metrics', 'profile_template']
+__all__ = ['discover_benchmarks', 'load_benchmark', 'create_standard_metrics', 'profile_template', 'get_last_load_error']
+
+_LAST_LOAD_ERROR: Optional[str] = None
 
 
-def load_benchmark(module_path: Path, timeout_seconds: int = 60) -> Optional[Benchmark]:
+def load_benchmark(module_path: Path, timeout_seconds: int = 60) -> Optional[BaseBenchmark]:
     """Load benchmark from module by calling get_benchmark() function.
     
     Uses threading timeout to prevent hangs during module import or get_benchmark() calls.
     
     Args:
-        module_path: Path to Python file with Benchmark implementation
+        module_path: Path to Python file with BaseBenchmark implementation
         timeout_seconds: Maximum time to wait for module load (default: 15 seconds)
         
     Returns:
-        Benchmark instance or None if loading fails or times out
+        BaseBenchmark instance or None if loading fails or times out
     """
+    global _LAST_LOAD_ERROR
     result: Dict[str, Any] = {"benchmark": None, "error": None, "done": False}
     
     def load_internal():
@@ -114,13 +117,20 @@ def load_benchmark(module_path: Path, timeout_seconds: int = 60) -> Optional[Ben
     
     if not result["done"]:
         logger.warning(f"Failed to load {module_path.name}: TIMEOUT (exceeded {timeout_seconds}s)")
+        _LAST_LOAD_ERROR = f"TIMEOUT (exceeded {timeout_seconds}s)"
         return None
     
     if result["error"]:
+        _LAST_LOAD_ERROR = result["error"]
         logger.warning(f"Failed to load {module_path.name}: {result['error']}")
         return None
     
-    return cast(Optional[Benchmark], result["benchmark"])
+    _LAST_LOAD_ERROR = None
+    return cast(Optional[BaseBenchmark], result["benchmark"])
+
+
+def get_last_load_error() -> Optional[str]:
+    return _LAST_LOAD_ERROR
 
 
 def create_standard_metrics(
@@ -349,7 +359,7 @@ def profile_template(
     if not pairs:
         logger.warning("No baseline/optimized pairs found")
         logger.info("Tip: Create baseline_*.py and optimized_*.py files")
-        logger.info("    Each file must implement Benchmark protocol with get_benchmark() function")
+        logger.info("    Each file must implement BaseBenchmark with get_benchmark() function")
         return {
             "metrics": {
                 'chapter': chapter,

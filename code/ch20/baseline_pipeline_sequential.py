@@ -3,7 +3,7 @@
 Sequential execution of pipeline stages without overlap.
 Each stage waits for the previous to complete.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import torch.nn as nn
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
@@ -54,7 +54,7 @@ class SimpleStage(nn.Module):
         return self.norm(out + x)
 
 
-class BaselinePipelineSequentialBenchmark(Benchmark):
+class BaselinePipelineSequentialBenchmark(BaseBenchmark):
     """Sequential pipeline - no overlap."""
     
     def __init__(self):
@@ -138,7 +138,7 @@ class BaselinePipelineSequentialBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselinePipelineSequentialBenchmark()
 

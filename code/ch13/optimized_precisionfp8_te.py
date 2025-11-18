@@ -16,7 +16,13 @@ import torch.nn as nn
 from torch.optim import Optimizer
 
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 
 
 def _preload_torch_cuda_symbols() -> None:
@@ -46,12 +52,6 @@ except ImportError as exc:  # pragma: no cover
     TE_IMPORT_ERROR = exc
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13 precisionfp8")
-    return torch.device("cuda")
-
-
 class TEFP8MLP(nn.Module):
     """Single TELinear block that approximates the fused MLP in FP8."""
 
@@ -64,7 +64,7 @@ class TEFP8MLP(nn.Module):
         return self.activation(self.proj(x))
 
 
-class OptimizedTEFP8Benchmark(Benchmark):
+class OptimizedTEFP8Benchmark(BaseBenchmark):
     """Optimized FP8 path using Transformer Engine."""
 
     def __init__(self):
@@ -73,7 +73,7 @@ class OptimizedTEFP8Benchmark(Benchmark):
                 "Transformer Engine is required for optimized_precisionfp8_te. "
                 f"(import error: {TE_IMPORT_ERROR})"
             )
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.optimizer: Optional[Optimizer] = None
         self.criterion: Optional[nn.Module] = None
@@ -92,6 +92,11 @@ class OptimizedTEFP8Benchmark(Benchmark):
         self.static_target: Optional[torch.Tensor] = None
         self.graph: Optional[torch.cuda.CUDAGraph] = None
         self.capture_stream: Optional[torch.cuda.Stream] = None
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         enable_tf32()
@@ -117,7 +122,7 @@ class OptimizedTEFP8Benchmark(Benchmark):
         # Warmup to initialize optimizer state.
         for idx in range(5):
             self._train_step_impl(self.input_pool[idx % len(self.input_pool)], self.target_pool[idx % len(self.target_pool)])
-        torch.cuda.synchronize()
+        self._synchronize()
 
         # Prepare static buffers for CUDA graph capture/replay.
         self.static_input = self.input_pool[0].clone()
@@ -128,10 +133,14 @@ class OptimizedTEFP8Benchmark(Benchmark):
         with torch.cuda.stream(self.capture_stream):
             for _ in range(3):
                 self._train_step_impl(self.static_input, self.static_target)
-            torch.cuda.synchronize()
+            self._synchronize()
             with torch.cuda.graph(self.graph, stream=self.capture_stream):
                 self._train_step_impl(self.static_input, self.static_target)
         self.capture_stream.synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
 
     def _train_step_impl(self, batch: torch.Tensor, target: torch.Tensor) -> None:
         assert self.model is not None
@@ -144,10 +153,6 @@ class OptimizedTEFP8Benchmark(Benchmark):
         self.optimizer.step()
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
         if self.graph is None or self.static_input is None or self.static_target is None:
             raise RuntimeError("CUDA graph not initialized")
 
@@ -155,11 +160,11 @@ class OptimizedTEFP8Benchmark(Benchmark):
         current_target = self.target_pool[self.pool_index]
         self.pool_index = (self.pool_index + 1) % len(self.input_pool)
 
-        with nvtx_range("optimized_precisionfp8_te", enable=enable_nvtx):
+        with self._nvtx_range("optimized_precisionfp8_te"):
             self.static_input.copy_(current_input)
             self.static_target.copy_(current_target)
             self.graph.replay()
-        torch.cuda.synchronize(self.device)
+        self._synchronize()
 
     def teardown(self) -> None:
         self.model = None
@@ -171,7 +176,7 @@ class OptimizedTEFP8Benchmark(Benchmark):
         self.capture_stream = None
         self.input_pool = []
         self.target_pool = []
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=10)
@@ -184,7 +189,7 @@ class OptimizedTEFP8Benchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return OptimizedTEFP8Benchmark()
 
 

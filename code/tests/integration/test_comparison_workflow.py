@@ -17,7 +17,7 @@ from common.python.env_defaults import apply_env_defaults
 apply_env_defaults()
 
 import torch
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
 from common.python.discovery import discover_all_chapters
 from common.python.benchmark_comparison import compare_results, ComparisonResult

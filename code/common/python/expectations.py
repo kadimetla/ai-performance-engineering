@@ -151,12 +151,13 @@ class ExpectationEvaluation:
 class ExpectationsStore:
     """Maintain expectation files per chapter and hardware target."""
 
-    def __init__(self, chapter_dir: Path, hardware_key: str) -> None:
+    def __init__(self, chapter_dir: Path, hardware_key: str, *, accept_regressions: bool = False) -> None:
         self.chapter_dir = chapter_dir
         self.hardware_key = hardware_key
         self.path = chapter_dir / EXPECTATION_FILENAME_TEMPLATE.format(hardware_key=hardware_key)
         self._data = self._load()
         self._changed = False
+        self._accept_regressions = accept_regressions
 
     def _load(self) -> Dict[str, Any]:
         if self.path.exists():
@@ -208,7 +209,13 @@ class ExpectationsStore:
             comp = _compare_metric(metric_name, direction, observed, expected)
             comparisons.append(comp)
             if comp["status"] == "regressed":
-                regressions.append(comp)
+                if self._accept_regressions:
+                    stored_metrics[metric_name] = observed
+                    comp["status"] = "updated"
+                    improvements.append(comp)
+                    updated_metrics.append(metric_name)
+                else:
+                    regressions.append(comp)
             elif comp["status"] in {"improved", "new"}:
                 stored_metrics[metric_name] = observed
                 improvements.append(comp)

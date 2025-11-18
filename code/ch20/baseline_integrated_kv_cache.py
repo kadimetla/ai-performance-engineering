@@ -3,7 +3,7 @@
 Baseline KV cache integration in inference pipeline without optimizations.
 Uses naive cache allocation and access patterns.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import torch.nn as nn
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
@@ -106,10 +106,11 @@ class AttentionLayer(nn.Module):
         return self.proj(x)
 
 
-class BaselineIntegratedKVCacheBenchmark(Benchmark):
+class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
     """Baseline integrated KV cache - naive implementation."""
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
         self.kv_cache = None
@@ -194,7 +195,7 @@ class BaselineIntegratedKVCacheBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineIntegratedKVCacheBenchmark()
 

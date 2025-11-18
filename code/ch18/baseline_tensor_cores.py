@@ -2,7 +2,7 @@
 
 Demonstrates matrix operations without tensor core acceleration.
 Tensor cores: This baseline uses standard FP32 operations without tensor cores.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -19,26 +19,26 @@ import torch
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch18")
-    return torch.device("cuda")
-
-
-class BaselineTensorCoresBenchmark(Benchmark):
+class BaselineTensorCoresBenchmark(BaseBenchmark):
     """Baseline: FP32 matrix operations without tensor cores."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A = None
         self.B = None
         self.size = 4096
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.size * self.size),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize matrices in FP32."""
@@ -48,26 +48,25 @@ class BaselineTensorCoresBenchmark(Benchmark):
         # This baseline uses FP32 which doesn't use tensor cores
         self.A = torch.randn(self.size, self.size, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.size, self.size, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: FP32 matrix multiplication without tensor cores."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
         # Baseline: FP32 matmul without tensor cores
         # Tensor cores accelerate FP16/BF16 operations
-        with nvtx_range("baseline_tensor_cores", enable=enable_nvtx):
+        with self._nvtx_range("baseline_tensor_cores"):
             _ = torch.matmul(self.A, self.B)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.A = None
         self.B = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -83,7 +82,7 @@ class BaselineTensorCoresBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineTensorCoresBenchmark()
 
@@ -98,4 +97,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

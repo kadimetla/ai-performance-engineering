@@ -1,10 +1,4 @@
-"""optimized_flash_attention.py - Optimized FlashAttention in GEMM context.
-
-Demonstrates FlashAttention for memory-efficient attention computation.
-Flash attention: Uses FlashAttention to reduce memory complexity.
-Tiles attention computation to avoid storing full attention matrix.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_flash_attention.py - Optimized FlashAttention in GEMM context."""
 
 from __future__ import annotations
 
@@ -22,18 +16,15 @@ import torch.nn.functional as F
 from typing import Optional
 
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch10")
-    return torch.device("cuda")
-
-class OptimizedFlashAttentionBenchmark(Benchmark):
+class OptimizedFlashAttentionBenchmark(BaseBenchmark):
     """Optimized: FlashAttention for memory-efficient attention.
     
     Flash attention: Uses FlashAttention to reduce memory complexity.
@@ -41,13 +32,20 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
 
         # Optimization: Compile model for kernel fusion and optimization
 
         self.input = None
+        self.batch_size = 4
+        self.seq_len = 512
+        tokens = self.batch_size * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize attention model with FlashAttention."""
@@ -74,28 +72,18 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
         ).to(self.device).eval()
         
         # Input sequence
-        batch_size = 4
-        seq_len = 512  # Long sequence to show FlashAttention benefit
-        self.input = torch.randn(batch_size, seq_len, hidden_dim, device=self.device)
-        torch.cuda.synchronize()
+        self.input = torch.randn(self.batch_size, self.seq_len, hidden_dim, device=self.device)
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: FlashAttention computation."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("optimized_flash_attention", enable=enable_nvtx):
+        with self._nvtx_range("optimized_flash_attention"):
             with torch.no_grad():
                 # Optimization: FlashAttention
                 # Uses tiling to reduce memory complexity
                 # Does not store full attention matrix: O(seq_len) memory instead of O(seq_len^2)
                 # FlashAttention: tiled computation for memory efficiency
-                output, _ = self.model(self.input, self.input, self.input)
+                _output, _ = self.model(self.input, self.input, self.input)
                 
                 # Optimization: FlashAttention benefits
                 # - Reduced memory complexity (O(seq_len) instead of O(seq_len^2))
@@ -103,6 +91,7 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
                 # - Better performance for long sequences
                 # - Memory-efficient attention computation
 
+        self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -117,6 +106,9 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -125,7 +117,7 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedFlashAttentionBenchmark()
 

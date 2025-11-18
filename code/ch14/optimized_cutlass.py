@@ -1,8 +1,4 @@
-"""optimized_cutlass.py - Optimized GEMM using CUTLASS.
-
-Demonstrates GEMM optimization using CUTLASS library for hardware-optimized kernels.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_cutlass.py - Optimized GEMM using CUTLASS."""
 
 from __future__ import annotations
 
@@ -15,26 +11,21 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-from typing import Optional
+from typing import Optional, Tuple
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
+from common.python.compile_utils import configure_tf32, restore_tf32
 
 from common.python.cutlass_binding import cutlass_gemm_fp16
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch14")
-    return torch.device("cuda")
-
-
-class OptimizedCutlassBenchmark(Benchmark):
+class OptimizedCutlassBenchmark(BaseBenchmark):
     """Optimized: GEMM using CUTLASS library.
     
     CUTLASS: Uses CUTLASS backend for hardware-optimized GEMM kernels.
@@ -42,13 +33,18 @@ class OptimizedCutlassBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A = None
         self.B = None
         # Match baseline matrix size for fair comparison
         self.m = 4096
         self.n = 4096
         self.k = 4096
+        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.m * self.n),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize matrices with optimal configuration for CUTLASS."""
@@ -56,8 +52,7 @@ class OptimizedCutlassBenchmark(Benchmark):
         
         # Match baseline TF32 settings for fair comparison
         # Disable TF32 to isolate CUTLASS optimization effect (not TF32 vs non-TF32)
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
         torch.set_float32_matmul_precision("high")
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
@@ -72,8 +67,14 @@ class OptimizedCutlassBenchmark(Benchmark):
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
         
         # Warmup the CUTLASS kernel to ensure kernels are cached before measurement
-        _ = cutlass_gemm_fp16(self.A, self.B)
-        torch.cuda.synchronize()
+        try:
+            _ = cutlass_gemm_fp16(self.A, self.B)
+            torch.cuda.synchronize()
+        except Exception as exc:
+            raise RuntimeError(
+                "SKIPPED: CUTLASS GEMM extension missing "
+                "(install nvidia-cutlass-dsl>=4.2 to enable this benchmark)"
+            ) from exc
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUTLASS-optimized GEMM."""
@@ -90,12 +91,15 @@ class OptimizedCutlassBenchmark(Benchmark):
             if self.A is None or self.B is None:
                 raise RuntimeError("Benchmark not initialized")
             _ = cutlass_gemm_fp16(self.A, self.B)
-            torch.cuda.synchronize(self.device)
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.A = None
         self.B = None
+        if self._tf32_state is not None:
+            restore_tf32(self._tf32_state)
+            self._tf32_state = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -114,7 +118,7 @@ class OptimizedCutlassBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedCutlassBenchmark()
 

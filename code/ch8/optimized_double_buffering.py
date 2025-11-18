@@ -132,7 +132,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from common.python.benchmark_harness import BenchmarkConfig, BenchmarkHarness, BenchmarkMode
+    from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 
     benchmark = OptimizedDoubleBufferingBenchmark()
     _apply_profile_overrides(args, benchmark)

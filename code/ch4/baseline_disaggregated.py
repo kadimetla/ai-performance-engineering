@@ -1,10 +1,4 @@
-"""baseline_disaggregated.py - Baseline monolithic inference in multi-GPU context.
-
-Demonstrates monolithic inference where prefill and decode share same resources across GPUs.
-Disaggregated inference: This baseline does not separate prefill and decode phases.
-Prefill and decode compete for same GPU resources, causing interference.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_disaggregated.py - Baseline monolithic inference in multi-GPU context."""
 
 from __future__ import annotations
 
@@ -24,20 +18,16 @@ from ch4.gpu_requirements import skip_if_insufficient_gpus
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda")
-
-
-class BaselineDisaggregatedBenchmark(Benchmark):
+class BaselineDisaggregatedBenchmark(BaseBenchmark):
     """Baseline: Monolithic inference (prefill and decode share resources across GPUs).
     
     Disaggregated inference: This baseline does not separate prefill and decode phases.
@@ -45,13 +35,21 @@ class BaselineDisaggregatedBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.prefill_input = None
         self.decode_input = None
         self.is_distributed = False
         self.rank = 0
         self.world_size = 1
+        self.batch_size = 2
+        self.prefill_len = 512
+        self.hidden_dim = 256
+        tokens = self.batch_size * self.prefill_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and inputs."""
@@ -92,14 +90,12 @@ class BaselineDisaggregatedBenchmark(Benchmark):
             self.model = nn.parallel.DistributedDataParallel(self.model)
         
         # Simulate prefill (long context) and decode (single token) inputs
-        self.prefill_input = torch.randn(2, 512, 256, device=self.device)  # Long context
-        self.decode_input = torch.randn(2, 1, 256, device=self.device)  # Single token
-        torch.cuda.synchronize()
+        self.prefill_input = torch.randn(self.batch_size, self.prefill_len, self.hidden_dim, device=self.device)
+        self.decode_input = torch.randn(self.batch_size, 1, self.hidden_dim, device=self.device)
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Monolithic inference."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
@@ -129,6 +125,7 @@ class BaselineDisaggregatedBenchmark(Benchmark):
                 if self.is_distributed:
                     dist.all_reduce(decode_output, op=dist.ReduceOp.SUM)
                     decode_output = decode_output / self.world_size
+        self._synchronize()
                 
                 # Baseline: No separation - both phases interfere with each other
                 # This leads to poor GPU utilization and latency spikes
@@ -150,6 +147,9 @@ class BaselineDisaggregatedBenchmark(Benchmark):
             warmup=2,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -158,7 +158,7 @@ class BaselineDisaggregatedBenchmark(Benchmark):
             return "Inputs not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineDisaggregatedBenchmark()
 

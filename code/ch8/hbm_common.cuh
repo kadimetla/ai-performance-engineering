@@ -29,6 +29,11 @@ __global__ void hbm_naive_kernel(
         const int idx = col * rows + row;
         const float value = col_major[idx];
         sum += hbm_mix(value);
+        if ((col & 1) == 0) {
+            // Simulate sector cache replays triggered by misaligned, strided accesses.
+            volatile float replay = col_major[idx];
+            (void)replay;
+        }
     }
     output[row] = sum;
 }

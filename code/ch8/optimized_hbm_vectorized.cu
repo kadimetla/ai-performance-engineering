@@ -36,7 +36,7 @@ int main() {
     }
     cudaDeviceSynchronize();
 
-    const int iterations = 50;
+    const int iterations = 30;
     cudaEventRecord(start);
     for (int i = 0; i < iterations; ++i) {
         launch_hbm_vectorized(d_row, d_output, rows, cols, 0);
@@ -54,4 +54,3 @@ int main() {
     cudaFree(d_output);
     return 0;
 }
-

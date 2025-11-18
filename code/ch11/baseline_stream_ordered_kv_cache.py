@@ -2,30 +2,18 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Optional
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
 
 import torch
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch11")
-    return torch.device("cuda")
-
-
-class BaselineStreamOrderedKvCacheBenchmark(Benchmark):
+class BaselineStreamOrderedKvCacheBenchmark(BaseBenchmark):
     """Baseline: update buffers sequentially on the default stream."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.data1: Optional[torch.Tensor] = None
         self.data2: Optional[torch.Tensor] = None
         self.data3: Optional[torch.Tensor] = None
@@ -36,26 +24,26 @@ class BaselineStreamOrderedKvCacheBenchmark(Benchmark):
         self.data1 = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.data2 = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.data3 = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
+        tokens = float(self.N * 3)
+        self.register_workload_metadata(
+            tokens_per_iteration=tokens,
+            requests_per_iteration=1.0,
+        )
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
         assert self.data1 is not None and self.data2 is not None and self.data3 is not None
-        with nvtx_range("stream_ordered_kv_cache", enable=enable_nvtx):
+        with self._nvtx_range("stream_ordered_kv_cache"):
             self.data1 = self.data1 * 2.0
             self.data2 = self.data2 * 2.0
             self.data3 = self.data3 * 2.0
-            torch.cuda.synchronize()
+        self._synchronize()
 
     def teardown(self) -> None:
         self.data1 = None
         self.data2 = None
         self.data3 = None
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=30, warmup=5)
@@ -66,16 +54,5 @@ class BaselineStreamOrderedKvCacheBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaselineStreamOrderedKvCacheBenchmark:
     return BaselineStreamOrderedKvCacheBenchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=30, warmup=5),
-    )
-    result = harness.benchmark(get_benchmark())
-    print(f"\nBaseline Stream-Ordered KV Cache: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

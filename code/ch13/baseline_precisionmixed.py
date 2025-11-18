@@ -2,33 +2,14 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from common.python.compile_utils import configure_tf32, restore_tf32
 
 
 class SimpleModel(nn.Module):
@@ -52,11 +33,11 @@ class SimpleModel(nn.Module):
         return x
 
 
-class BaselinePrecisionMixedBenchmark(Benchmark):
+class BaselinePrecisionMixedBenchmark(BaseBenchmark):
     """FP32 baseline used to compare against mixed-precision autocast."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         self.targets: Optional[torch.Tensor] = None
@@ -65,13 +46,18 @@ class BaselinePrecisionMixedBenchmark(Benchmark):
         self.batch_size = 128
         self.hidden_dim = 2048
         self.micro_steps = 4
+        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.micro_steps),
+            tokens_per_iteration=float(tokens * self.micro_steps),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and data."""
         torch.manual_seed(42)
         if torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = False
-            torch.backends.cudnn.allow_tf32 = False
+            self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
             torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True
         
@@ -81,35 +67,35 @@ class BaselinePrecisionMixedBenchmark(Benchmark):
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
         
-        # Warmup
         for _ in range(3):
             self.optimizer.zero_grad()
             _ = self.model(self.inputs)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark - BF16 training."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_precision_mixed", enable=enable_nvtx):
+        """Function to benchmark - FP32 training."""
+        if any(v is None for v in (self.model, self.inputs, self.targets, self.optimizer, self.criterion)):
+            raise RuntimeError("Benchmark not configured")
+        with self._nvtx_range("baseline_precision_mixed"):
             for _ in range(self.micro_steps):
                 self.optimizer.zero_grad(set_to_none=True)
                 outputs = self.model(self.inputs)
                 loss = self.criterion(outputs, self.targets)
                 loss.backward()
                 self.optimizer.step()
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
-        del self.model, self.inputs, self.targets, self.optimizer, self.criterion
-        torch.cuda.empty_cache()
+        self.model = None
+        self.inputs = None
+        self.targets = None
+        self.optimizer = None
+        self.criterion = None
+        if self._tf32_state is not None:
+            restore_tf32(self._tf32_state)
+            self._tf32_state = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -119,6 +105,10 @@ class BaselinePrecisionMixedBenchmark(Benchmark):
             enable_memory_tracking=False,
             enable_profiling=False,
         )
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -126,16 +116,6 @@ class BaselinePrecisionMixedBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaselinePrecisionMixedBenchmark:
+    """Factory function for harness discovery."""
     return BaselinePrecisionMixedBenchmark()
-
-
-if __name__ == "__main__":
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline Precision Mixed: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

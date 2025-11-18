@@ -13,7 +13,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.extension_loader_template import load_cuda_extension
 
 _KERNEL_SOURCE = Path(__file__).with_name("loop_unrolling_kernels.cu")
@@ -26,7 +26,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class LoopUnrollingBenchmarkBase(Benchmark):
+class LoopUnrollingBenchmarkBase(BaseBenchmark):
     """Base class that manages CUDA extension loading and tensor setup."""
 
     rows: int = 1 << 14  # 16,384 rows
@@ -35,6 +35,7 @@ class LoopUnrollingBenchmarkBase(Benchmark):
     nvtx_label: str = "loop_unrolling"
 
     def __init__(self) -> None:
+        super().__init__()
         self.device = resolve_device()
         self.extension = None
         self.inputs: Optional[torch.Tensor] = None

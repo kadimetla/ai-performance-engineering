@@ -1,33 +1,13 @@
-"""baseline_training_standard.py - Standard training without checkpointing (baseline). Stores all activations during forward pass - fast but memory-intensive.
-"""
+"""baseline_training_standard.py - Standard training without checkpointing (baseline)."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add repo root to path for imports
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
-from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch13.workload_config import WORKLOAD
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
 
 
 class DeepModel(nn.Module):
@@ -41,18 +21,17 @@ class DeepModel(nn.Module):
         ])
     
     def forward(self, x):
-        # Standard: Store all activations (memory-intensive)
         for layer in self.layers:
             x = torch.relu(layer(x))
         return x
 
 
-class BaselineTrainingBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+class BaselineTrainingBenchmark(BaseBenchmark):
+    """Standard training that stores all activations (memory heavy)."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
+        super().__init__()
+        self.model: Optional[nn.Module] = None
         self.inputs = None
         self.targets = None
         self.optimizer = None
@@ -63,7 +42,11 @@ class BaselineTrainingBenchmark(Benchmark):
         self.global_batch = self.workload.global_batch_size
         self.micro_batch = self.workload.micro_batch_size
         self.accum_steps = self.global_batch // self.micro_batch
-        self.batch_size = self.micro_batch
+        tokens = self.global_batch * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.accum_steps),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
@@ -75,19 +58,14 @@ class BaselineTrainingBenchmark(Benchmark):
         
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        if any(v is None for v in (self.model, self.inputs, self.targets, self.optimizer, self.criterion)):
+            raise RuntimeError("Benchmark not configured")
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_training_standard", enable=enable_nvtx):
+        with self._nvtx_range("baseline_training_standard"):
             self.optimizer.zero_grad(set_to_none=True)
             for start in range(0, self.global_batch, self.micro_batch):
                 end = start + self.micro_batch
@@ -97,13 +75,16 @@ class BaselineTrainingBenchmark(Benchmark):
                 loss = self.criterion(outputs, targets) / self.accum_steps
                 loss.backward()
             self.optimizer.step()
-
+        self._synchronize()
     
     def teardown(self) -> None:
         """Cleanup."""
-        del self.model, self.inputs, self.targets, self.optimizer, self.criterion
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        self.model = None
+        self.inputs = None
+        self.targets = None
+        self.optimizer = None
+        self.criterion = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark-specific config."""
@@ -111,6 +92,9 @@ class BaselineTrainingBenchmark(Benchmark):
             iterations=20,
             warmup=5,
         )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -134,32 +118,6 @@ class BaselineTrainingBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaselineTrainingBenchmark:
     """Factory function for harness discovery."""
     return BaselineTrainingBenchmark()
-
-
-def main() -> None:
-    """Standalone execution with timing."""
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=20, warmup=5)
-    )
-    benchmark = BaselineTrainingBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print("Baseline: Standard Training (No Checkpointing)")
-    print("=" * 70)
-    print(f"Model: {benchmark.num_layers} layers, {benchmark.hidden_dim} hidden dim")
-    print(f"Batch: {benchmark.batch_size}")
-    print("Mode: Standard (stores all activations)\n")
-    print(f"Average time per iteration: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-    print("Status: Standard training (fast but memory-heavy)")
-    print("\n Tip: Use gradient checkpointing for 30-50% memory reduction (10-30% slower)")
-
-
-if __name__ == "__main__":
-    main()

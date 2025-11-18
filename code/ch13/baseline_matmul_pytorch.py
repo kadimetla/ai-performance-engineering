@@ -3,7 +3,7 @@
 Standard PyTorch matrix multiplication without CUTLASS optimization.
 Good baseline but can be optimized with specialized GEMM kernels.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -21,10 +21,11 @@ import torch
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
@@ -35,11 +36,11 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class BaselineMatmulPyTorchBenchmark(Benchmark):
+class BaselineMatmulPyTorchBenchmark(BaseBenchmark):
     """PyTorch matmul baseline - standard GEMM."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A = None
         self.B = None
         self.C = None
@@ -47,6 +48,11 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
         self.m = 2048
         self.n = 2048
         self.k = 2048
+        tokens = self.m * self.n
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize matrices."""
@@ -60,23 +66,20 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
         
         # Warmup
         _ = torch.relu(torch.matmul(self.A, self.B) + self.bias)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - PyTorch matmul."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_matmul_pytorch", enable=enable_nvtx):
+        assert self.A is not None and self.B is not None and self.bias is not None
+        with self._nvtx_range("baseline_matmul_pytorch"):
             # Standard PyTorch matrix multiplication
             out = torch.matmul(self.A, self.B)
             self.C = torch.relu(out + self.bias)
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
@@ -90,6 +93,7 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
+            setup_timeout_seconds=180,  # torch.compile compilation can take 60-120 seconds
         )
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -98,7 +102,7 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineMatmulPyTorchBenchmark()
 

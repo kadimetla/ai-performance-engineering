@@ -1,7 +1,7 @@
 """optimized_no_overlap.py - DDP with communication overlap (optimized).
 
 DDP implementation with gradient_as_bucket_view for communication overlap.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import torch.optim as optim
 
 from ch4.gpu_requirements import skip_if_insufficient_gpus
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
@@ -57,7 +57,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda:0")
 
 
-class MultiLayerNet:
+class MultiLayerNet(nn.Module):
     """Multi-layer network for benchmarking."""
     
     def __init__(self, size: int) -> None:
@@ -70,10 +70,13 @@ class MultiLayerNet:
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
         return self.fc3(x)
-class OptimizedOverlapDdpBenchmark:
+
+
+class OptimizedOverlapDdpBenchmark(BaseBenchmark):
     """DDP with communication overlap - optimized."""
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
         self.optimizer = None
@@ -154,7 +157,7 @@ class OptimizedOverlapDdpBenchmark:
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-        iterations=20,
+            iterations=20,
             warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
@@ -178,7 +181,8 @@ class OptimizedOverlapDdpBenchmark:
             return f"Model forward pass failed: {e}"
         return None
 
-def get_benchmark() -> Benchmark:
+
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedOverlapDdpBenchmark()
 

@@ -36,10 +36,10 @@ except ImportError:
     TELinear = nn.Linear  # Fallback
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
-    BenchmarkMode
+    BenchmarkMode,
 )
 
 
@@ -92,10 +92,11 @@ class ProductionTransformer(nn.Module):
         return x
 
 
-class OptimizedFP4Benchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+class OptimizedFP4Benchmark(BaseBenchmark):
+    """Benchmark implementation following BaseBenchmark."""
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
         self.x = None
@@ -181,7 +182,7 @@ class OptimizedFP4Benchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery.
     
     NOTE: FP4 support is experimental and may hang.
@@ -192,7 +193,7 @@ def get_benchmark() -> Benchmark:
     if not benchmark.fp4_available:
         # FP4 not available - skip this benchmark
         # Return a dummy benchmark that skips quickly
-        class SkipBenchmark(Benchmark):
+        class SkipBenchmark(BaseBenchmark):
             def setup(self): pass
             def benchmark_fn(self): pass
             def teardown(self): pass

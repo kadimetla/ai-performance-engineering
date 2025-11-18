@@ -2,24 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 from functools import lru_cache
 from pathlib import Path
 
 import torch
 from torch.utils.cpp_extension import load
 
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig  # noqa: E402
-
-
-def _resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for Chapter 11 benchmarks")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
 
 
 @lru_cache(maxsize=1)
@@ -36,11 +25,11 @@ def _load_optimized_extension():
     )
 
 
-class OptimizedDualPipelineBenchmark(Benchmark):
+class OptimizedDualPipelineBenchmark(BaseBenchmark):
     """Improved dual-pipeline warp specialization using CUDA::pipeline and additional compute warps."""
 
     def __init__(self) -> None:
-        self.device = _resolve_device()
+        super().__init__()
         self.num_streams = 4
         self.ext = _load_optimized_extension()
         self.input_a: torch.Tensor | None = None
@@ -58,16 +47,22 @@ class OptimizedDualPipelineBenchmark(Benchmark):
         self.input_a = torch.randn(total_elems, device=self.device, dtype=torch.float32)
         self.input_b = torch.randn(total_elems, device=self.device, dtype=torch.float32)
         self.output = torch.empty_like(self.input_a)
-        torch.cuda.synchronize()
+        self._synchronize()
+        tokens = float(total_elems * 2)
+        self.register_workload_metadata(
+            tokens_per_iteration=tokens,
+            requests_per_iteration=1.0,
+        )
 
     def benchmark_fn(self) -> None:
         assert self.input_a is not None and self.input_b is not None
-        result = self.ext.warp_specialized_multistream_forward(
-            self.input_a,
-            self.input_b,
-            self.num_streams,
-        )
-        torch.cuda.synchronize()
+        with self._nvtx_range("optimized_dual_pipeline_multistream"):
+            result = self.ext.warp_specialized_multistream_forward(
+                self.input_a,
+                self.input_b,
+                self.num_streams,
+            )
+        self._synchronize()
         if self.output is not None:
             self.output.copy_(result)
 
@@ -75,7 +70,7 @@ class OptimizedDualPipelineBenchmark(Benchmark):
         self.input_a = None
         self.input_b = None
         self.output = None
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -93,6 +88,5 @@ class OptimizedDualPipelineBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> OptimizedDualPipelineBenchmark:
     return OptimizedDualPipelineBenchmark()
-

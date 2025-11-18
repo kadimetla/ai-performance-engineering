@@ -21,11 +21,18 @@ as baseline targets for validation in performance_targets.py.
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import warnings
 from datetime import datetime
 from pathlib import Path
+
+# Ensure repository root is on sys.path for local imports
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
 
 # Suppress CUDA capability warnings for GB10 (12.1) - PyTorch supports up to 12.0
 warnings.filterwarnings("ignore", message=".*Found GPU.*which is of cuda capability.*", category=UserWarning)
@@ -63,6 +70,82 @@ FP6_AVAILABLE = hasattr(te_constants, 'NVFP6_BLOCK_SCALING_SIZE')
 
 if not FP8_AVAILABLE:
     raise RuntimeError("Transformer Engine FP8 support is REQUIRED but not available")
+
+
+def maybe_force_triton_arch() -> None:
+    """Force Triton to use a base arch when ptxas doesn't know micro-arch suffixes."""
+    if os.environ.get("TRITON_CODEGEN_ARCH"):
+        return
+
+    if not torch.cuda.is_available():
+        return
+
+    major, minor = torch.cuda.get_device_capability()
+    # Older/newer ptxas builds may not recognize micro-arch suffices like sm_121a.
+    if (major, minor) == (12, 1):
+        os.environ["TRITON_CODEGEN_ARCH"] = "sm_121"
+        os.environ.setdefault("TRITON_GLOBAL_DEVICE_ARCH", "sm_121")
+        os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.1")
+        _install_ptxas_wrapper()
+
+
+def _install_ptxas_wrapper() -> None:
+    """Place a shim earlier in PATH that strips unsupported sm_121a -> sm_121."""
+    real_ptxas = shutil.which("ptxas")
+    if not real_ptxas:
+        return
+
+    wrapper_dir = Path(__file__).resolve().parent / ".ptxas_shim"
+    wrapper_dir.mkdir(exist_ok=True)
+    wrapper_path = wrapper_dir / "ptxas"
+
+    script = """#!/usr/bin/env bash
+set -euo pipefail
+real_ptxas="{real_ptxas}"
+args=()
+ptx_file=""
+for a in "$@"; do
+  args+=("${{a//sm_121a/sm_121}}")
+  if [[ -z "$ptx_file" && "$a" == *.ptx ]]; then
+    ptx_file="$a"
+  fi
+done
+# Rewrite PTX target if present
+if [[ -n "$ptx_file" && -f "$ptx_file" ]]; then
+  sed -i 's/sm_121a/sm_121/g' "$ptx_file"
+fi
+exec "$real_ptxas" "${{args[@]}}"
+""".format(real_ptxas=real_ptxas)
+    # Write only if missing or different to avoid chmod on every run.
+    if not wrapper_path.exists() or wrapper_path.read_text() != script:
+        wrapper_path.write_text(script)
+        wrapper_path.chmod(0o755)
+
+    # Prepend shim to PATH so Triton picks it up.
+    path_parts = os.environ.get("PATH", "").split(os.pathsep)
+    if str(wrapper_dir) not in path_parts:
+        os.environ["PATH"] = str(wrapper_dir) + os.pathsep + os.environ.get("PATH", "")
+
+    # Hint Triton to use the shim instead of its bundled ptxas copy.
+    os.environ.setdefault("TRITON_PTXAS_PATH", str(wrapper_path))
+
+
+def get_ptxas_info() -> dict:
+    """Collect ptxas path/version for debugging compiler issues."""
+    path = shutil.which("ptxas")
+    info = {"path": path, "version": None}
+    if path:
+        try:
+            # ptxas prints version on stderr.
+            result = subprocess.run(
+                [path, "-v"], capture_output=True, text=True, check=False
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            first_line = output.strip().splitlines()[0] if output.strip() else None
+            info["version"] = first_line
+        except Exception:
+            info["version"] = "<unavailable>"
+    return info
 
 
 def measure_hbm_bandwidth(device: torch.device = None, size_gb: float = 4.0, iterations: int = 20) -> dict:
@@ -660,17 +743,24 @@ def capture_gpu_hardware_info(device: torch.device = None) -> dict:
         raise RuntimeError(f"Measurement failed: {e}") from e
 
 
-def measure_torch_compile_speedup(device: torch.device = None, matrix_size: int = 4096, iterations: int = 20) -> dict:
-    """Measure torch.compile speedup."""
+def measure_torch_compile_speedup(
+    device: torch.device = None,
+    matrix_size: int = 4096,
+    iterations: int = 20,
+    matrix_sizes: list = None,
+) -> dict:
+    """Measure torch.compile speedup across modes/settings and multiple matrix sizes."""
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     if not torch.cuda.is_available():
         return {"speedup": None, "error": "CUDA not available"}
-    
+  
+    if matrix_sizes is None:
+        matrix_sizes = [matrix_size]
     print(f"\nMeasuring torch.compile speedup...")
-    print(f"  Matrix size: {matrix_size}x{matrix_size}")
-    print(f"  Iterations: {iterations}")
+    print(f"  Matrix sizes: {', '.join(str(s) for s in matrix_sizes)}")
+    print(f"  Iterations (per size): {iterations}")
     
     try:
         # Define a function that will benefit from compilation (more complex)
@@ -681,58 +771,111 @@ def measure_torch_compile_speedup(device: torch.device = None, matrix_size: int 
             z = torch.mm(z, y.t())
             return z
         
-        # Create test tensors
-        a = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
-        b = torch.randn(matrix_size, matrix_size, device=device, dtype=torch.float32)
-        
-        # Warmup eager (more iterations for stable timing)
-        for _ in range(20):
-            _ = compute_fn(a, b)
-        torch.cuda.synchronize(device)
-        
-        # Benchmark eager
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-        
-        start_event.record()
-        for _ in range(iterations):
-            _ = compute_fn(a, b)
-        end_event.record()
-        torch.cuda.synchronize(device)
-        eager_time_ms = start_event.elapsed_time(end_event)
-        
-        # Compile the function - use "default" mode for better optimization
-        compiled_fn = torch.compile(compute_fn, mode="default")
-        
-        # More extensive warmup for compiled (compilation happens here)
-        # Do enough iterations to trigger compilation and stabilize
-        for _ in range(30):
-            _ = compiled_fn(a, b)
-        torch.cuda.synchronize(device)
-        
-        # Ensure compilation is complete by doing a few more runs
-        for _ in range(10):
-            _ = compiled_fn(a, b)
-        torch.cuda.synchronize(device)
-        
-        # Benchmark compiled
-        start_event.record()
-        for _ in range(iterations):
-            _ = compiled_fn(a, b)
-        end_event.record()
-        torch.cuda.synchronize(device)
-        compiled_time_ms = start_event.elapsed_time(end_event)
-        
-        speedup = eager_time_ms / compiled_time_ms if compiled_time_ms > 0 else 1.0
-        
-        print(f"  Eager time: {eager_time_ms/iterations:.3f} ms/iter")
-        print(f"  Compiled time: {compiled_time_ms/iterations:.3f} ms/iter")
-        print(f"  Speedup: {speedup:.2f}x")
-        
+        compile_configs = [
+            {"name": "default", "kwargs": {"mode": "default"}},
+            {"name": "default_fullgraph", "kwargs": {"mode": "default", "fullgraph": True}},
+            {"name": "default_static", "kwargs": {"mode": "default", "fullgraph": True, "dynamic": False}},
+            {"name": "reduce-overhead", "kwargs": {"mode": "reduce-overhead"}},
+            {"name": "max-autotune", "kwargs": {"mode": "max-autotune"}},
+        ]
+
+        per_size_results = []
+        for size in matrix_sizes:
+            # Create test tensors
+            a = torch.randn(size, size, device=device, dtype=torch.float32)
+            b = torch.randn(size, size, device=device, dtype=torch.float32)
+
+            # Warmup eager (more iterations for stable timing)
+            warmup_eager = min(10, iterations)
+            for _ in range(warmup_eager):
+                _ = compute_fn(a, b)
+            torch.cuda.synchronize(device)
+
+            # Benchmark eager
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+
+            start_event.record()
+            for _ in range(iterations):
+                _ = compute_fn(a, b)
+            end_event.record()
+            torch.cuda.synchronize(device)
+            eager_time_ms = start_event.elapsed_time(end_event)
+
+            cfg_results = []
+            for cfg in compile_configs:
+                name = cfg["name"]
+                kwargs = cfg["kwargs"]
+                try:
+                    compiled_fn = torch.compile(compute_fn, **kwargs)
+
+                    # Warmup compiled (compilation happens here)
+                    warmup_compiled = min(10, iterations)
+                    for _ in range(warmup_compiled):
+                        _ = compiled_fn(a, b)
+                    torch.cuda.synchronize(device)
+
+                    # Ensure compilation is complete
+                    for _ in range(5):
+                        _ = compiled_fn(a, b)
+                    torch.cuda.synchronize(device)
+
+                    # Benchmark compiled
+                    start_event.record()
+                    for _ in range(iterations):
+                        _ = compiled_fn(a, b)
+                    end_event.record()
+                    torch.cuda.synchronize(device)
+                    compiled_time_ms = start_event.elapsed_time(end_event)
+                    speedup = eager_time_ms / compiled_time_ms if compiled_time_ms > 0 else 1.0
+                    cfg_results.append(
+                        {
+                            "mode": name,
+                            "compiled_time_ms": compiled_time_ms / iterations,
+                            "speedup": speedup,
+                            "compile_kwargs": kwargs,
+                        }
+                    )
+                    print(f"  [size={size} | {name}] compiled time: {compiled_time_ms/iterations:.3f} ms/iter | speedup: {speedup:.2f}x")
+                except Exception as e:
+                    print(f"  [size={size} | {name}] compile failed: {e}")
+
+            if not cfg_results:
+                per_size_results.append(
+                    {
+                        "matrix_size": size,
+                        "error": "No torch.compile modes succeeded",
+                        "eager_time_ms": eager_time_ms / iterations,
+                    }
+                )
+                continue
+
+            best_cfg = max(cfg_results, key=lambda r: r["speedup"])
+            per_size_results.append(
+                {
+                    "matrix_size": size,
+                    "eager_time_ms": eager_time_ms / iterations,
+                    "best_mode": best_cfg["mode"],
+                    "best_speedup": best_cfg["speedup"],
+                    "best_compiled_time_ms": best_cfg["compiled_time_ms"],
+                    "modes_tried": cfg_results,
+                }
+            )
+            print(f"  Best for size {size}: {best_cfg['mode']} | speedup: {best_cfg['speedup']:.2f}x")
+
+        # Pick global best across sizes
+        successful = [r for r in per_size_results if "best_speedup" in r]
+        if not successful:
+            raise RuntimeError("No torch.compile modes succeeded for any matrix size")
+
+        global_best = max(successful, key=lambda r: r["best_speedup"])
         return {
-            "speedup": speedup,
-            "eager_time_ms": eager_time_ms / iterations,
-            "compiled_time_ms": compiled_time_ms / iterations,
+            "speedup": global_best["best_speedup"],
+            "eager_time_ms": global_best["eager_time_ms"],
+            "compiled_time_ms": global_best["best_compiled_time_ms"],
+            "mode": global_best["best_mode"],
+            "matrix_size": global_best["matrix_size"],
+            "per_size": per_size_results,
         }
     except Exception as e:
         raise RuntimeError(f"torch.compile speedup measurement failed: {e}") from e
@@ -742,13 +885,15 @@ def run_all_benchmarks(output_dir: Path = None) -> dict:
     """Run all peak performance benchmarks."""
     if output_dir is None:
         output_dir = Path.cwd()
-    
+
     if not torch.cuda.is_available():
         print("ERROR: CUDA is not available. Cannot run peak performance benchmarks.")
         return {"error": "CUDA not available"}
-    
+
+    maybe_force_triton_arch()
     device = torch.device("cuda")
-    
+    ptxas_info = get_ptxas_info()
+
     print("="*70)
     print("Peak Performance Benchmark")
     print("="*70)
@@ -761,6 +906,8 @@ def run_all_benchmarks(output_dir: Path = None) -> dict:
     print(f"FP8 Available: {FP8_AVAILABLE}")
     bf16_supported = getattr(torch.cuda, "is_bf16_supported", lambda: False)()
     print(f"BF16 Supported: {bf16_supported}")
+    print(f"TRITON_CODEGEN_ARCH: {os.environ.get('TRITON_CODEGEN_ARCH')} (auto-set for cc 12.1 to avoid sm_121a)")
+    print(f"ptxas: {ptxas_info['path']} | version: {ptxas_info['version']}")
     
     results = {
         "timestamp": datetime.now().isoformat(),
@@ -813,8 +960,12 @@ def run_all_benchmarks(output_dir: Path = None) -> dict:
     # Measure NVLink bandwidth (if multi-GPU)
     results["nvlink"] = measure_nvlink_bandwidth(device, iterations=iterations)
     
-    # Measure torch.compile speedup
-    results["torch_compile"] = measure_torch_compile_speedup(device, iterations=iterations)
+    # Measure torch.compile speedup (sweep modes/settings and sizes)
+    results["torch_compile"] = measure_torch_compile_speedup(
+        device,
+        iterations=iterations,
+        matrix_sizes=[4096, 8192],
+    )
     
     # Print summary
     print("\n" + "="*70)

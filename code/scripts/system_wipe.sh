@@ -364,11 +364,18 @@ purge_ai_repo_artifacts() {
     "$AI_REPO"/benchmark_alignment_report.* \
     "$AI_REPO"/artifacts/*/*.log
 
-  if [[ -d "$AI_REPO/capstone" ]]; then
-    while IFS= read -r -d '' path; do
-      remove_path "$path"
-    done < <(find "$AI_REPO/capstone" -name '*expectations_gb10.json' -print0 2>/dev/null)
-  fi
+  for lab_dir in \
+    "$AI_REPO/labs/fullstack_cluster" \
+    "$AI_REPO/labs/blackwell_matmul" \
+    "$AI_REPO/labs/moe_cuda" \
+    "$AI_REPO/labs/flexattention"
+  do
+    if [[ -d "$lab_dir" ]]; then
+      while IFS= read -r -d '' path; do
+        remove_path "$path"
+      done < <(find "$lab_dir" -name '*expectations_gb10.json' -print0 2>/dev/null)
+    fi
+  done
 
   remove_dirs_matching "$AI_REPO" "__pycache__" ".pytest_cache" ".torch_inductor" ".torch_extensions"
 }

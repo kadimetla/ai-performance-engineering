@@ -12,39 +12,38 @@ if str(repo_root) not in sys.path:
 import torch
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch14")
-    return torch.device("cuda")
-
-
-class BaselineNCCLQuantizationBenchmark(Benchmark):
+class BaselineNCCLQuantizationBenchmark(BaseBenchmark):
     """Baseline: Simulate per-rank CPU-side quantization with serialized copies."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.tensor = None
         self.num_chunks = 16
         self.chunk_len = 1 << 14
         self._last = 0.0
+        tokens = self.num_chunks * self.chunk_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.num_chunks),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         """Setup: initialize synthetic gradients."""
         torch.manual_seed(42)
         self.tensor = torch.randn(self.num_chunks, self.chunk_len, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         """Benchmark: CPU quantization + host/device transfers."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
@@ -65,7 +64,7 @@ class BaselineNCCLQuantizationBenchmark(Benchmark):
                 total += float(dq.sum())
                 self.tensor[idx].copy_(dq.to(self.device))
             self._last = total
-            torch.cuda.synchronize(self.device)
+        self._synchronize()
 
 
     def teardown(self) -> None:
@@ -79,6 +78,9 @@ class BaselineNCCLQuantizationBenchmark(Benchmark):
             iterations=100,
             warmup=10,
         )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -87,7 +89,7 @@ class BaselineNCCLQuantizationBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineNCCLQuantizationBenchmark()
 

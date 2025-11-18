@@ -3,7 +3,7 @@
 Demonstrates speculative decoding for parallel token generation.
 Speculative decoding: Uses draft model to predict multiple tokens in parallel.
 Accepts/rejects tokens based on target model verification for speedup.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -21,17 +21,14 @@ import torch.nn as nn
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch18")
-    return torch.device("cuda")
-
-class OptimizedSpeculativeDecodingBenchmark(Benchmark):
+class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
     """Optimized: Speculative decoding for parallel token generation.
     
     Speculative decoding: Uses draft model to predict multiple tokens in parallel.
@@ -39,7 +36,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.target_model = None
         # Optimization: Compile model for kernel fusion and optimization
 
@@ -47,6 +44,13 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
         self.input_ids = None
         self.max_length = 20
         self.speculative_length = 4  # Number of tokens to predict speculatively
+        batch_size = 4
+        seq_len = 10
+        tokens = batch_size * (seq_len + self.max_length)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize target and draft models."""
@@ -86,19 +90,15 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
         self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
         # Create dummy memory tensor for TransformerDecoder (encoder output)
         self.memory = torch.randn(batch_size, seq_len, hidden_dim, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Speculative decoding."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("optimized_speculative_decoding", enable=enable_nvtx):
+        with self._nvtx_range("optimized_speculative_decoding"):
             with torch.no_grad():
                 # Optimization: Speculative decoding
                 # Draft model predicts multiple tokens in parallel
@@ -126,6 +126,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
                     # - Target model verification ensures correctness
                     if current_ids.size(1) >= self.input_ids.size(1) + self.max_length:
                         break
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -135,7 +136,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
         self.embedding = None
         self.input_ids = None
         self.memory = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -152,7 +153,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
             return "Input IDs not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedSpeculativeDecodingBenchmark()
 

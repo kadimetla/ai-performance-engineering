@@ -10,7 +10,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from common.python.cuda_binary_benchmark import CudaBinaryBenchmark
 from common.python.hardware_capabilities import ensure_dsmem_supported
 

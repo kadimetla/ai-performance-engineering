@@ -32,7 +32,7 @@ def get_benchmark() -> TilingBenchmarkBase:
 
 def main() -> None:
     """Allow `python baseline_tiling.py` for quick manual profiling."""
-    from common.python.benchmark_harness import BenchmarkConfig, BenchmarkHarness, BenchmarkMode
+    from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,

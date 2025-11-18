@@ -3,7 +3,7 @@
 Memory-bound kernel with low arithmetic intensity.
 Many memory operations relative to compute operations.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -21,25 +21,19 @@ import torch
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
-
-
-class BaselineArithmeticIntensityBenchmark(Benchmark):
+class BaselineArithmeticIntensityBenchmark(BaseBenchmark):
     """Low arithmetic intensity baseline - memory-bound."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A: torch.Tensor | None = None
         self.B: torch.Tensor | None = None
         self.C: torch.Tensor | None = None
@@ -47,6 +41,11 @@ class BaselineArithmeticIntensityBenchmark(Benchmark):
         self.K = 2048
         self.N = 2048
         self.block_k = 128  # Small tiles -> repeated memory traffic
+        tokens = self.M * self.N
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize large tensors."""
@@ -59,7 +58,11 @@ class BaselineArithmeticIntensityBenchmark(Benchmark):
 
         # Warm up chunked kernel launches.
         self._chunked_matmul()
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
 
     def _chunked_matmul(self) -> None:
         """Compute C = A @ B using small K-tiles."""
@@ -74,26 +77,17 @@ class BaselineArithmeticIntensityBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - low arithmetic intensity (memory-bound)."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_arithmetic_intensity", enable=enable_nvtx):
+        with self._nvtx_range("baseline_arithmetic_intensity"):
             if self.A is None or self.B is None or self.C is None:
                 raise RuntimeError("Benchmark not initialized")
             self._chunked_matmul()
-            torch.cuda.synchronize(self.device)
+            self._synchronize()
 
     
     def teardown(self) -> None:
         """Cleanup."""
         del self.A, self.B, self.C
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -111,7 +105,7 @@ class BaselineArithmeticIntensityBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineArithmeticIntensityBenchmark()
 

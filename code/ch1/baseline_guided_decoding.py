@@ -1,13 +1,8 @@
-"""baseline guided decoding - Baseline standard decoding without guidance. Implements Benchmark protocol for harness integration."""
+"""Baseline guided decoding - standard decoding without guidance."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -17,78 +12,49 @@ try:
 except ImportError:
     pass
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch1")
-    return torch.device("cuda")
-
-
-class BaselineGuidedDecodingBenchmark(Benchmark):
-    """Baseline: Standard decoding without guidance (free-form generation).
-    
-    Guided decoding: This baseline does not use guided decoding.
-    Generates tokens freely without schema or structure constraints.
-    """
+class BaselineGuidedDecodingBenchmark(BaseBenchmark):
+    """Baseline: standard decoding without schema/structure guidance."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        self.input_ids = None
+        super().__init__()
+        self.model: Optional[nn.TransformerDecoder] = None
+        self.input_ids: Optional[torch.Tensor] = None
         self.max_length = 20
+        self.batch_size = 4
+        self.seq_len = 10
+        tokens = self.batch_size * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and input."""
         torch.manual_seed(42)
-        # Baseline: Standard decoding without guidance
-        # Guided decoding uses schema/constraints to guide generation
-        # This baseline generates tokens freely without constraints
-        
         vocab_size = 1000
         hidden_dim = 256
         
         self.model = nn.TransformerDecoder(
             nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=8, batch_first=True),
-            num_layers=2
+            num_layers=2,
         ).to(self.device).eval()
         
-        batch_size = 4
-        seq_len = 10
-        self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
-        torch.cuda.synchronize()
+        self.input_ids = torch.randint(0, vocab_size, (self.batch_size, self.seq_len), device=self.device)
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Standard decoding without guidance."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_guided_decoding", enable=enable_nvtx):
+        """Benchmark: standard decoding without guidance."""
+        assert self.model is not None and self.input_ids is not None
+        with self._nvtx_range("baseline_guided_decoding"):
             with torch.no_grad():
-                # Baseline: Standard decoding
-                # Generates tokens freely without schema/constraints
-                # No guidance - model generates any valid token
-                embedded_input = torch.randn(self.input_ids.size(0), self.input_ids.size(1), 256, device=self.device)
-                memory = torch.randn(self.input_ids.size(0), self.input_ids.size(1), 256, device=self.device)
+                embedded_input = torch.randn(self.batch_size, self.seq_len, 256, device=self.device)
+                memory = torch.randn(self.batch_size, self.seq_len, 256, device=self.device)
                 output = self.model(embedded_input, memory)
-                
-                # Baseline: No guidance - free-form generation
-                # Cannot enforce structure or schema constraints
                 _ = output.sum()
-
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -103,27 +69,13 @@ class BaselineGuidedDecodingBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineGuidedDecodingBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    timing = result.timing
-    if timing:
-        print(f"\nBaseline Guided Decoding (Standard): {timing.mean_ms:.3f} ms")
-    else:
-        print("\nBaseline Guided Decoding (Standard): No timing data available")

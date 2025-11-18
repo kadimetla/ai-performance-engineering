@@ -2,7 +2,7 @@
 
 Demonstrates memory operations optimized with vectorization (SIMD).
 Vectorization processes multiple elements per instruction for better efficiency.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing import Optional
 from common.torch_compile_safe import safe_compile
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
 )
 
@@ -46,10 +46,11 @@ class VectorizedTransform(nn.Module):
         return fused
 
 
-class OptimizedVectorizationMemoryBenchmark(Benchmark):
+class OptimizedVectorizationMemoryBenchmark(BaseBenchmark):
     """Optimized: Memory operations with vectorization."""
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.data = None
         self.output = None
@@ -138,7 +139,7 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
             return "Output tensor not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedVectorizationMemoryBenchmark()
 

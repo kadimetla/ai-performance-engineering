@@ -2,25 +2,20 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Optional
 
 import torch
 
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
 from ch10.matmul_extension_tcgen05 import load_matmul_tcgen05_module
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.tcgen05_requirements import check_tcgen05_support
 
 
-class OptimizedMatmulTCGen05Benchmark(Benchmark):
+class OptimizedMatmulTCGen05Benchmark(BaseBenchmark):
     """Runs the custom tcgen05 CUDA kernel."""
 
     def __init__(self) -> None:
+        super().__init__()
         available, reason = check_tcgen05_support(
             loader=None,
             module_name="ch10 matmul tcgen05 kernels",
@@ -42,18 +37,21 @@ class OptimizedMatmulTCGen05Benchmark(Benchmark):
         dtype = torch.float16
         self.A = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
         self.B = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
         if not self._tcgen05_available:
             raise RuntimeError(self._skip_reason)
         assert self.A is not None and self.B is not None and self.module is not None
-        with torch.no_grad():
-            _ = self.module.matmul_tcgen05(self.A, self.B)
+        with self._nvtx_range("optimized_matmul_tcgen05"):
+            with torch.no_grad():
+                _ = self.module.matmul_tcgen05(self.A, self.B)
+        self._synchronize()
 
     def teardown(self) -> None:
         self.A = None
         self.B = None
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=20, warmup=5)
@@ -68,18 +66,3 @@ class OptimizedMatmulTCGen05Benchmark(Benchmark):
 
 def get_benchmark() -> OptimizedMatmulTCGen05Benchmark:
     return OptimizedMatmulTCGen05Benchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config(),
-    )
-    result = harness.benchmark(benchmark)
-    print(
-        f"\nOptimized tcgen05 matmul: "
-        f"{result.timing.mean_ms if result.timing else 0.0:.3f} ms"
-    )

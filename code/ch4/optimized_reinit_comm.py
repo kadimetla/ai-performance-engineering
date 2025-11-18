@@ -1,8 +1,4 @@
-"""optimized_reinit_comm.py - Initialize NCCL once and reuse (optimized).
-
-Preferred pattern: initialize NCCL communicator once and reuse it.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_reinit_comm.py - Initialize NCCL once and reuse (optimized)."""
 
 from __future__ import annotations
 
@@ -32,28 +28,27 @@ except ImportError:
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda")
-
-class OptimizedReinitCommBenchmark(Benchmark):
+class OptimizedReinitCommBenchmark(BaseBenchmark):
     """Initialize NCCL once and reuse - good pattern."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.rank = 0
         self.world_size = 1
         self.tensor = None
         self.initialized = False
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=1.0,
+        )
     
     def setup(self) -> None:
         """Setup: Initialize NCCL once."""
@@ -67,12 +62,10 @@ class OptimizedReinitCommBenchmark(Benchmark):
         self.world_size = dist.get_world_size()
         torch.cuda.set_device(0)
         self.tensor = torch.ones(1, device=self.device)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Reuse existing NCCL communicator."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
@@ -80,9 +73,9 @@ class OptimizedReinitCommBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("reinit_comm", enable=enable_nvtx):
-    # Good pattern: reuse existing NCCL communicator
-    # No reinitialization - just perform all-reduce
+            # Good pattern: reuse existing NCCL communicator
             dist.all_reduce(self.tensor)
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -101,6 +94,9 @@ class OptimizedReinitCommBenchmark(Benchmark):
             enable_profiling=False,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.tensor is None:
@@ -114,7 +110,7 @@ class OptimizedReinitCommBenchmark(Benchmark):
             return "Tensor contains non-finite values"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedReinitCommBenchmark()
 

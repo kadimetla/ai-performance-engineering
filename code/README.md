@@ -14,26 +14,28 @@ Production playbook for validating, tuning, and documenting PyTorch/CUDA/Triton 
 
 | Chapter | Concepts Covered | # Examples |
 |---------|------------------|------------|
-| **ch1** | Performance basics, profiling, memory management, CUDA Graphs, batched ops, roofline, arithmetic intensity | 21 |
-| **ch2** | GPU architecture, NVLink, CPU-GPU coherency, hierarchy inspection | 6 |
-| **ch3** | System tuning (NUMA, governors, THP, IRQs, Docker/K8s) | 11 |
-| **ch4** | Multi-GPU training, NCCL, tensor/pipeline parallelism, NVSHMEM | 7 |
-| **ch5** | Storage/IO optimization, GDS, DataLoader tuning, cuFile | 7 |
-| **ch6** | CUDA fundamentals, thread hierarchy, occupancy, unified memory | 14 |
-| **ch7** | Memory access patterns, coalescing, tiling, shared-memory bandwidth | 20 |
-| **ch8** | Occupancy tuning, ILP, loop unrolling, warp divergence, resource limits | 13 |
-| **ch9** | Arithmetic intensity, roofline, kernel fusion, CUTLASS | 17 |
-| **ch10** | Tensor cores, TMA, async pipelines, warp specialization, clusters | 17 |
-| **ch11** | CUDA streams, concurrency, Hyper-Q, overlap optimization | 11 |
-| **ch12** | CUDA Graphs, conditional graphs, dynamic launches | 14 |
-| **ch13** | PyTorch profiling, memory analysis, FSDP, quantization, allocators | 23 |
+| **ch1** | Performance basics, profiling, memory management, CUDA Graphs, batched ops, roofline, arithmetic intensity | 7 |
+| **ch2** | GPU architecture, NVLink, CPU-GPU coherency, hierarchy inspection | 3 |
+| **ch3** | System tuning (NUMA, governors, THP, IRQs, Docker/K8s) | 7 |
+| **ch4** | Multi-GPU training, NCCL, tensor/pipeline parallelism, NVSHMEM | 21 |
+| **ch5** | Storage/IO optimization, GDS, DataLoader tuning, cuFile | 6 |
+| **ch6** | CUDA fundamentals, thread hierarchy, occupancy, unified memory | 10 |
+| **ch7** | Memory access patterns, coalescing, tiling, shared-memory bandwidth | 14 |
+| **ch8** | Occupancy tuning, ILP, loop unrolling, warp divergence, resource limits | 10 |
+| **ch9** | Arithmetic intensity, roofline, kernel fusion, CUTLASS | 8 |
+| **ch10** | Tensor cores, TMA, async pipelines, warp specialization, clusters | 18 |
+| **ch11** | CUDA streams, concurrency, Hyper-Q, overlap optimization | 13 |
+| **ch12** | CUDA Graphs, conditional graphs, dynamic launches | 8 |
+| **ch13** | PyTorch profiling, memory analysis, FSDP, quantization, allocators | 21 |
 | **ch14** | `torch.compile`, Triton kernels, FP8, custom codegen | 5 |
-| **ch15** | Disaggregated inference, KV cache, continuous batching | 10 |
+| **ch15** | Disaggregated inference, KV cache, continuous batching | 9 |
 | **ch16** | Inference optimization, production serving, speculative decoding | 8 |
 | **ch17** | Dynamic routing, roofline trade-offs, latency vs. accuracy | 13 |
-| **ch18** | Advanced attention (Flash/Flex/MLA/Paged) | 18 |
-| **ch19** | Low-precision training (FP4/FP6/FP8), Transformer Engine | 15 |
-| **ch20** | End-to-end optimization case studies | 14 |
+| **ch18** | Advanced attention (Flash/Flex/MLA/Paged) | 5 |
+| **ch19** | Low-precision training (FP4/FP6/FP8), Transformer Engine | 9 |
+| **ch20** | End-to-end optimization case studies | 7 |
+
+Canonical topic homes (deduplicated): coalescing → ch7; bank conflicts/shared memory → ch6–7; CUTLASS/Triton/tiling → ch9 & ch14; streams/concurrency → ch10–11; tensor/pipeline/data/context parallelism and KV cache/continuous batching → ch4 and ch13–17; attention/Flash attention → ch10 with one serving-focused example in ch15; occupancy/roofline → ch8 & ch10; quantization → ch13 & ch19; NVLink/disaggregated → ch4 & ch17.
 
 ### Themes
 1. **Performance fundamentals (ch1–ch3)** – profiling, hardware awareness, system tuning.
@@ -87,6 +89,7 @@ cp third_party/TransformerEngine/transformer_engine/pytorch/dist/transformer_eng
 code/
 ├── setup.sh
 ├── ch1...ch20/          # Chapter walkthroughs with READMEs and benchmarks
+├── labs/                # Capstone labs (Blackwell matmul, FlexAttention, MoE CUDA, full-stack)
 ├── common/              # Harness, logging, workload configs
 ├── tools/               # Verification, analysis, benchmarking helpers
 ├── scripts/             # Profiling/probing utilities
@@ -116,7 +119,33 @@ python tools/cli/benchmark_cli.py run --targets ch12 --artifacts-dir ./artifacts
 
 # Custom options
 python tools/cli/benchmark_cli.py run --targets ch10 --timeout-multiplier 2.0 --reproducible --cold-start
-python tools/cli/benchmark_cli.py run --targets ch18 --profile  # collect Nsight/torch profiler traces
+python tools/cli/benchmark_cli.py run --targets ch18 --profile minimal  # collect lightweight Nsight/torch profiler traces
+# Expectations workflow: pass `--accept-regressions` to refresh expectation files when
+# you intentionally accept new numbers (replaces the old AIPERF_ACCEPT_REGRESSIONS env).
+# Harness treats hardware/stack gaps as skips (e.g., TF32 disabled via new helpers,
+# DSMEM-unavailable clusters on GB10, NVFP4-only kernels on non-FP4 parts).
+```
+
+### Labs via CLI
+Capstone labs now live under `labs/`—run them through the same CLI targets:
+```bash
+python tools/cli/benchmark_cli.py list-targets --chapter labs/blackwell_matmul
+python tools/cli/benchmark_cli.py run --targets labs/blackwell_matmul --profile minimal
+python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention --profile minimal
+python tools/cli/benchmark_cli.py run --targets labs/moe_cuda --profile minimal
+python tools/cli/benchmark_cli.py run --targets labs/fullstack_cluster:09_end_to_end --profile minimal
+```
+Targets follow the usual `chapter:example` format; omit `:example` to sweep every pair in a lab.
+
+**Benchmark discovery rules (important for variants):** the harness pairs `baseline_<name>.py`
+with any `optimized_<name>.py` and also any `optimized_<name>_<suffix>.py` in the same directory.
+That lets you add multiple optimized steps for a single baseline (e.g., `optimized_router.py` and
+`optimized_router_vectorized.py`) and compare them side by side via `list-targets` / `run`.
+Select a specific variant by using its target name from `list-targets`, e.g.:
+```bash
+python tools/cli/benchmark_cli.py list-targets --chapter labs/moe_cuda
+python tools/cli/benchmark_cli.py run --targets labs/moe_cuda:kv_transfer_graphs  # baseline_kv_transfer vs optimized_kv_transfer_graphs
+python tools/cli/benchmark_cli.py run --targets labs/moe_cuda:router labs/moe_cuda:router_vectorized  # two independent comparisons
 ```
 
 ### Legacy Runner / Targeted Examples
@@ -131,7 +160,8 @@ Artifacts land under `artifacts/<timestamp>/<example>/results/benchmark_test_res
 - `--timeout-multiplier`, `--suite-timeout` – stretch or cap run time.
 - `--reproducible` – force deterministic seeds/algorithms; slower fallback kernels and ops without deterministic support may fail.
 - `--cold-start` – extra cleanup between benchmarks (includes garbage collection and CUDA context resets).
-- `--profile/--no-profile` – opt into Nsight/Torch tracing when needed.
+- `--profile none|minimal|deep_dive|roofline` – skip profiling or pick the preset (minimal = low overhead; deep_dive = full metrics); defaults to `none`.
+- `--ncu-metric-set auto|minimal|deep_dive|roofline` – override Nsight Compute metric preset (auto follows the chosen profile).
 - `--iterations`, `--warmup` – override the default 20/5 sampling when you need quicker local experiments.
 
 ### Reporting & Proof-of-Benefit
@@ -170,6 +200,7 @@ Results feed into `performance_targets.py`, letting chapters grade against measu
 ## 4. Tooling & Diagnostics
 
 - **Benchmark Harness Guide**: see `docs/benchmark_harness_guide.md` for architecture, manifest capture, profiling hooks, and logging details.
+- **Performance intake & triage**: `docs/perf_intake_and_triage.md` + `scripts/profiling/perf_triage_bundle.sh` for one-page goals and a shareable 30-minute baseline capture. The bundle now drops a full hardware capability report (`hardware_capabilities.txt`) alongside GPU/CPU/NVLink snapshots and optional Nsight/dmon runtime traces. Example harness capture (no Nsight): `scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts --tag harness_ch1_coalescing --duration 120 --no-nsys -- python tools/testing/run_all_benchmarks.py --targets ch1:coalescing --format json --output artifacts/perf_triage_harness_coalescing.json`.
 - **Utility probes**: `tools/tcgen05_probe.cu` is a minimal CUTLASS 4.2 driver for tcgen05 tensor cores. Build directly with NVCC or the vendored CUTLASS CMake wrapper to confirm toolchain support.
 - **Scripts folder**: reusable Nsight workflows, performance sweeps, and GPU resilience helpers.
 - **Common helpers**: `common/python` hosts workload configs, CUDA binary wrappers, NVCC arch detection, logging, and run manifests shared by every chapter.
@@ -190,6 +221,13 @@ sudo ./reset-gpu.sh
 ```
 Stops running processes, toggles persistence mode, reloads NVIDIA kernel modules, and performs PCIe/NVML resets. Root privileges are required.
 
+User-space helper:
+```bash
+python tools/reset_gpu.py [--device N] [--full-system]
+```
+- Default: kill compute PIDs, clear torch CUDA caches, best-effort `nvidia-smi --gpu-reset`.
+- `--full-system` (root): also stops auxiliary services, reloads NVIDIA modules, and issues PCIe function-level resets.
+
 ### Next Steps
 - Capture new artifacts whenever kernels change meaningfully.
 - File issues or PRs with benchmark diffs plus the associated artifact bundle for reproducibility.
@@ -201,6 +239,8 @@ Stops running processes, toggles persistence mode, reloads NVIDIA kernel modules
 ### GB10 / SM121 tcgen05 support gap
 - CUDA 13.0 + driver 580.95 on GB10 (SM 12.1) lacks the multicast/TMA features required for CUTLASS tcgen05 lowering.
 - `ptxas` fails with `Feature '.multicast::cluster::all' not supported on .target 'sm_121'`, so no cubin/SASS is produced.
+- When external builds insist on `sm_121a`, the benchmarking harness uses `tools/benchmarking/.ptxas_shim/ptxas` to rewrite `sm_121a → sm_121` before invoking the real `ptxas`.
+- For PyTorch/Triton runs on GB10, `arch_config.configure_pytorch_optimizations()` clamps `TORCH_CUDA_ARCH_LIST`/`CMAKE_CUDA_ARCHITECTURES`/`CUDAARCHS` to `12.0`/`120` to avoid tcgen05/tensormap opcode rejects from `ptxas` (SM 121/121a unsupported in CUDA 13.0).
 - Workarounds: run on hardware that natively exposes SM100+/SM103 tcgen05 (B200/B300) or wait for a CUDA/firmware drop that enables the feature on SM121. Until then, tcgen05 examples will be skipped.
 
 ### Thread block clusters without DSMEM (ch10)

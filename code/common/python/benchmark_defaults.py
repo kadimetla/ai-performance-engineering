@@ -39,9 +39,12 @@ class BenchmarkDefaults:
     enable_cleanup: bool = False
     use_subprocess: bool = True
     execution_mode: Optional[str] = None
+    profile_type: str = "minimal"
+    nsys_nvtx_include: Optional[List[str]] = None
     
     # Reproducibility defaults
-    deterministic: bool = True
+    # Default to nondeterministic for performance; users can opt-in if needed.
+    deterministic: bool = False
     seed: Optional[int] = 1337
     
     # Timeout defaults (in seconds)
@@ -52,12 +55,14 @@ class BenchmarkDefaults:
     nsys_timeout_seconds: int = 120
     ncu_timeout_seconds: int = 180
     timeout_multiplier: float = 3.0
+    ncu_sampling_interval: int = 75000
     
     # Legacy timeout (deprecated)
     timeout_seconds: int = 15
     
     # Output defaults
     profiling_output_dir: Optional[str] = None
+    ncu_metric_set: str = "auto"  # 'auto', 'deep_dive', 'roofline', 'minimal'
     
     @classmethod
     def from_env(cls) -> BenchmarkDefaults:
@@ -83,6 +88,8 @@ class BenchmarkDefaults:
             "enable_cleanup": self.enable_cleanup,
             "use_subprocess": self.use_subprocess,
             "execution_mode": self.execution_mode,
+            "profile_type": self.profile_type,
+            "nsys_nvtx_include": self.nsys_nvtx_include,
             "deterministic": self.deterministic,
             "seed": self.seed,
             "setup_timeout_seconds": self.setup_timeout_seconds,
@@ -94,6 +101,8 @@ class BenchmarkDefaults:
             "timeout_multiplier": self.timeout_multiplier,
             "timeout_seconds": self.timeout_seconds,
             "profiling_output_dir": self.profiling_output_dir,
+            "ncu_metric_set": self.ncu_metric_set,
+            "ncu_sampling_interval": self.ncu_sampling_interval,
         }
 
 

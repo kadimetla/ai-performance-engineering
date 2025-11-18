@@ -1,4 +1,4 @@
-"""optimized ilp basic - Optimized with high instruction-level parallelism. Implements Benchmark protocol for harness integration."""
+"""optimized ilp basic - Optimized with high instruction-level parallelism."""
 
 from __future__ import annotations
 
@@ -19,21 +19,17 @@ except ImportError:
 from typing import Optional
 
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 from common.python.benchmark_utils import warn_benchmark_scaling
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch1")
-    return torch.device("cuda")
-
-
-class OptimizedIlpBasicBenchmark(Benchmark):
+class OptimizedIlpBasicBenchmark(BaseBenchmark):
     """Optimized: Independent operations with high ILP.
     
     ILP: Uses independent operations to maximize instruction-level parallelism.
@@ -41,7 +37,7 @@ class OptimizedIlpBasicBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.input = None
         self.output = None
         # Target workload size for optimal ILP demonstration
@@ -70,6 +66,11 @@ class OptimizedIlpBasicBenchmark(Benchmark):
             impact_description="Smaller workloads may not fully demonstrate ILP benefits; speedup ratios may be lower than production-scale",
             recommendation="For accurate production benchmarks, use GPUs with >=16GB memory"
         )
+        tokens = self.N
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     
     def setup(self) -> None:
@@ -93,20 +94,11 @@ class OptimizedIlpBasicBenchmark(Benchmark):
         # The independent operations already enable good ILP without compilation
         # PyTorch's eager execution can fuse these operations efficiently
         self._compiled_op = None  # Use direct execution
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Independent operations with high ILP."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("optimized_ilp_basic", enable=enable_nvtx):
+        with self._nvtx_range("optimized_ilp_basic"):
             # Optimization: Independent operations - high ILP
             # All operations are independent and can execute in parallel
             # PyTorch can fuse these into a single efficient kernel
@@ -121,11 +113,9 @@ class OptimizedIlpBasicBenchmark(Benchmark):
             # Mathematically equivalent to baseline but with better parallelism
             self.output = val * 6.0 - 2.0
             
-            # Optimization: High ILP benefits
-            # - Independent operations enable parallel execution
-            # - Single fused kernel reduces overhead
-            # - Better utilization of compute resources
-            # - Hides instruction latency through parallel execution
+            # Keep reference to prevent elimination and synchronize for accurate timing
+            self._last_sum = self.output.sum()
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -140,6 +130,9 @@ class OptimizedIlpBasicBenchmark(Benchmark):
             iterations=100,
             warmup=20,
         )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result by comparing to baseline computation.
@@ -163,7 +156,7 @@ class OptimizedIlpBasicBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedIlpBasicBenchmark()
 

@@ -63,8 +63,39 @@ from common.python.env_defaults import apply_env_defaults, dump_environment_and_
 from common.python.logger import setup_logging, get_logger, log_benchmark_start, log_benchmark_complete, log_benchmark_error
 from common.python.artifact_manager import ArtifactManager
 from tools.verification.verify_all_benchmarks import resolve_target_chapters, run_verification
+from common.python import profiler_config as profiler_config_mod
+from common.python.discovery import chapter_slug, discover_all_chapters
 
 apply_env_defaults()
+
+def _validate_ncu_metric_set(metric_set: str) -> str:
+    normalized = metric_set.strip().lower()
+    valid = {"auto", "deep_dive", "roofline", "minimal"}
+    if normalized not in valid:
+        message = (
+            f"Invalid Nsight Compute metric set '{metric_set}'. "
+            "Choose from 'auto', 'deep_dive', 'roofline', or 'minimal'."
+        )
+        if TYPER_AVAILABLE and typer is not None:
+            raise typer.BadParameter(message)
+        raise ValueError(message)
+    if normalized != "auto":
+        profiler_config_mod.set_default_profiler_metric_set(normalized)
+    return normalized
+
+
+def _validate_profile_type(profile: str) -> str:
+    normalized = profile.strip().lower()
+    valid = {"none", "minimal", "deep_dive", "roofline"}
+    if normalized not in valid:
+        message = (
+            f"Invalid profile choice '{profile}'. "
+            "Choose from 'none', 'minimal', 'deep_dive', or 'roofline'."
+        )
+        if TYPER_AVAILABLE and typer is not None:
+            raise typer.BadParameter(message)
+        raise ValueError(message)
+    return normalized
 
 # Import architecture optimizations early
 try:
@@ -76,7 +107,7 @@ except ImportError:
 try:
     import torch
     from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+    from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
     BENCHMARK_AVAILABLE = True
 except ImportError:
     BENCHMARK_AVAILABLE = False
@@ -135,7 +166,7 @@ def ensure_peak_benchmarks_exist():
 def _execute_benchmarks(
     targets: Optional[List[str]] = None,
     output_format: str = "both",
-    enable_profiling: bool = True,
+    profile_type: str = "none",
     suite_timeout: Optional[int] = None,
     timeout_multiplier: float = 1.0,
     reproducible: bool = False,
@@ -146,11 +177,14 @@ def _execute_benchmarks(
     artifacts_dir: Optional[str] = None,
     log_level: str = "INFO",
     log_file: Optional[str] = None,
+    accept_regressions: bool = False,
+    update_expectations: bool = False,
+    ncu_metric_set: str = "auto",
 ):
     _execute_benchmarks_impl(
         targets=targets,
         output_format=output_format,
-        enable_profiling=enable_profiling,
+        profile_type=profile_type,
         suite_timeout=suite_timeout,
         timeout_multiplier=timeout_multiplier,
         reproducible=reproducible,
@@ -161,13 +195,16 @@ def _execute_benchmarks(
         artifacts_dir=artifacts_dir,
         log_level=log_level,
         log_file=log_file,
+        accept_regressions=accept_regressions,
+        update_expectations=update_expectations,
+        ncu_metric_set=ncu_metric_set,
     )
 
 
 def _execute_benchmarks_impl(
     targets: Optional[List[str]] = None,
     output_format: str = "both",
-    enable_profiling: bool = True,
+    profile_type: str = "none",
     suite_timeout: Optional[int] = None,
     timeout_multiplier: float = 1.0,
     reproducible: bool = False,
@@ -178,6 +215,9 @@ def _execute_benchmarks_impl(
     artifacts_dir: Optional[str] = None,
     log_level: str = "INFO",
     log_file: Optional[str] = None,
+    accept_regressions: bool = False,
+    update_expectations: bool = False,
+    ncu_metric_set: str = "auto",
 ):
     """Shared function to execute benchmarks."""
     # Set force pipeline flag before benchmarks run
@@ -216,10 +256,12 @@ def _execute_benchmarks_impl(
     
     logger.info("=" * 80)
     logger.info("RUNNING ALL BENCHMARKS")
+    profile_choice = (profile_type or "none").lower()
+    enable_profiling = profile_choice != "none"
     if enable_profiling:
-        logger.info("PROFILING ENABLED: nsys/ncu/PyTorch profiling will run")
+        logger.info(f"PROFILING ENABLED ({profile_choice}): nsys/ncu/PyTorch profiling will run")
     else:
-        logger.info("PROFILING DISABLED")
+        logger.info("PROFILING DISABLED (profile=none)")
     if timeout_multiplier != 1.0:
         logger.info(f"TIMEOUT MULTIPLIER: {timeout_multiplier}x (all timeouts scaled by this factor)")
     if reproducible:
@@ -247,7 +289,7 @@ def _execute_benchmarks_impl(
     
     logger.info(f"Found {len(chapter_dirs)} chapter directory(ies) to test")
     if chapter_dirs:
-        logger.info(f"Chapters: {[d.name for d in chapter_dirs]}")
+        logger.info(f"Chapters: {[chapter_slug(d, repo_root) for d in chapter_dirs]}")
     else:
         logger.warning("No chapter directories found! Check that chapter directories exist (ch1, ch2, etc.)")
     
@@ -280,20 +322,24 @@ def _execute_benchmarks_impl(
                 if elapsed >= suite_timeout:
                     logger.warning("Approaching suite timeout, skipping remaining chapters")
                     break
-            
-            logger.info(f"Testing chapter: {chapter_dir.name}")
+
+            chapter_id = chapter_slug(chapter_dir, repo_root)
+            logger.info(f"Testing chapter: {chapter_id}")
             # Call test_chapter with all flags - it handles manifest generation internally
-            example_filters = chapter_filters.get(chapter_dir.name)
+            example_filters = chapter_filters.get(chapter_id)
             only_examples = sorted(example_filters) if example_filters else None
             result = test_chapter(
                 chapter_dir=chapter_dir,
                 enable_profiling=enable_profiling,
+                profile_type=profile_choice if enable_profiling else "none",
                 timeout_multiplier=timeout_multiplier,
                 reproducible=reproducible,
                 cold_start=cold_start,
                 iterations=iterations,
                 warmup=warmup,
                 only_examples=only_examples,
+                accept_regressions=accept_regressions or update_expectations,
+                ncu_metric_set=ncu_metric_set,
             )
             all_results.append(result)
     except (TimeoutError, KeyboardInterrupt):
@@ -365,7 +411,7 @@ if TYPER_AVAILABLE:
     def run(
         targets: Optional[List[str]] = Option(None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to run. Repeat the flag for multiple targets. Omit or use 'all' for every chapter."),
         output_format: str = Option("both", "--format", "-f", help="Output format: 'json', 'markdown', or 'both'"),
-        enable_profiling: bool = Option(False, "--profile", help="Enable profiling (nsys/ncu/PyTorch). Disabled by default to avoid long GPU stalls.", is_flag=True),
+        profile_type: str = Option("none", "--profile", "-p", help="Profiling preset: none (default), minimal, deep_dive, or roofline. Non-'none' enables nsys/ncu/PyTorch profiling.", callback=_validate_profile_type),
         suite_timeout: Optional[int] = Option(None, "--suite-timeout", help="Suite timeout in seconds (default: 14400 = 4 hours, 0 = disabled)"),
         timeout_multiplier: float = Option(1.0, "--timeout-multiplier", help="Multiply all benchmark timeouts by this factor (e.g., 2.0 = double all timeouts)"),
         reproducible: bool = Option(False, "--reproducible", help="Enable reproducible mode: set all seeds to 42 and force deterministic algorithms (uses slower fallbacks; ops without deterministic support may error)."),
@@ -376,6 +422,9 @@ if TYPER_AVAILABLE:
         artifacts_dir: Optional[str] = Option(None, "--artifacts-dir", help="Directory for artifacts (default: ./artifacts)"),
         log_level: str = Option("INFO", "--log-level", help="Log level: DEBUG, INFO, WARNING, ERROR"),
         log_file: Optional[str] = Option(None, "--log-file", help="Path to log file (default: artifacts/<run_id>/logs/benchmark.log)"),
+        ncu_metric_set: str = Option("auto", "--ncu-metric-set", help="Nsight Compute metric preset: auto, minimal, deep_dive, or roofline. If auto, the profile type governs metric selection.", callback=_validate_ncu_metric_set),
+        accept_regressions: bool = Option(False, "--accept-regressions", help="Update expectation files when improvements are detected instead of flagging regressions.", is_flag=True),
+        update_expectations: bool = Option(False, "--update-expectations", help="Force-write observed metrics into expectation files (overrides regressions). Useful for refreshing baselines on new hardware.", is_flag=True),
     ):
         """Run benchmarks - discover, run, and summarize results.
         
@@ -385,18 +434,21 @@ if TYPER_AVAILABLE:
         _execute_benchmarks(
             targets=list(targets) if targets else None,
             output_format=output_format,
-            enable_profiling=enable_profiling,
-            suite_timeout=suite_timeout,
-            timeout_multiplier=timeout_multiplier,
-            reproducible=reproducible,
-            cold_start=cold_start,
-            iterations=iterations,
-            warmup=warmup,
-            force_pipeline=force_pipeline,
-            artifacts_dir=artifacts_dir,
-            log_level=log_level,
-            log_file=log_file,
-        )
+            profile_type=profile_type,
+        suite_timeout=suite_timeout,
+        timeout_multiplier=timeout_multiplier,
+        reproducible=reproducible,
+        cold_start=cold_start,
+        iterations=iterations,
+        warmup=warmup,
+        force_pipeline=force_pipeline,
+        artifacts_dir=artifacts_dir,
+        log_level=log_level,
+        log_file=log_file,
+        accept_regressions=accept_regressions,
+        update_expectations=update_expectations,
+        ncu_metric_set=ncu_metric_set,
+    )
 
     @app.command()
     def verify(
@@ -405,6 +457,38 @@ if TYPER_AVAILABLE:
         """Run the lightweight benchmark verification harness."""
         exit_code = run_verification(list(targets) if targets else None)
         raise typer.Exit(code=exit_code)
+
+    @app.command("list-targets")
+    def list_targets(
+        chapter: Optional[str] = Option(
+            None,
+            "--chapter",
+            "-c",
+            help="Limit output to a single chapter (e.g., ch15 or labs/blackwell_matmul).",
+        ),
+    ):
+        """List available benchmark targets in chapter:example format."""
+        if chapter:
+            chapter_dirs, _ = resolve_target_chapters([chapter])
+        else:
+            chapter_dirs = discover_all_chapters(repo_root)
+
+        if not chapter_dirs:
+            typer.echo("No chapter directories found.")
+            raise typer.Exit(code=1)
+
+        any_targets = False
+        for chapter_dir in chapter_dirs:
+            chapter_id = chapter_slug(chapter_dir, repo_root)
+            pairs = discover_benchmarks(chapter_dir)
+            if not pairs:
+                continue
+            any_targets = True
+            for _, _, example in sorted(pairs, key=lambda entry: entry[2]):
+                typer.echo(f"{chapter_id}:{example}")
+
+        if not any_targets:
+            typer.echo("No benchmark targets discovered.")
 
 
 def main():

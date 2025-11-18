@@ -1,31 +1,13 @@
-"""optimized_matmul.py - Tensor Core optimized matrix multiplication.
-
-Demonstrates tensor core acceleration using FP16/BF16 on Blackwell B200/GB10.
-Uses 5th-gen Tensor Cores (tcgen05) for peak performance.
-"""
+"""optimized_matmul.py - Tensor Core optimized matrix multiplication."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add repo root to path for imports
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 
-# Configure for Blackwell
-from typing import Optional
-
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode
-)
 
 
 def resolve_device() -> torch.device:
@@ -42,27 +24,25 @@ def tensor_core_matmul(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     return torch.matmul(A, B)
 
 
-class OptimizedTensorCoreBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+class OptimizedTensorCoreBenchmark(BaseBenchmark):
+    """Benchmark implementation using tensor cores."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A = None
         self.B = None
         self.size = 8192
         self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        self._compiled_matmul = None
+        self.matmul_fn = tensor_core_matmul
     
     def setup(self) -> None:
         """Setup: initialize matrices."""
         
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
-# Use tensor core dtype (bfloat16/fp16) for GPU performance
+        torch.manual_seed(42)
         self.A = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
         self.B = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
         compile_fn = getattr(torch, "compile", None)
@@ -71,32 +51,24 @@ class OptimizedTensorCoreBenchmark(Benchmark):
                 self.matmul_fn = compile_fn(tensor_core_matmul, mode="reduce-overhead")  # type: ignore[arg-type]
             except Exception:
                 self.matmul_fn = tensor_core_matmul
-        else:
-            self.matmul_fn = tensor_core_matmul
         with torch.no_grad():
             _ = self.matmul_fn(self.A, self.B)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("matmul", enable=enable_nvtx):
+        if self.A is None or self.B is None:
+            raise RuntimeError("Matrices not initialized")
+        with self._nvtx_range("matmul_tensor_core"):
             with torch.no_grad():
                 _ = self.matmul_fn(self.A, self.B)
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
-        del self.A, self.B
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        self.A = None
+        self.B = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark-specific config."""
@@ -122,50 +94,6 @@ class OptimizedTensorCoreBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> OptimizedTensorCoreBenchmark:
     """Factory function for harness discovery."""
     return OptimizedTensorCoreBenchmark()
-
-
-def main() -> None:
-    """Standalone execution with timing."""
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=10)
-    )
-    benchmark = OptimizedTensorCoreBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print("Optimized: Tensor Core Matrix Multiplication")
-    print("=" * 70)
-    print(f"Matrix size: {benchmark.size}×{benchmark.size}")
-    print(f"Precision: {benchmark.dtype} (tensor cores enabled)")
-    
-    # Detect architecture
-    props = torch.cuda.get_device_properties(0)
-    compute_cap = f"{props.major}.{props.minor}"
-    if compute_cap == "10.0":
-        print("Architecture: Blackwell B200 (5th-gen Tensor Cores)")
-    elif props.major == 12:
-        print("Architecture: Grace-Blackwell GB10 (tcgen05)")
-    else:
-        print(f"Architecture: Compute {compute_cap}")
-    print()
-    
-    mean_ms = result.timing.mean_ms if result.timing else 0.0
-    flops = 2 * benchmark.size * benchmark.size * benchmark.size
-    tflops = 0.0
-    if mean_ms > 0:
-        tflops = flops / (mean_ms / 1000.0) / 1e12
-    
-    print(f"Average time: {mean_ms:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-    print(f"Performance: {tflops:.2f} TFLOPS")
-    print(f"Status: Using 5th-gen Tensor Cores (~2000+ TFLOPS on B200)")
-    print("Speedup: ~3-4x over FP32 baseline")
-
-
-if __name__ == "__main__":
-    main()

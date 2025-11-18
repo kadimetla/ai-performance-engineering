@@ -13,20 +13,16 @@ import torch
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda")
-
-
-class OptimizedNvlinkBenchmark(Benchmark):
+class OptimizedNvlinkBenchmark(BaseBenchmark):
     """Optimized: NVLink for high-speed GPU-to-GPU communication.
     
     NVLink: Uses NVLink for optimized GPU-to-GPU transfers.
@@ -34,10 +30,14 @@ class OptimizedNvlinkBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.data_gpu0 = None
         self.data_gpu1 = None
         self.N = 10_000_000
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -64,20 +64,11 @@ class OptimizedNvlinkBenchmark(Benchmark):
             if torch.cuda.can_device_access_peer(0, 1):
                 torch.cuda.device(0).enable_peer_access(1)
                 torch.cuda.device(1).enable_peer_access(0)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: NVLink-optimized communication."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("optimized_nvlink", enable=enable_nvtx):
+        with self._nvtx_range("optimized_nvlink"):
             num_gpus = torch.cuda.device_count()
             if num_gpus >= 2:
                 # Multi-GPU: NVLink-optimized transfer
@@ -112,6 +103,9 @@ class OptimizedNvlinkBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.data_gpu0 is None:
@@ -119,7 +113,7 @@ class OptimizedNvlinkBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedNvlinkBenchmark()
 

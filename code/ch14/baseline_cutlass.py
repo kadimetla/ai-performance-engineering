@@ -1,7 +1,7 @@
 """baseline_cutlass.py - Baseline GEMM without CUTLASS optimization.
 
 Demonstrates standard GEMM without CUTLASS library optimization.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -15,28 +15,23 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-from typing import Optional
+from typing import Optional, Tuple
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
+from common.python.compile_utils import configure_tf32, restore_tf32
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch14")
-    return torch.device("cuda")
-
-
-class BaselineCutlassBenchmark(Benchmark):
+class BaselineCutlassBenchmark(BaseBenchmark):
     """Baseline: GEMM without CUTLASS optimization (standard PyTorch matmul)."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A: torch.Tensor | None = None
         self.B: torch.Tensor | None = None
         self.C: torch.Tensor | None = None
@@ -45,6 +40,11 @@ class BaselineCutlassBenchmark(Benchmark):
         self.n = 4096
         self.k = 4096
         self.block_k = 128
+        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.m * self.n),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize matrices."""
@@ -53,8 +53,7 @@ class BaselineCutlassBenchmark(Benchmark):
         # Using FP16 to match optimized version for fair comparison
         # Disable TF32 to use standard GEMM kernels (not CUTLASS-optimized)
         # Match optimized version backend settings for fair comparison
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
         torch.set_float32_matmul_precision("high")
         # Match optimized version cuDNN settings
         if torch.cuda.is_available():
@@ -89,13 +88,16 @@ class BaselineCutlassBenchmark(Benchmark):
                 raise RuntimeError("Benchmark not initialized")
             # Baseline: naive blocked matmul built from many GEMM calls.
             _ = self._naive_matmul()
-            torch.cuda.synchronize(self.device)
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.A = None
         self.B = None
         self.C = None
+        if self._tf32_state is not None:
+            restore_tf32(self._tf32_state)
+            self._tf32_state = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -114,7 +116,7 @@ class BaselineCutlassBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineCutlassBenchmark()
 

@@ -64,7 +64,7 @@ def get_benchmark() -> BaselineTilingBenchmarkTCGen05:
 
 
 if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+    from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 
     benchmark = get_benchmark()
     harness = BenchmarkHarness(

@@ -443,23 +443,14 @@ ncu-ui ../.[executable]/ch6/add_parallel_baseline_metrics_*.ncu-rep
 
 All CUDA examples follow the `baseline_*.cu` / `optimized_*.cu` pattern:
 
-### Available Pairs
+### Available Pairs (post-dedup)
 
-1. **Add Operation** ([source file] / [source file])
-   - Sequential vs parallel vector addition
-   - Demonstrates basic parallelization patterns
-
-2. **Coalescing** ([source file] / [source file])
-   - Uncoalesced vs coalesced memory access
-   - Shows bandwidth improvements from proper access patterns
-
-3. **Bank Conflicts** ([source file] / [source file])
-   - Shared memory bank conflicts and padding solution
-   - Demonstrates eliminating bank conflicts with padding
-
-4. **Instruction-Level Parallelism** ([source file] / [source file])
-   - Sequential vs independent operations and loop unrolling
-   - Shows ILP benefits for instruction latency hiding
+1. **Add / Add Tensors** – sequential vs parallel vector addition and fused elementwise ops
+2. **Bank Conflicts** – shared memory padding to remove bank conflicts
+3. **ILP / Launch Bounds** – instruction-level parallelism and occupancy tuning
+4. **Adaptive/Autotuning/GEMM ILP** – small-kernel tuning patterns
+5. **Warp Divergence ILP** – divergence costs and mitigation
+6. **Quantization ILP** – low-precision ILP tuning patterns
 
 **Run comparisons:**
 ```bash
@@ -572,4 +563,3 @@ Learn about:
 ---
 
 **Chapter Status**: [OK] Complete
-

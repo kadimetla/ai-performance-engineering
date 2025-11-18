@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Optional
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
 
 import torch
 import torch.nn as nn
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-
-
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch17")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
 class FullDepthModel(nn.Module):
@@ -36,16 +24,21 @@ class FullDepthModel(nn.Module):
         return self.head(x)
 
 
-class BaselineInferenceFullBenchmark(Benchmark):
+class BaselineInferenceFullBenchmark(BaseBenchmark):
     """Always executes every layer (no early exit)."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         self.batch_size = 16
         self.hidden_dim = 2048
         self.num_layers = 24
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         torch.backends.cudnn.benchmark = True
@@ -59,25 +52,26 @@ class BaselineInferenceFullBenchmark(Benchmark):
 
         input_dtype = next(self.model.parameters()).dtype
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=input_dtype)
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
         assert self.model is not None and self.inputs is not None
 
-        with nvtx_range("inference", enable=enable_nvtx):
+        with self._nvtx_range("inference_full"):
             with torch.no_grad():
                 _ = self.model(self.inputs)
+        self._synchronize()
 
     def teardown(self) -> None:
         self.model = None
         self.inputs = None
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=5)
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
         if self.model is None or self.inputs is None:
@@ -85,16 +79,5 @@ class BaselineInferenceFullBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaselineInferenceFullBenchmark:
     return BaselineInferenceFullBenchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5),
-    )
-    result = harness.benchmark(get_benchmark())
-    print(f"\nBaseline Inference Full: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

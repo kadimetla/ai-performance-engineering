@@ -1,43 +1,23 @@
 """baseline_streams.py - Sequential kernel execution (baseline).
 
 Demonstrates sequential kernel execution without streams.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch11")
-    return torch.device("cuda")
-
-
-class BaselineStreamsBenchmark(Benchmark):
+class BaselineStreamsBenchmark(BaseBenchmark):
     """Sequential execution - no overlap."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.data1 = None
         self.data2 = None
         self.data3 = None
@@ -49,29 +29,22 @@ class BaselineStreamsBenchmark(Benchmark):
         self.data1 = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.data2 = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.data3 = torch.randn(self.N, dtype=torch.float32, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
+        processed = float(self.N * 3)
+        self.register_workload_metadata(
+            tokens_per_iteration=processed,
+            requests_per_iteration=1.0,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Sequential kernel execution."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_streams_sequential", enable=enable_nvtx):
-            # Sequential execution - kernels run one after another
+        with self._nvtx_range("baseline_streams_sequential"):
             self.data1 = self.data1 * 2.0
-            torch.cuda.synchronize()  # Wait for completion
-            
+            self._synchronize()
             self.data2 = self.data2 * 2.0
-            torch.cuda.synchronize()  # Wait for completion
-            
+            self._synchronize()
             self.data3 = self.data3 * 2.0
-            torch.cuda.synchronize()  # Wait for completion
+            self._synchronize()
 
     
     def teardown(self) -> None:
@@ -79,7 +52,7 @@ class BaselineStreamsBenchmark(Benchmark):
         self.data1 = None
         self.data2 = None
         self.data3 = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -107,7 +80,7 @@ class BaselineStreamsBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaselineStreamsBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineStreamsBenchmark()
 
@@ -120,5 +93,4 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Streams: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-
 

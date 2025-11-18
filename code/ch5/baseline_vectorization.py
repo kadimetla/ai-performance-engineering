@@ -1,82 +1,42 @@
-"""baseline_vectorization.py - Baseline without vectorization in storage I/O context.
-
-Demonstrates operations without vectorization optimization.
-Vectorization: This baseline does not use vectorized operations.
-Uses scalar operations which are inefficient.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_vectorization.py - Baseline without vectorization in storage I/O context."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch5")
-    return torch.device("cuda")
-
-
-class BaselineVectorizationBenchmark(Benchmark):
-    """Baseline: Scalar operations without vectorization.
-    
-    Vectorization: This baseline does not use vectorized operations.
-    Uses scalar operations which are inefficient.
-    """
+class BaselineVectorizationBenchmark(BaseBenchmark):
+    """Scalar operations to contrast with vectorized paths."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.data = None
+        super().__init__()
+        self.data: Optional[torch.Tensor] = None
         self.N = 1_000_000
+        tokens = self.N
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize data."""
         torch.manual_seed(42)
-        # Baseline: Scalar operations (no vectorization)
-        # Vectorization processes multiple elements simultaneously
-        # This baseline uses scalar operations
-        
         self.data = torch.randn(self.N, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Scalar operations without vectorization."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_vectorization", enable=enable_nvtx):
-            # Baseline: Scalar operations (no vectorization)
-            # Processes elements one at a time (inefficient)
-            # Vectorization would process multiple elements simultaneously
+        assert self.data is not None
+        with self._nvtx_range("baseline_vectorization"):
             result = torch.zeros(1, device=self.device)
             for i in range(min(1000, self.N)):  # Simulate scalar loop
                 result += self.data[i]
-            
-            # Baseline: No vectorization benefits
-            # Scalar operations (inefficient)
             _ = result
-
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -90,35 +50,16 @@ class BaselineVectorizationBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.data is None:
             return "Data not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineVectorizationBenchmark()
-
-
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = BaselineVectorizationBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: Vectorization")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-
-if __name__ == "__main__":
-    main()

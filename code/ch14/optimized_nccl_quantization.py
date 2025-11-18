@@ -13,22 +13,19 @@ import torch
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch14")
-    return torch.device("cuda")
-
-class OptimizedNcclQuantizationBenchmark(Benchmark):
+class OptimizedNcclQuantizationBenchmark(BaseBenchmark):
     """Optimized: Quantization with NCCL collective operations."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.tensor = None
         self.quantized = None
         self.dequantized = None
@@ -36,6 +33,11 @@ class OptimizedNcclQuantizationBenchmark(Benchmark):
         self.num_chunks = 16
         self.chunk_len = 1 << 14
         self._last = 0.0
+        tokens = self.num_chunks * self.chunk_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.num_chunks),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize quantized model for NCCL."""
@@ -46,12 +48,10 @@ class OptimizedNcclQuantizationBenchmark(Benchmark):
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.tensor = torch.randn(self.num_chunks, self.chunk_len, device=self.device, dtype=torch.bfloat16)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Quantization operations with NCCL."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
@@ -68,6 +68,7 @@ class OptimizedNcclQuantizationBenchmark(Benchmark):
                 dequant = quantized.float() / scales
                 self._last = float(dequant.sum())
             self.stream.synchronize()
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -84,13 +85,16 @@ class OptimizedNcclQuantizationBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.tensor is None:
             return "Tensor not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedNcclQuantizationBenchmark()
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import ctypes
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -19,7 +19,14 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
+from common.python.compile_utils import configure_tf32, restore_tf32
 
 
 def _preload_torch_cuda_symbols() -> None:
@@ -48,12 +55,6 @@ except ImportError as exc:  # pragma: no cover
     TE_IMPORT_ERROR = exc
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13 precision benchmarks")
-    return torch.device("cuda")
-
-
 class TEFP16MLP(nn.Module):
     """Two-layer MLP built with Transformer Engine Linear layers."""
 
@@ -69,7 +70,7 @@ class TEFP16MLP(nn.Module):
         return x
 
 
-class BaselineTEFP8Benchmark(Benchmark):
+class BaselineTEFP8Benchmark(BaseBenchmark):
     """Baseline Transformer Engine run in float16 precision."""
 
     def __init__(self):
@@ -78,7 +79,7 @@ class BaselineTEFP8Benchmark(Benchmark):
                 "Transformer Engine is required for baseline_precisionfp8_te. "
                 f"(import error: {TE_IMPORT_ERROR})"
             )
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         self.targets: Optional[torch.Tensor] = None
@@ -86,10 +87,15 @@ class BaselineTEFP8Benchmark(Benchmark):
         self.criterion: Optional[nn.Module] = None
         self.batch_size = 256
         self.hidden_dim = 4096
+        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
 
         torch.manual_seed(42)
         model = TEFP16MLP(hidden_dim=self.hidden_dim).to(self.device).train().half()
@@ -106,8 +112,12 @@ class BaselineTEFP8Benchmark(Benchmark):
 
         for _ in range(5):
             self._train_step()
-        torch.cuda.synchronize()
+        self._synchronize()
         self.optimizer.zero_grad(set_to_none=True)
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
 
     def _train_step(self) -> None:
         assert self.model and self.inputs is not None and self.targets is not None
@@ -119,12 +129,9 @@ class BaselineTEFP8Benchmark(Benchmark):
         self.optimizer.step()
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-        with nvtx_range("baseline_precisionfp8_te", enable=enable_nvtx):
+        with self._nvtx_range("baseline_precisionfp8_te"):
             self._train_step()
+        self._synchronize()
 
     def teardown(self) -> None:
         self.model = None
@@ -132,7 +139,10 @@ class BaselineTEFP8Benchmark(Benchmark):
         self.targets = None
         self.optimizer = None
         self.criterion = None
-        torch.cuda.empty_cache()
+        if self._tf32_state is not None:
+            restore_tf32(self._tf32_state)
+            self._tf32_state = None
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=10)
@@ -143,7 +153,7 @@ class BaselineTEFP8Benchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return BaselineTEFP8Benchmark()
 
 

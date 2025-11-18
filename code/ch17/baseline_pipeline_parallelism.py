@@ -2,45 +2,33 @@
 
 Demonstrates sequential processing of model layers without pipeline parallelism.
 Pipeline parallelism: This baseline processes all layers sequentially on a single GPU.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch17")
-    return torch.device("cuda")
-
-
-class BaselinePipelineParallelismBenchmark(Benchmark):
+class BaselinePipelineParallelismBenchmark(BaseBenchmark):
     """Baseline: Sequential processing without pipeline parallelism (single GPU)."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.input_data = None
         self.batch_size = 256
         self.hidden_size = 1024
+        tokens = self.batch_size * self.hidden_size
+        self._workload = WorkloadMetadata(
+            samples_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model with all layers on single GPU."""
@@ -60,30 +48,23 @@ class BaselinePipelineParallelismBenchmark(Benchmark):
         
         # Input data for inference
         self.input_data = torch.randn(self.batch_size, self.hidden_size, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Sequential processing of all layers."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        # Baseline: Process all layers sequentially on single GPU
-        # No pipeline parallelism - all layers processed on one device
-        with nvtx_range("baseline_pipeline_parallelism", enable=enable_nvtx):
+        with self._nvtx_range("baseline_pipeline_parallelism"):
             with torch.no_grad():
                 activations = self.input_data
                 for layer in self.model:
                     activations = layer(activations)
-                    torch.cuda.synchronize()
-        torch.cuda.synchronize()
+                    self._synchronize()
+        self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
         self.input_data = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -99,7 +80,11 @@ class BaselinePipelineParallelismBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+
+def get_benchmark() -> BaselinePipelineParallelismBenchmark:
     """Factory function for benchmark discovery."""
     return BaselinePipelineParallelismBenchmark()
 

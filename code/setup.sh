@@ -81,17 +81,17 @@ PYTHON_ABI_TAG="cp${PYTHON_TARGET_MAJOR}${PYTHON_TARGET_MINOR}"
 PYTHON_DIST_PACKAGES="/usr/local/lib/python${PYTHON_TARGET_VERSION}/dist-packages"
 CUDA_SHORT_VERSION="13.0"
 CUDA_FULL_VERSION="13.0.2.006"
-# cuDNN version matching PyTorch's bundled version (9.15.1)
-# PyTorch 2.10-dev bundles cuDNN 9.15.1, so we install matching system version
-CUDNN_VERSION="9.15.1.9"
+# cuDNN version (install latest available in CUDA 13 repo)
+CUDNN_VERSION="9.16.0.29"
 NCCL_SHORT_VERSION="2.28.7"
 CUDA_HOME_DIR="/usr/local/cuda-${CUDA_SHORT_VERSION}"
 THIRD_PARTY_DIR="${PROJECT_ROOT}/third_party"
 mkdir -p "${THIRD_PARTY_DIR}"
 TE_GIT_COMMIT="e4bfa628632e15ef8bc1fae9b2e89686f6a097ea"
 TE_VERSION_TAG="2.10.0.dev0+e4bfa62"
-FLASH_ATTN_TAG="${FLASH_ATTN_TAG:-v2.7.3}"
-FLASH_ATTN_WHEEL_BASENAME="flash_attn-2.7.3-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
+FLASH_ATTN_TAG="${FLASH_ATTN_TAG:-v2.8.3}"
+FLASH_ATTN_WHEEL_BASENAME="flash_attn-2.8.3-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
+FLASH_ATTN_EXPECTED_VERSION="${FLASH_ATTN_TAG#v}"
 PIP_ROOT_USER_ACTION="ignore"
 export PROJECT_ROOT REQUIRED_DRIVER_VERSION PYTHON_TARGET_VERSION PYTHON_TARGET_MAJOR PYTHON_TARGET_MINOR PYTHON_TARGET_BIN PYTHON_ABI_TAG PYTHON_DIST_PACKAGES PIP_ROOT_USER_ACTION
 
@@ -739,24 +739,20 @@ if ! apt install -y "libnccl2=${NCCL_SHORT_VERSION}-1+cuda13.0" "libnccl-dev=${N
     apt install -y libnccl2 libnccl-dev
 fi
 
-# Install cuDNN 9.15.1.9-1 (matches PyTorch's bundled version)
-# Following NVIDIA's approach: PyTorch bundles cuDNN, but we install matching system version for build tools
+# Install cuDNN 9.16.0.29-1 (latest in CUDA 13 repo, matches current system pin)
+# Following NVIDIA's approach: PyTorch bundles cuDNN, but we install a matching system version for build tools
 echo ""
-echo "Installing cuDNN 9.15.1.9-1 for CUDA ${CUDA_SHORT_VERSION} (matches PyTorch's bundled version)..."
-# Remove any older cuDNN versions first (including any 9.13.x, 9.14.x versions)
+echo "Installing cuDNN 9.16.0.29-1 for CUDA ${CUDA_SHORT_VERSION}..."
+# Remove any older cuDNN versions first
 apt remove -y libcudnn9-cuda-13 libcudnn9-dev-cuda-13 libcudnn9-headers-cuda-13 2>/dev/null || true
-# Also remove any packages with version numbers that don't match 9.15.1
-for pkg in $(dpkg -l | grep -E "libcudnn.*cuda-13" | awk '{print $2}' | grep -v "9.15.1"); do
-    apt remove -y "${pkg}" 2>/dev/null || true
-done
-# Install the exact version that matches PyTorch's bundled cuDNN (9.15.1)
-if apt-cache madison libcudnn9-cuda-13 | grep -q "9.15.1.9-1"; then
-    apt install -y "libcudnn9-cuda-13=9.15.1.9-1" \
-                   "libcudnn9-dev-cuda-13=9.15.1.9-1" \
-                   "libcudnn9-headers-cuda-13=9.15.1.9-1"
-    echo "✓ Installed cuDNN 9.15.1.9-1 (matches PyTorch's bundled version)"
+# Install the exact version if available; otherwise fall back to repo latest
+if apt-cache madison libcudnn9-cuda-13 | grep -q "9.16.0.29-1"; then
+    apt install -y "libcudnn9-cuda-13=9.16.0.29-1" \
+                   "libcudnn9-dev-cuda-13=9.16.0.29-1" \
+                   "libcudnn9-headers-cuda-13=9.16.0.29-1"
+    echo "✓ Installed cuDNN 9.16.0.29-1 (CUDA 13)"
 else
-    echo "WARNING: cuDNN 9.15.1.9-1 not available, installing latest..."
+    echo "WARNING: cuDNN 9.16.0.29-1 not available, installing latest..."
     apt install -y libcudnn9-cuda-13 libcudnn9-dev-cuda-13 libcudnn9-headers-cuda-13
 fi
 # Pin the version to prevent upgrades
@@ -1336,6 +1332,95 @@ else
     echo "WARNING: scripts/install_cutlass.sh not found; skipping CUTLASS installation"
 fi
 
+# Attempt to build tcgen05 probe to capture PTXAS errors on SM121 (for visibility)
+run_tcgen05_probe() {
+    echo ""
+    echo "Running tcgen05 CUTLASS probe (expected to fail on SM121 without multicast/DSMEM)..."
+    local log_path="${PROJECT_ROOT}/artifacts/tcgen05_probe_build.log"
+    mkdir -p "$(dirname "${log_path}")"
+    local probe_src="${PROJECT_ROOT}/tools/tcgen05_probe.cu"
+    if [ ! -f "${probe_src}" ]; then
+        echo "tcgen05 probe source not found at ${probe_src}; skipping."
+        return
+    fi
+    local nvcc_cmd=(
+        nvcc
+        -std=c++17
+        -O2
+        -arch=sm_121
+        -DCUTE_ENABLE_SYCLOG=0
+        -I"${PROJECT_ROOT}/third_party/cutlass/include"
+        -I"${PROJECT_ROOT}/third_party/cutlass/tools/util/include"
+        -I"${PROJECT_ROOT}/third_party/cutlass/examples/common"
+        "${probe_src}"
+        -o /tmp/tcgen05_probe_cutlass
+    )
+    {
+        echo "Command: ${nvcc_cmd[*]}"
+        "${nvcc_cmd[@]}"
+    } >"${log_path}" 2>&1 || true
+    echo "tcgen05 probe build log: ${log_path}"
+}
+run_tcgen05_probe
+
+# Build CUTLASS profiler (cutlass_profiler) once and keep the binary in-tree for labs
+build_cutlass_profiler() {
+    echo ""
+    echo "Building CUTLASS profiler (cutlass_profiler)..."
+
+    local cutlass_dir="${PROJECT_ROOT}/third_party/cutlass"
+    if [ ! -d "${cutlass_dir}" ]; then
+        echo "  CUTLASS source not found at ${cutlass_dir}; skipping profiler build."
+        return
+    fi
+
+    local sm
+    sm=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d '.' | xargs)
+    if [ -z "${sm}" ]; then
+        sm="90"
+    fi
+    local archs="${CUTLASS_NVCC_ARCHS:-${sm}}"
+    # Build in a user-writable location to avoid permission issues with root-owned sources
+    local build_dir="${PROJECT_ROOT}/build/cutlass_profiler"
+    local log_path="${PROJECT_ROOT}/artifacts/cutlass_profiler_build.log"
+    mkdir -p "${build_dir}" "$(dirname "${log_path}")"
+
+    echo "  Using CUTLASS_NVCC_ARCHS=${archs}"
+    {
+        echo "Configure:"
+        cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCUTLASS_ENABLE_EXAMPLES=OFF \
+            -DCUTLASS_ENABLE_TESTS=OFF \
+            -DCUTLASS_ENABLE_TOOLS=ON \
+            -DCUTLASS_ENABLE_PROFILER=ON \
+            -DCUTLASS_NVCC_ARCHS="${archs}" \
+            -DCUDA_TOOLKIT_ROOT_DIR="${CUDA_HOME_DIR}" \
+            -S "${cutlass_dir}" \
+            -B "${build_dir}"
+
+        echo ""
+        echo "Build:"
+        cmake --build "${build_dir}" -j"$(nproc --ignore=1 2>/dev/null || nproc)" --target cutlass_profiler
+    } >"${log_path}" 2>&1 || {
+        echo "  WARNING: cutlass_profiler build failed. See ${log_path}"
+        return
+    }
+
+    local profiler_bin="${build_dir}/tools/profiler/cutlass_profiler"
+    if [ -x "${profiler_bin}" ]; then
+        echo "  CUTLASS profiler ready: ${profiler_bin}"
+        export CUTLASS_PROFILER_BIN="${profiler_bin}"
+        mkdir -p "${PROJECT_ROOT}/artifacts"
+        echo "export CUTLASS_PROFILER_BIN=${profiler_bin}" > "${PROJECT_ROOT}/artifacts/cutlass_profiler_env.sh"
+        echo "  Exported CUTLASS_PROFILER_BIN and saved to artifacts/cutlass_profiler_env.sh"
+    else
+        echo "  WARNING: cutlass_profiler build completed but binary not found at ${profiler_bin}"
+    fi
+    echo "  Build log: ${log_path}"
+}
+build_cutlass_profiler
+
 # Ensure monitoring/runtime dependencies are available even if requirements were cached
 echo ""
 echo "Ensuring monitoring/runtime packages (Prometheus, Transformer Engine)..."
@@ -1540,6 +1625,21 @@ if ! install_te_from_source; then
     exit 1
 fi
 
+# Override with prebuilt Transformer Engine sm_121f wheel and runtime deps (system install, no venv)
+echo ""
+echo "Installing prebuilt Transformer Engine (sm_121f) and runtime dependencies..."
+TE_PREBUILT_WHEEL_NAME="transformer_engine-2.10.0.dev0+e4bfa628-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
+TE_PREBUILT_WHEEL="${THIRD_PARTY_DIR}/wheels/${TE_PREBUILT_WHEEL_NAME}"
+pip_install --no-cache-dir --upgrade --ignore-installed \
+  typing_extensions packaging pydantic pydantic_core typing_inspection annotated_types \
+  sympy mpmath onnxscript onnx protobuf ml_dtypes einops
+pip_install --no-cache-dir --upgrade --ignore-installed --no-deps triton==3.5.0 || {
+  echo "Warning: triton 3.5.0 install failed; Transformer Engine may be missing triton."
+}
+if ! install_wheel_from_cache "${TE_PREBUILT_WHEEL_NAME}"; then
+    echo "Warning: Prebuilt Transformer Engine wheel not found (expected ${TE_PREBUILT_WHEEL_NAME}); source-built TE remains in place."
+fi
+
 # CRITICAL: Verify PyTorch CUDA after Transformer Engine installation
 echo ""
 echo "Verifying PyTorch CUDA after Transformer Engine installation..."
@@ -1725,74 +1825,119 @@ for name in (
 PY
 
 # Install FlashAttention to unlock optimized SDPA paths
+
 echo ""
 echo "Ensuring FlashAttention (flash-attn ${FLASH_ATTN_TAG}) is available..."
 FLASH_ATTN_CACHE_PATH="${THIRD_PARTY_DIR}/wheels/${FLASH_ATTN_WHEEL_BASENAME}"
 FLASH_ATTN_SPLIT_PREFIX="${FLASH_ATTN_CACHE_PATH}.part"
-if pip_show flash-attn >/dev/null 2>&1; then
-    echo "FlashAttention already installed ($(pip_show flash-attn | awk '/Version/ {print $2}'))."
-else
-    install_flash_attention() {
-        local extra_args=()
-        if [ -n "${PYTORCH_WHEEL_PATH:-}" ]; then
-            extra_args+=("${PYTORCH_WHEEL_PATH}")
-        fi
-        TORCH_CUDA_ARCH_LIST="12.1" \
-        FLASH_ATTENTION_FORCE_CUDA_SM=121 \
-        pip_install --no-cache-dir --upgrade --ignore-installed --no-build-isolation --no-deps \
-            "${extra_args[@]}" \
-            "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}"
-    }
 
-    install_flash_attention_from_parts() {
-        local tmp_dir
-        local combined
-        local status
-        local -a PARTS=()
+flash_attn_filter_warning() {
+    python3 - <<'PY'
+import importlib.util
+from pathlib import Path
+spec = importlib.util.find_spec("flash_attn.flash_attn_interface")
+if not spec or not spec.origin:
+    raise SystemExit
+path = Path(spec.origin)
+lines = path.read_text().splitlines()
+marker = "Overriding a previously registered kernel for the same operator"
+if any(marker in ln for ln in lines):
+    raise SystemExit
+inject = [
+    "import warnings",
+    "",
+    'warnings.filterwarnings(',
+    '    "ignore",',
+    '    message=".*Overriding a previously registered kernel for the same operator.*flash_attn.*",',
+    '    category=UserWarning,',
+    '    module="torch.library",',
+    ')',
+    'warnings.filterwarnings(',
+    '    "ignore",',
+    '    message="Warning only once for all operators,\\s+other operators may also be overridden.",',
+    '    category=UserWarning,',
+    '    module="torch.library",',
+    ')',
+]
+out = []
+inserted = False
+for ln in lines:
+    out.append(ln)
+    if not inserted and ln.strip() == "import os":
+        out.extend(inject)
+        inserted = True
+if not inserted:
+    out = inject + [""] + lines
+path.write_text("\n".join(out) + "\n")
+print(f"Patched FlashAttention warning filters at {path}")
+PY
+}
 
-        tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/flashattn-wheel.XXXXXX")
-        combined="${tmp_dir}/${FLASH_ATTN_WHEEL_BASENAME}"
-        mapfile -t PARTS < <(ls "${FLASH_ATTN_SPLIT_PREFIX}"* | sort -V)
-        if [ "${#PARTS[@]}" -eq 0 ]; then
-            rm -rf "${tmp_dir}"
-            return 1
-        fi
+install_flash_attention() {
+    local extra_args=()
+    if [ -n "${PYTORCH_WHEEL_PATH:-}" ]; then
+        extra_args+=("${PYTORCH_WHEEL_PATH}")
+    fi
+    TORCH_CUDA_ARCH_LIST="12.1" \
+    pip_install --no-cache-dir --upgrade --ignore-installed --no-build-isolation --no-deps \
+        "${extra_args[@]}" \
+        "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}"
+}
 
-        if cat "${PARTS[@]}" > "${combined}"; then
-            TORCH_CUDA_ARCH_LIST="12.1" \
-            FLASH_ATTENTION_FORCE_CUDA_SM=121 \
-            pip_install --no-cache-dir --upgrade --ignore-installed --no-deps "${combined}"
-            status=$?
-        else
-            status=1
-        fi
+install_flash_attention_from_parts() {
+    local tmp_dir
+    local combined
+    local status
+    local -a PARTS=()
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/flashattn-wheel.XXXXXX")
+    combined="${tmp_dir}/${FLASH_ATTN_WHEEL_BASENAME}"
+    mapfile -t PARTS < <(ls "${FLASH_ATTN_SPLIT_PREFIX}"* | sort -V)
+    if [ "${#PARTS[@]}" -eq 0 ]; then
         rm -rf "${tmp_dir}"
-        return "${status}"
-    }
+        return 1
+    fi
+    if cat "${PARTS[@]}" > "${combined}"; then
+        TORCH_CUDA_ARCH_LIST="12.1" \
+        pip_install --no-cache-dir --upgrade --ignore-installed --no-deps "${combined}"
+        status=$?
+    else
+        status=1
+    fi
+    rm -rf "${tmp_dir}"
+    return "${status}"
+}
 
-    cache_flash_attention_wheel() {
-        rm -f "${FLASH_ATTN_SPLIT_PREFIX}"* 2>/dev/null || true
-        if [ -f "${FLASH_ATTN_CACHE_PATH}" ]; then
-            echo "Splitting FlashAttention wheel into <50MB chunks under ${THIRD_PARTY_DIR}/wheels";
-            split -b 45m -d -a 2 "${FLASH_ATTN_CACHE_PATH}" "${FLASH_ATTN_SPLIT_PREFIX}"
-        fi
-    }
+cache_flash_attention_wheel() {
+    rm -f "${FLASH_ATTN_SPLIT_PREFIX}"* 2>/dev/null || true
+    if [ -f "${FLASH_ATTN_CACHE_PATH}" ]; then
+        echo "Splitting FlashAttention wheel into <50MB chunks under ${THIRD_PARTY_DIR}/wheels";
+        split -b 45m -d -a 2 "${FLASH_ATTN_CACHE_PATH}" "${FLASH_ATTN_SPLIT_PREFIX}"
+    fi
+}
 
-    rebuild_flash_attention_cache() {
-        if ensure_wheel_root_pure "${FLASH_ATTN_CACHE_PATH}" && \
-           TORCH_CUDA_ARCH_LIST="12.1" \
-           FLASH_ATTENTION_FORCE_CUDA_SM=121 \
-           pip_wheel \
-               --no-deps \
-               --no-build-isolation \
-               --wheel-dir "${THIRD_PARTY_DIR}/wheels" \
-               "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}" >/dev/null 2>&1; then
-            cache_flash_attention_wheel
-        else
-            echo "Warning: Failed to build FlashAttention wheel for cache."
-        fi
-    }
+rebuild_flash_attention_cache() {
+    if ensure_wheel_root_pure "${FLASH_ATTN_CACHE_PATH}" && \
+       TORCH_CUDA_ARCH_LIST="12.1" \
+       FLASH_ATTENTION_FORCE_CUDA_SM=121 \
+       pip_wheel \
+           --no-deps \
+           --no-build-isolation \
+           --wheel-dir "${THIRD_PARTY_DIR}/wheels" \
+           "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}" >/dev/null 2>&1; then
+        cache_flash_attention_wheel
+    else
+        echo "Warning: Failed to build FlashAttention wheel for cache."
+    fi
+}
 
+current_flash_attn_version="$(pip_show flash-attn 2>/dev/null | awk '/Version/ {print $2}' || true)"
+if [ -n "${current_flash_attn_version}" ] && [ "${current_flash_attn_version}" != "${FLASH_ATTN_EXPECTED_VERSION}" ]; then
+    echo "FlashAttention version mismatch (${current_flash_attn_version} != ${FLASH_ATTN_EXPECTED_VERSION}), reinstalling..."
+    pip_uninstall -y flash-attn >/dev/null 2>&1 || true
+    current_flash_attn_version=""
+fi
+
+if [ -z "${current_flash_attn_version}" ]; then
     if [ -f "${FLASH_ATTN_CACHE_PATH}" ]; then
         echo "Installing FlashAttention from cached wheel ${FLASH_ATTN_CACHE_PATH}..."
         if ensure_wheel_root_pure "${FLASH_ATTN_CACHE_PATH}" && \
@@ -1824,21 +1969,22 @@ else
         echo "FlashAttention wheel cached as split parts (${FLASH_ATTN_SPLIT_PREFIX}*)."
     fi
 
-    if ! pip_show flash-attn >/dev/null 2>&1; then
+    if ! pip_show flash-attn >/dev/null; then
         echo "ERROR: FlashAttention installation FAILED. Setup cannot continue without FlashAttention."
         exit 1
     fi
-    
-    # Verify PyTorch CUDA after FlashAttention installation
-    echo ""
-    echo "Verifying PyTorch CUDA after FlashAttention installation..."
-    if ! verify_and_restore_pytorch_cuda "FlashAttention installation"; then
-        echo "ERROR: Failed to restore PyTorch CUDA after FlashAttention!"
-        exit 1
-    fi
-    echo "✓ PyTorch CUDA verified after FlashAttention"
 fi
 
+# Filter FlashAttention warnings, if present
+flash_attn_filter_warning
+
+echo ""
+echo "Verifying PyTorch CUDA after FlashAttention installation..."
+if ! verify_and_restore_pytorch_cuda "FlashAttention installation"; then
+    echo "ERROR: Failed to restore PyTorch CUDA after FlashAttention!"
+    exit 1
+fi
+echo "✓ PyTorch CUDA verified after FlashAttention"
 # Remove conflicting system packages that interfere with PyTorch
 echo ""
 echo "Removing conflicting system packages..."
@@ -2512,6 +2658,10 @@ echo ""
 GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)
 if [ "$GPU_COUNT" -gt 1 ]; then
     echo "Verifying NVLink connectivity..."
+    # Enable NVLink counters so downstream telemetry can read per-link utilization
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        nvidia-smi nvlink -gt d >/dev/null 2>&1 || true
+    fi
     if python3 tools/verification/verify_nvlink.py; then
         echo "NVLink verification passed"
     else

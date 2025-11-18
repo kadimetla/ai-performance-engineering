@@ -3,7 +3,7 @@
 Optimized memory access patterns with coalesced access.
 Efficient bandwidth utilization through contiguous memory operations.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -22,29 +22,28 @@ from typing import Optional
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
-
-
-class OptimizedBandwidthCoalescedBenchmark(Benchmark):
+class OptimizedBandwidthCoalescedBenchmark(BaseBenchmark):
     """Optimized bandwidth usage - coalesced memory access."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A = None
         self.B = None
         self.C = None
         self.size = 10_000_000  # Same size for fair comparison
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.size),
+            bytes_per_iteration=float(self.size * 4 * 3),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize large tensors."""
@@ -64,31 +63,29 @@ class OptimizedBandwidthCoalescedBenchmark(Benchmark):
         
         # Warmup
         self.C = self.A + self.B
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+            bytes_per_iteration=self._workload.bytes_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - optimized bandwidth usage."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("optimized_bandwidth_coalesced", enable=enable_nvtx):
+        assert self.A is not None and self.B is not None
+        with self._nvtx_range("optimized_bandwidth_coalesced"):
             # Optimized pattern: coalesced contiguous access
             # Single vectorized operation achieves much better bandwidth
             self.C = self.A + self.B  # Coalesced access, single kernel
             
             # In-place operation avoids unnecessary memory transfer
             self.C.mul_(0.5)  # In-place multiply
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
         del self.A, self.B, self.C
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -105,7 +102,7 @@ class OptimizedBandwidthCoalescedBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedBandwidthCoalescedBenchmark()
 

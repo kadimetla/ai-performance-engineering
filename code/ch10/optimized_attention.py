@@ -1,143 +1,78 @@
-"""optimized_attention.py - Optimized attention with tensor core acceleration in GEMM context.
-
-Demonstrates attention optimized for tensor cores.
-Attention: Uses tensor core-optimized attention kernels.
-Leverages tensor cores for efficient attention computation.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_attention.py - Tensor-core optimized attention."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
-from typing import Optional
-
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch10")
-    return torch.device("cuda")
 
-class OptimizedAttentionBenchmark(Benchmark):
-    """Optimized: Tensor core-optimized attention.
-    
-    Attention: Uses tensor core-optimized attention kernels.
-    Leverages tensor cores for efficient attention computation.
-    """
-    
+class OptimizedAttentionBenchmark(BaseBenchmark):
+    """FP16 attention to leverage tensor cores."""
+
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-        self.input = None
-    
+        super().__init__()
+        self.model: Optional[nn.Module] = None
+        self.input: Optional[torch.Tensor] = None
+        self.batch_size = 4
+        self.seq_len = 128
+        self.hidden_dim = 256
+        self.num_heads = 8
+
     def setup(self) -> None:
-        """Setup: Initialize tensor core-optimized attention model."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         torch.manual_seed(42)
-        # Optimization: Tensor core-optimized attention
-        # Uses FP16/BF16 precision to leverage tensor cores
-        
-        hidden_dim = 256
-        num_heads = 8
-        
+
         self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True
-        ).to(self.device).to(torch.float16).eval()  # Convert model to FP16 to match inputs
-        
-        # Input sequence (FP16 for tensor core acceleration)
-        batch_size = 4
-        seq_len = 128
-        self.input = torch.randn(batch_size, seq_len, hidden_dim, device=self.device, dtype=torch.float16)
-        torch.cuda.synchronize()
-    
+            embed_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+            batch_first=True,
+        ).to(self.device).to(torch.float16).eval()
+
+        self.input = torch.randn(
+            self.batch_size,
+            self.seq_len,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
+        self._synchronize()
+        tokens = float(self.batch_size * self.seq_len)
+        self.register_workload_metadata(
+            tokens_per_iteration=tokens,
+            requests_per_iteration=float(self.batch_size),
+        )
+
     def benchmark_fn(self) -> None:
-        """Benchmark: Tensor core-optimized attention computation."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("optimized_attention", enable=enable_nvtx):
+        assert self.model is not None
+        assert self.input is not None
+        with self._nvtx_range("optimized_attention"):
             with torch.no_grad():
-                # Optimization: Tensor core-optimized attention
-                # Uses FP16/BF16 precision to leverage tensor cores
-                # Attention mechanism: optimized for tensor core acceleration
-                output, _ = self.model(self.input, self.input, self.input)
-                
-                # Optimization: Tensor core-optimized attention benefits
-                # - Leverages tensor cores for matrix operations
-                # - FP16/BF16 precision for tensor core acceleration
-                # - Better performance through tensor core utilization
+                _output, _ = self.model(self.input, self.input, self.input)
+        self._synchronize()
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
         self.input = None
-        torch.cuda.empty_cache()
-    
+        super().teardown()
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=50, warmup=5)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         if self.input is None:
             return "Input not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
+
+def get_benchmark() -> OptimizedAttentionBenchmark:
     return OptimizedAttentionBenchmark()
-
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedAttentionBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: Attention")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-if __name__ == "__main__":
-    main()

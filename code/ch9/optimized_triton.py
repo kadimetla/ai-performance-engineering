@@ -3,7 +3,7 @@
 Demonstrates Triton for efficient custom GPU kernels.
 Triton: Uses Triton kernels for optimized GPU operations.
 Provides Python-like syntax for writing efficient CUDA kernels.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -27,16 +27,12 @@ except ImportError:
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch9")
-    return torch.device("cuda")
 
 
 if TRITON_AVAILABLE:
@@ -63,7 +59,7 @@ if TRITON_AVAILABLE:
         tl.store(output_ptr + offsets, output_data, mask=mask)
 
 
-class OptimizedTritonBenchmark(Benchmark):
+class OptimizedTritonBenchmark(BaseBenchmark):
     """Optimized: Triton kernels for efficient GPU operations.
     
     Triton: Uses Triton kernels for optimized GPU operations.
@@ -71,10 +67,14 @@ class OptimizedTritonBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.input = None
         self.output = None
         self.N = 1_000_000
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(self.N),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -89,20 +89,16 @@ class OptimizedTritonBenchmark(Benchmark):
         
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Triton kernel operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("triton", enable=enable_nvtx):
+        assert self.input is not None and self.output is not None
+        with self._nvtx_range("triton"):
             if TRITON_AVAILABLE:
                 # Optimization: Triton kernel
                 # Uses Triton for efficient custom GPU kernels
@@ -119,6 +115,7 @@ class OptimizedTritonBenchmark(Benchmark):
                 # Triton would provide more efficient kernels if available
                 # Simulate Triton benefit with optimized PyTorch
                 self.output = self.input * 2.0 + 1.0
+        self._synchronize()
             
             # Optimization: Triton benefits
             # - Python-like syntax for GPU kernels
@@ -131,7 +128,7 @@ class OptimizedTritonBenchmark(Benchmark):
         """Teardown: Clean up resources."""
         self.input = None
         self.output = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -147,17 +144,15 @@ class OptimizedTritonBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedTritonBenchmark()
 
 
 def main() -> None:
     """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
     harness = BenchmarkHarness(
-    mode=BenchmarkMode.CUSTOM,
+        mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(iterations=100, warmup=10)
     )
     benchmark = OptimizedTritonBenchmark()
@@ -173,4 +168,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -42,6 +42,7 @@ __global__ void warp_specialized_kernel(const float* __restrict__ A,
                                         float* __restrict__ C,
                                         int total_tiles) {
   constexpr int TILE_ELEMS = TILE * TILE;
+  constexpr size_t TILE_BYTES = static_cast<size_t>(TILE_ELEMS) * sizeof(float);
   constexpr int PIPELINE_STAGES = 2;
 
   cg::thread_block block = cg::this_thread_block();

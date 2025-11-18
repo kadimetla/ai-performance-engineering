@@ -1,8 +1,4 @@
-"""baseline_dataparallel.py - DataParallel baseline (anti-pattern).
-
-Uses DataParallel which has significant overhead due to GIL and single-threaded execution.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_dataparallel.py - DataParallel baseline (anti-pattern)."""
 
 from __future__ import annotations
 
@@ -20,19 +16,13 @@ import torch.optim as optim
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda:0")
 
 
 class SimpleNet(nn.Module):
@@ -48,11 +38,11 @@ class SimpleNet(nn.Module):
         return self.linear2(self.relu(self.linear1(x)))
 
 
-class BaselineDataParallelBenchmark(Benchmark):
+class BaselineDataParallelBenchmark(BaseBenchmark):
     """DataParallel baseline - has GIL overhead and single-threaded execution."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.optimizer = None
         self.data = None
@@ -60,6 +50,11 @@ class BaselineDataParallelBenchmark(Benchmark):
         self.input_size = 1024
         self.hidden_size = 256
         self.batch_size = 512
+        tokens = self.batch_size * self.input_size
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model, optimizer, and data."""
@@ -73,20 +68,11 @@ class BaselineDataParallelBenchmark(Benchmark):
         self.data = torch.randn(self.batch_size, self.input_size)
         self.target = torch.randn(self.batch_size, 1)
         
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: DataParallel training step."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("dataparallel", enable=enable_nvtx):
+        with self._nvtx_range("dataparallel"):
             for _ in range(2):
                 gpu_data = self.data.to(self.device, non_blocking=False)
                 gpu_target = self.target.to(self.device, non_blocking=False)
@@ -95,6 +81,7 @@ class BaselineDataParallelBenchmark(Benchmark):
                 loss.backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -113,6 +100,9 @@ class BaselineDataParallelBenchmark(Benchmark):
             enable_memory_tracking=False,
             enable_profiling=False,
         )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -133,7 +123,7 @@ class BaselineDataParallelBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineDataParallelBenchmark()
 

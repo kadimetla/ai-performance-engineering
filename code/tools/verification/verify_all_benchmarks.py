@@ -36,14 +36,26 @@ except ImportError:
 # Default timeout constant (15 seconds - required for all benchmarks)
 DEFAULT_TIMEOUT = 15
 
+# Map documentation-friendly example names to the canonical examples that
+# already exist inside each chapter directory. This keeps new CLI targets
+# (e.g., ch10:tmem_triple_overlap_baseline) functional without duplicating
+# benchmark implementations.
+EXAMPLE_ALIASES = {}
+
+from common.python.discovery import (
+    chapter_slug,
+    discover_all_chapters,
+    normalize_chapter_token,
+)
+
+
+def apply_example_alias(chapter: str, example: str) -> str:
+    """Aliases disabled; return example unchanged."""
+    return example
+
 
 def normalize_chapter_name(raw: str) -> str:
-    chapter = raw.strip().lower()
-    if chapter == 'capstone':
-        return chapter
-    if not chapter.startswith('ch') or not chapter[2:].isdigit():
-        raise ValueError(f"Invalid chapter identifier '{raw}'. Expected format like 'ch3'.")
-    return chapter
+    return normalize_chapter_token(raw)
 
 
 def normalize_example_name(raw: str) -> str:
@@ -69,19 +81,10 @@ def resolve_target_chapters(target_args: Optional[List[str]]) -> Tuple[List[Path
             to select every chapter.
     """
     if not target_args:
-        chapter_dirs = sorted(
-            [
-                d for d in repo_root.iterdir()
-                if d.is_dir() and d.name.startswith('ch') and d.name[2:].isdigit()
-            ],
-            key=lambda d: int(d.name[2:])
-        )
-        capstone_dir = repo_root / "capstone"
-        if capstone_dir.is_dir():
-            chapter_dirs.append(capstone_dir)
+        chapter_dirs = discover_all_chapters(repo_root)
         if not chapter_dirs:
             raise FileNotFoundError("No chapter directories found.")
-        chapter_filters = {d.name: None for d in chapter_dirs}
+        chapter_filters = {chapter_slug(d, repo_root): None for d in chapter_dirs}
         return chapter_dirs, chapter_filters
     
     normalized = [token.strip().lower() for token in target_args]
@@ -116,6 +119,7 @@ def parse_target_args(target_args: List[str]) -> Tuple[List[str], Dict[str, Opti
         if chapter_filters[chapter] is None:
             continue  # Already targeting entire chapter; ignore narrower filters
         normalized_example = normalize_example_name(example_part)
+        normalized_example = apply_example_alias(chapter, normalized_example)
         chapter_filters[chapter].add(normalized_example)
     return chapter_order, chapter_filters
 
@@ -370,9 +374,10 @@ def verify_chapter(chapter_dir: Path, target_examples: Optional[Set[str]] = None
     and logs this clearly.
     """
     import torch
-    
+
+    chapter_id = chapter_slug(chapter_dir, repo_root)
     results = {
-        'chapter': chapter_dir.name,
+        'chapter': chapter_id,
         'total': 0,
         'syntax_pass': 0,
         'load_pass': 0,
@@ -418,11 +423,11 @@ def verify_chapter(chapter_dir: Path, target_examples: Optional[Set[str]] = None
                 selected.append(optimized_path)
         if missing_files:
             missing_csv = ", ".join(missing_files)
-            raise FileNotFoundError(f"{chapter_dir.name}: missing {missing_csv}")
+            raise FileNotFoundError(f"{chapter_id}: missing {missing_csv}")
         all_files = selected
     
     if not all_files:
-        raise FileNotFoundError(f"{chapter_dir.name}: no benchmark files found matching the requested targets")
+        raise FileNotFoundError(f"{chapter_id}: no benchmark files found matching the requested targets")
     
     results['total'] = len(all_files)
     
@@ -556,10 +561,11 @@ def run_verification(target_args: Optional[List[str]] = None) -> int:
     for chapter_dir in chapter_dirs:
         if not chapter_dir.exists():
             continue
-        
-        print(f"Testing {chapter_dir.name}...")
+
+        chapter_id = chapter_slug(chapter_dir, repo_root)
+        print(f"Testing {chapter_id}...")
         try:
-            results = verify_chapter(chapter_dir, chapter_filters[chapter_dir.name])
+            results = verify_chapter(chapter_dir, chapter_filters[chapter_id])
         except FileNotFoundError as exc:
             print(f"ERROR: {exc}")
             return 1

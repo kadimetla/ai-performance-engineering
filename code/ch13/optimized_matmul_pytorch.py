@@ -3,7 +3,7 @@
 CUTLASS-optimized matrix multiplication using torch.compile for kernel fusion.
 Leverages optimized GEMM kernels for better performance.
 
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -27,18 +27,12 @@ from typing import Optional
 
 from common.python.compile_utils import enable_tf32, compile_callable
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
 
 
 def optimized_matmul(A: torch.Tensor, B: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
@@ -47,11 +41,11 @@ def optimized_matmul(A: torch.Tensor, B: torch.Tensor, bias: torch.Tensor) -> to
     return torch.relu(out + bias)
 
 
-class OptimizedMatmulCUTLASSBenchmark(Benchmark):
+class OptimizedMatmulCUTLASSBenchmark(BaseBenchmark):
     """CUTLASS matmul optimization - compiled GEMM."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.A = None
         self.B = None
         self.C = None
@@ -60,6 +54,11 @@ class OptimizedMatmulCUTLASSBenchmark(Benchmark):
         self.m = 2048
         self.n = 2048
         self.k = 2048
+        tokens = self.m * self.n
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize matrices and compile matmul."""
@@ -85,27 +84,24 @@ class OptimizedMatmulCUTLASSBenchmark(Benchmark):
         )
         for _ in range(10):
             _ = self.compiled_matmul(self.A, self.B, self.bias)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - CUTLASS-optimized matmul."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("matmul_pytorch", enable=enable_nvtx):
+        assert self.compiled_matmul is not None and self.A is not None and self.B is not None and self.bias is not None
+        with self._nvtx_range("matmul_pytorch"):
             # CUTLASS-optimized matrix multiplication (via torch.compile)
             self.C = self.compiled_matmul(self.A, self.B, self.bias)
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
         del self.A, self.B, self.bias, self.C, self.compiled_matmul
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -123,7 +119,7 @@ class OptimizedMatmulCUTLASSBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedMatmulCUTLASSBenchmark()
 

@@ -1,76 +1,56 @@
-"""baseline_gemm_ilp.py - Baseline GEMM with low ILP (no tensor cores).
-
-Demonstrates naive matrix multiplication without ILP optimization or tensor cores.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_gemm_ilp.py - Baseline GEMM with low ILP (no tensor cores)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional
 
 import torch
-from typing import Optional
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch6.cuda_extensions import load_ilp_extension
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch6")
-    return torch.device("cuda")
-
-
-class BaselineGEMMILPBenchmark(Benchmark):
+class BaselineGEMMILPBenchmark(BaseBenchmark):
     """Baseline ILP workload using sequential CUDA kernel."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.input = None
-        self.output = None
+        super().__init__()
+        self.input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.N = 10_000_000
         self._extension = None
         self.repeats = 4
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.repeats),
+            tokens_per_iteration=float(self.N * self.repeats),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize tensors and load CUDA extension."""
+        """Initialize tensors and load CUDA extension."""
         self._extension = load_ilp_extension()
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
         self._extension.sequential_ops(self.output, self.input)
-        torch.cuda.synchronize()
+        self._synchronize()
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Sequential operations (low ILP)."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("gemm_ilp", enable=enable_nvtx):
+        """Benchmark: sequential operations (low ILP)."""
+        assert self._extension is not None and self.input is not None and self.output is not None
+        with self._nvtx_range("gemm_ilp_baseline"):
             src = self.input
             dst = self.output
-            for idx in range(self.repeats):
+            for _ in range(self.repeats):
                 self._extension.sequential_ops(dst, src)
                 src, dst = dst, src
             if src is not self.output:
                 self.output.copy_(src)
-            torch.cuda.synchronize()
-
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -81,12 +61,16 @@ class BaselineGEMMILPBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
+            iterations=100,
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
+            setup_timeout_seconds=120,  # CUDA extension compilation can take time
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.output is None:
@@ -98,18 +82,6 @@ class BaselineGEMMILPBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> BaseBenchmark:
+    """Factory function for harness discovery."""
     return BaselineGEMMILPBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(f"\nBaseline GEMM ILP: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

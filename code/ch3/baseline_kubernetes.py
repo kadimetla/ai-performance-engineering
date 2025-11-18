@@ -13,48 +13,57 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 
 
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3 kubernetes example")
-    return torch.device("cuda")
-
-
-class BaselineKubernetesBenchmark(Benchmark):
+class BaselineKubernetesBenchmark(BaseBenchmark):
     """Allocates new tensors + launches multiple kernels every iteration."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = nn.Sequential(
             nn.Linear(1024, 1024),
             nn.ReLU(),
             nn.Linear(1024, 1024),
         ).to(self.device)
+        # Two float32 batches per step: inputs + targets (512x1024 elements each)
+        elements = 2 * 512 * 1024
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(elements),
+            bytes_per_iteration=float(elements * 4),
+        )
 
     def setup(self) -> None:
         torch.manual_seed(314)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+            bytes_per_iteration=self._workload.bytes_per_iteration,
+        )
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-        with nvtx_range("baseline_kubernetes", enable=enable_nvtx):
+        with self._nvtx_range("baseline_kubernetes"):
             host_data = torch.randn(512, 1024, dtype=torch.float32)
             host_target = torch.randn(512, 1024, dtype=torch.float32)
             data = host_data.to(self.device, non_blocking=False)
             target = host_target.to(self.device, non_blocking=False)
-            torch.cuda.synchronize()
+            self._synchronize()
             out = self.model(data)
             torch.nn.functional.mse_loss(out, target).backward()
             for p in self.model.parameters():
                 p.grad = None
+        self._synchronize()
 
     def teardown(self) -> None:
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=30, warmup=5)
@@ -63,7 +72,7 @@ class BaselineKubernetesBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     return BaselineKubernetesBenchmark()
 
 

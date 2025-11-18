@@ -13,24 +13,20 @@ import math
 import torch
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch14")
-    return torch.device("cuda")
-
-
-class BaselineFlexAttentionBenchmark(Benchmark):
+class BaselineFlexAttentionBenchmark(BaseBenchmark):
     """Baseline: Naive attention that iterates per head without fusion."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.q = None
         self.k = None
         self.v = None
@@ -39,6 +35,11 @@ class BaselineFlexAttentionBenchmark(Benchmark):
         self.seq_len = 1024
         self._last = 0.0
         self.repeat_passes = 8
+        tokens = self.seq_len * self.num_heads * self.repeat_passes
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.seq_len),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         """Setup: materialize query/key/value tensors."""
@@ -47,7 +48,7 @@ class BaselineFlexAttentionBenchmark(Benchmark):
         self.q = torch.randn(shape, device=self.device, dtype=torch.float32)
         self.k = torch.randn(shape, device=self.device, dtype=torch.float32)
         self.v = torch.randn(shape, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         """Benchmark: per-head attention computed serially."""
@@ -75,7 +76,7 @@ class BaselineFlexAttentionBenchmark(Benchmark):
                     outputs.append(torch.matmul(attn, vh))
             stacked = torch.stack(outputs, dim=1)
             self._last = float(stacked.sum())
-            torch.cuda.synchronize(self.device)
+            self._synchronize()
 
 
     def teardown(self) -> None:
@@ -91,6 +92,9 @@ class BaselineFlexAttentionBenchmark(Benchmark):
             iterations=100,
             warmup=10,
         )
+    
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -99,7 +103,7 @@ class BaselineFlexAttentionBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineFlexAttentionBenchmark()
 

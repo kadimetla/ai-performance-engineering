@@ -3,7 +3,7 @@
 Demonstrates standard autoregressive decoding without speculative decoding optimization.
 Speculative decoding: This baseline does not use speculative decoding.
 Generates tokens one at a time, sequential and slow.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -21,19 +21,15 @@ import torch.nn as nn
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch18")
-    return torch.device("cuda")
-
-
-class BaselineSpeculativeDecodingBenchmark(Benchmark):
+class BaselineSpeculativeDecodingBenchmark(BaseBenchmark):
     """Baseline: Standard autoregressive decoding (no speculative execution).
     
     Speculative decoding: This baseline does not use speculative decoding.
@@ -41,11 +37,18 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.input_ids = None
         self.memory = None
         self.max_length = 20
+        batch_size = 4
+        seq_len = 10
+        tokens = batch_size * (seq_len + self.max_length)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and input."""
@@ -72,20 +75,15 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
         self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
         # Create dummy memory tensor for TransformerDecoder (encoder output)
         self.memory = torch.randn(batch_size, seq_len, hidden_dim, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard autoregressive decoding."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_speculative_decoding", enable=enable_nvtx):
+        with self._nvtx_range("baseline_speculative_decoding"):
             with torch.no_grad():
                 # Baseline: Standard autoregressive decoding
                 # Generate tokens one at a time (sequential)
@@ -99,6 +97,7 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
                     output = self.model(tgt_embedded, self.memory)
                     next_token = output[:, -1, :].argmax(dim=-1, keepdim=True)
                     current_ids = torch.cat([current_ids, next_token], dim=1)
+        self._synchronize()
                 
                 # Baseline: No speculative decoding
                 # Sequential token generation (slow)
@@ -110,7 +109,7 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
         self.embedding = None
         self.input_ids = None
         self.memory = None
-        torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -128,7 +127,7 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineSpeculativeDecodingBenchmark()
 

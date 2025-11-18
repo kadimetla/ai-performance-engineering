@@ -1,8 +1,4 @@
-"""baseline_model_eager.py - Eager mode execution (baseline).
-
-Runs model in eager mode without torch.compile optimization.
-Implements Benchmark protocol for harness integration.
-"""
+"""baseline_model_eager.py - Eager mode execution (baseline)."""
 
 from __future__ import annotations
 
@@ -21,17 +17,13 @@ import torch.nn as nn
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch14")
-    return torch.device("cuda")
 
 
 class SimpleTransformer(nn.Module):
@@ -62,33 +54,35 @@ class SimpleTransformer(nn.Module):
         return self.output(x)
 
 
-class BaselineModelEagerBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+class BaselineModelEagerBenchmark(BaseBenchmark):
+    """Benchmark implementation following BaseBenchmark."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.input_ids = None
+        self.batch_size = 16
+        self.seq_len = 1024
+        self.vocab_size = 10000
+        tokens = self.batch_size * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
-        batch_size = 16
-        seq_len = 1024
-        vocab_size = 10000
-        
         self.model = SimpleTransformer().to(self.device).eval()
-        self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
+        self.input_ids = torch.randint(0, self.vocab_size, (self.batch_size, self.seq_len), device=self.device)
         
         # Warmup
         for _ in range(10):
             with torch.no_grad():
                 _ = self.model(self.input_ids)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
@@ -99,6 +93,7 @@ class BaselineModelEagerBenchmark(Benchmark):
         with nvtx_range("model_eager", enable=enable_nvtx):
             with torch.no_grad():
                 _ = self.model(self.input_ids)
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
@@ -113,12 +108,15 @@ class BaselineModelEagerBenchmark(Benchmark):
             warmup=10,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Optional validation."""
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineModelEagerBenchmark()
 

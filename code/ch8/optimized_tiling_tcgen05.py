@@ -31,7 +31,7 @@ def get_benchmark() -> OptimizedTilingBenchmarkTCGen05:
 
 
 if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkConfig, BenchmarkHarness, BenchmarkMode
+    from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,

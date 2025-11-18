@@ -1,4 +1,4 @@
-"""baseline ilp basic - Baseline with low instruction-level parallelism. Implements Benchmark protocol for harness integration."""
+"""baseline ilp basic - Baseline with low instruction-level parallelism. Implements BaseBenchmark for harness integration."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ except ImportError:
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
 )
 from common.python.benchmark_utils import warn_benchmark_scaling
@@ -32,7 +32,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class BaselineIlpBasicBenchmark(Benchmark):
+class BaselineIlpBasicBenchmark(BaseBenchmark):
     """Baseline: Sequential operations with low ILP.
     
     ILP: This baseline has low instruction-level parallelism.
@@ -40,6 +40,7 @@ class BaselineIlpBasicBenchmark(Benchmark):
     """
     
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.input = None
         self.output = None
@@ -128,7 +129,7 @@ class BaselineIlpBasicBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineIlpBasicBenchmark()
 

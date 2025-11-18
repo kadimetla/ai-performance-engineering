@@ -25,7 +25,7 @@ apply_env_defaults()
 
 import torch
 from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from common.python.benchmark_comparison import compare_results, ComparisonResult, format_comparison
 
 
@@ -168,7 +168,7 @@ def test_benchmark_timeout_handling(request):
     # Create harness with very short timeout
     config = BenchmarkConfig(
         iterations=1000,  # Many iterations
-        warmup=0,
+        warmup=1,
         timeout_seconds=1,  # Very short timeout
         enable_profiling=False,
     )

@@ -6,7 +6,88 @@ Provides functions to discover benchmarks across chapters and CUDA benchmarks.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, Iterable, List, Tuple
+
+LAB_NAMES = {
+    "fullstack_cluster",
+    "blackwell_matmul",
+    "moe_cuda",
+    "flexattention",
+}
+LAB_ALIASES: Dict[str, str] = {
+    "lab_fullstack_cluster": "labs/fullstack_cluster",
+    "lab_blackwell_matmul": "labs/blackwell_matmul",
+    "lab_moe_cuda": "labs/moe_cuda",
+    "lab_flexattention": "labs/flexattention",
+    "capstone": "labs/fullstack_cluster",
+    "capstone2": "labs/blackwell_matmul",
+    "capstone3": "labs/moe_cuda",
+    "capstone4": "labs/flexattention",
+}
+
+
+def _labs_root(repo_root: Path) -> Path:
+    return repo_root / "labs"
+
+
+def _lab_dirs(repo_root: Path) -> Iterable[Path]:
+    labs_root = _labs_root(repo_root)
+    if not labs_root.is_dir():
+        return []
+    return sorted(
+        [p for p in labs_root.iterdir() if p.is_dir() and p.name in LAB_NAMES],
+        key=lambda p: p.name,
+    )
+
+
+def chapter_slug(chapter_dir: Path, repo_root: Path) -> str:
+    """Return a consistent chapter identifier relative to repo_root."""
+    return str(chapter_dir.resolve().relative_to(repo_root).as_posix())
+
+
+def normalize_chapter_token(token: str) -> str:
+    """Normalize chapter token (CLI arg or alias) to a relative path slug.
+
+    Examples:
+      - 'ch10' -> 'ch10'
+      - '10' -> 'ch10'
+      - 'labs/blackwell_matmul' -> 'labs/blackwell_matmul'
+      - 'lab_blackwell_matmul' -> 'labs/blackwell_matmul'
+      - 'blackwell_matmul' -> 'labs/blackwell_matmul'
+      - 'capstone2' -> 'labs/blackwell_matmul'
+    """
+    chapter = token.strip().lower()
+    if not chapter:
+        raise ValueError("Chapter token cannot be empty.")
+
+    if chapter.isdigit():
+        return f"ch{chapter}"
+
+    chapter = chapter.replace("labs.", "labs/").replace("\\", "/")
+
+    if chapter in LAB_ALIASES:
+        return LAB_ALIASES[chapter]
+
+    if chapter.startswith("lab_"):
+        trimmed = chapter[len("lab_") :]
+        if trimmed in LAB_NAMES:
+            return f"labs/{trimmed}"
+
+    if chapter.startswith("labs/"):
+        _, _, suffix = chapter.partition("/")
+        if suffix in LAB_NAMES:
+            return chapter
+
+    if chapter in LAB_NAMES:
+        return f"labs/{chapter}"
+
+    if chapter.startswith("ch") and chapter[2:].isdigit():
+        return chapter
+
+    raise ValueError(
+        f"Invalid chapter identifier '{token}'. Expected formats like "
+        "'ch3', 'labs/blackwell_matmul', or 'blackwell_matmul'."
+    )
 
 
 def discover_benchmarks(chapter_dir: Path) -> List[Tuple[Path, List[Path], str]]:
@@ -67,25 +148,27 @@ def discover_cuda_benchmarks(repo_root: Path) -> List[Path]:
     Returns:
         List of paths to CUDA benchmark files
     """
-    cuda_benchmarks = []
-    
+    cuda_benchmarks: List[Path] = []
+
+    def _collect_from_dir(root: Path) -> None:
+        cuda_benchmarks.extend(root.glob("*.cu"))
+        cuda_subdir = root / "cuda"
+        if cuda_subdir.exists() and cuda_subdir.is_dir():
+            cuda_benchmarks.extend(cuda_subdir.glob("*.cu"))
+
     # Look for .cu files in chapter directories
     for chapter_dir in repo_root.glob("ch*/"):
         if chapter_dir.is_dir():
-            cuda_files = list(chapter_dir.glob("*.cu"))
-            cuda_benchmarks.extend(cuda_files)
-            
-            # Also check for cuda/ subdirectories
-            cuda_subdir = chapter_dir / "cuda"
-            if cuda_subdir.exists() and cuda_subdir.is_dir():
-                cuda_files_subdir = list(cuda_subdir.glob("*.cu"))
-                cuda_benchmarks.extend(cuda_files_subdir)
-    
+            _collect_from_dir(chapter_dir)
+
+    for lab_dir in _lab_dirs(repo_root):
+        _collect_from_dir(lab_dir)
+
     return sorted(cuda_benchmarks)
 
 
 def discover_all_chapters(repo_root: Path) -> List[Path]:
-    """Discover all chapter directories.
+    """Discover all chapter and lab directories.
     
     Args:
         repo_root: Path to repository root
@@ -99,14 +182,16 @@ def discover_all_chapters(repo_root: Path) -> List[Path]:
             return int(path.name[2:])
         return 0
     
-    chapter_dirs = sorted([
-        d for d in repo_root.iterdir()
-        if d.is_dir() and d.name.startswith('ch') and d.name[2:].isdigit()
-    ], key=chapter_sort_key)
-    
-    capstone_dir = repo_root / "capstone"
-    if capstone_dir.is_dir():
-        chapter_dirs.append(capstone_dir)
+    chapter_dirs = sorted(
+        [
+            d
+            for d in repo_root.iterdir()
+            if d.is_dir() and d.name.startswith("ch") and d.name[2:].isdigit()
+        ],
+        key=chapter_sort_key,
+    )
+
+    chapter_dirs.extend(list(_lab_dirs(repo_root)))
     return chapter_dirs
 
 
@@ -125,21 +210,13 @@ def discover_benchmark_pairs(repo_root: Path, chapter: str = "all") -> List[Tupl
     if chapter == "all":
         chapter_dirs = discover_all_chapters(repo_root)
     else:
-        # Normalize chapter argument
-        normalized = chapter.lower()
-        if normalized == "capstone":
-            chapter_dir = repo_root / "capstone"
-            chapter_dirs = [chapter_dir] if chapter_dir.exists() else []
+        try:
+            normalized = normalize_chapter_token(chapter)
+        except ValueError:
+            chapter_dirs = []
         else:
-            if chapter.isdigit():
-                chapter = f"ch{chapter}"
-            elif not chapter.startswith('ch'):
-                chapter = f"ch{chapter}"
-            chapter_dir = repo_root / chapter
-            if chapter_dir.exists():
-                chapter_dirs = [chapter_dir]
-            else:
-                chapter_dirs = []
+            chapter_dir = repo_root / normalized
+            chapter_dirs = [chapter_dir] if chapter_dir.exists() else []
     
     for chapter_dir in chapter_dirs:
         pairs = discover_benchmarks(chapter_dir)

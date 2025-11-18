@@ -1,7 +1,7 @@
 """optimized_model_eager.py - torch.compile optimized execution.
 
 Uses torch.compile for kernel fusion and optimization.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -20,9 +20,12 @@ import torch.nn as nn
 from typing import Optional
 
 from common.python.compile_utils import enable_tf32, compile_model
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 # Ensure consistent TF32 state before any operations (new API only)
@@ -67,14 +70,22 @@ class SimpleTransformer(nn.Module):
         return self.output(x)
 
 
-class OptimizedModelCompiledBenchmark(Benchmark):
+class OptimizedModelCompiledBenchmark(BaseBenchmark):
     """Benchmark implementation with torch.compile optimization."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.compiled_model = None
         self.input_ids = None
+        self.batch_size = 16
+        self.seq_len = 1024
+        self.vocab_size = 10000
+        tokens = self.batch_size * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: initialize model and compile it."""
@@ -83,10 +94,6 @@ class OptimizedModelCompiledBenchmark(Benchmark):
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-        batch_size = 16
-        seq_len = 1024
-        vocab_size = 10000
-        
         model = SimpleTransformer().to(self.device).eval()
         self.model = model
         
@@ -97,13 +104,13 @@ class OptimizedModelCompiledBenchmark(Benchmark):
             dynamic=False,
         )
         
-        self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
+        self.input_ids = torch.randint(0, self.vocab_size, (self.batch_size, self.seq_len), device=self.device)
         
         # Warmup (compilation happens here)
         for _ in range(30):
             with torch.no_grad():
                 _ = self.compiled_model(self.input_ids)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         
         # Additional warmup after compilation
         for _ in range(10):
@@ -125,6 +132,7 @@ class OptimizedModelCompiledBenchmark(Benchmark):
         with nvtx_range("model_eager", enable=enable_nvtx):
             with torch.no_grad():
                         _ = self.compiled_model(self.input_ids)
+        self._synchronize()
 
     def teardown(self) -> None:
         """Cleanup."""
@@ -146,7 +154,7 @@ class OptimizedModelCompiledBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedModelCompiledBenchmark()
 

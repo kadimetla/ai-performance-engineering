@@ -1,7 +1,7 @@
 """baseline_kernel_launches.py - Many small kernel launches (baseline).
 
 Demonstrates performance issue: many sequential kernel launches with overhead.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -18,19 +18,13 @@ import torch
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch12")
-    return torch.device("cuda")
 
 
 def many_small_ops_regular(x: torch.Tensor, iterations: int = 100) -> torch.Tensor:
@@ -50,15 +44,20 @@ def many_small_ops_regular(x: torch.Tensor, iterations: int = 100) -> torch.Tens
     return x
 
 
-class BaselineKernelLaunchesBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
+class BaselineKernelLaunchesBenchmark(BaseBenchmark):
+    """Benchmark implementation following BaseBenchmark."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.x = None
         self.output = None
         self.size = (1024, 1024)
         self.iterations = 1000
+        tokens = self.size[0] * self.size[1]
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: initialize tensor."""
@@ -80,6 +79,7 @@ class BaselineKernelLaunchesBenchmark(Benchmark):
         with nvtx_range("kernel_launches", enable=enable_nvtx):
             with torch.no_grad():
                 self.output = many_small_ops_regular(self.x.clone(), self.iterations)
+            self._synchronize()
 
     
     def teardown(self) -> None:
@@ -96,6 +96,9 @@ class BaselineKernelLaunchesBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.x is None:
@@ -107,7 +110,7 @@ class BaselineKernelLaunchesBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineKernelLaunchesBenchmark()
 

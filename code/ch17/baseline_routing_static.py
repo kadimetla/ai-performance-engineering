@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Optional
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
 
 import torch
 import torch.nn as nn
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
-
-
-def resolve_device() -> torch.device:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch17")
-    return torch.device("cuda")
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
 class LargeModel(nn.Module):
@@ -36,17 +24,22 @@ class LargeModel(nn.Module):
         return self.output(x)
 
 
-class BaselineRoutingStaticBenchmark(Benchmark):
+class BaselineRoutingStaticBenchmark(BaseBenchmark):
     """Static routing baseline: every request uses the large model."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         self.batch_size = 16
         self.hidden_dim = 2048
         self.num_layers = 24
         self.requests_per_iteration = 10
+        tokens = self.batch_size * self.hidden_dim * self.requests_per_iteration
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.requests_per_iteration),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
         torch.backends.cudnn.benchmark = True
@@ -60,26 +53,27 @@ class BaselineRoutingStaticBenchmark(Benchmark):
 
         dtype = next(self.model.parameters()).dtype
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=dtype)
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
         assert self.model is not None and self.inputs is not None
 
-        with nvtx_range("routing", enable=enable_nvtx):
+        with self._nvtx_range("routing"):
             with torch.no_grad():
                 for _ in range(self.requests_per_iteration):
                     _ = self.model(self.inputs)
+        self._synchronize()
 
     def teardown(self) -> None:
         self.model = None
         self.inputs = None
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=5)
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
     def validate_result(self) -> Optional[str]:
         if self.model is None or self.inputs is None:
@@ -87,16 +81,5 @@ class BaselineRoutingStaticBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaselineRoutingStaticBenchmark:
     return BaselineRoutingStaticBenchmark()
-
-
-if __name__ == "__main__":
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5),
-    )
-    result = harness.benchmark(get_benchmark())
-    print(f"\nBaseline Routing Static: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

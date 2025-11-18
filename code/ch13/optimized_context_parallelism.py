@@ -1,14 +1,10 @@
-"""optimized_context_parallelism.py - Optimized context parallelism for long sequences.
-
-Demonstrates context parallelism by splitting long sequences across multiple GPUs.
-Context parallelism: Splits sequence across GPUs for parallel processing of long contexts.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_context_parallelism.py - Optimized context parallelism for long sequences."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -17,45 +13,40 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
-
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
-
-
-class OptimizedContextParallelismBenchmark(Benchmark):
+class OptimizedContextParallelismBenchmark(BaseBenchmark):
     """Optimized: Context parallelism for long sequences (split across GPUs)."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.models = None
-        self.input_sequence = None
-        self.sequence_chunks = None
+        super().__init__()
+        self.models: Optional[list[nn.Module]] = None
+        self.input_sequence: Optional[torch.Tensor] = None
+        self.sequence_chunks: Optional[list[torch.Tensor]] = None
         self.sequence_length = 8192  # Long sequence for training
         self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+        tokens = self.sequence_length
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize models on multiple GPUs and split sequence."""
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
             enable_tf32()
         
         torch.manual_seed(42)
-        # Optimization: Context parallelism splits long sequences across GPUs
-        # Each GPU processes a different portion of the sequence in parallel
-        # This enables parallel processing of long contexts that don't fit efficiently on one GPU
         self.models = []
         for gpu_id in range(self.num_gpus):
             model = nn.Sequential(
@@ -67,11 +58,8 @@ class OptimizedContextParallelismBenchmark(Benchmark):
             ).to(torch.device(f"cuda:{gpu_id}")).eval()
             self.models.append(model)
         
-        # Long sequence that benefits from context parallelism
-        # Split sequence across GPUs for parallel processing
         self.input_sequence = torch.randn(self.sequence_length, 256, device=self.device)
         
-        # Split sequence into chunks for each GPU
         tokens_per_gpu = self.sequence_length // self.num_gpus
         self.sequence_chunks = []
         for gpu_id in range(self.num_gpus):
@@ -80,43 +68,39 @@ class OptimizedContextParallelismBenchmark(Benchmark):
             chunk = self.input_sequence[start_idx:end_idx].to(torch.device(f"cuda:{gpu_id}"))
             self.sequence_chunks.append(chunk)
         
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Context parallelism processing of long sequence."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        assert self.models is not None and self.sequence_chunks is not None
         
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-        
-        # Optimization: Process sequence chunks in parallel across GPUs
-        # Context parallelism enables parallel processing of long sequences
-        with nvtx_range("optimized_context_parallelism", enable=enable_nvtx):
+        with self._nvtx_range("optimized_context_parallelism"):
             with torch.no_grad():
                 outputs = []
-                for gpu_id, (model, chunk) in enumerate(zip(self.models, self.sequence_chunks)):
+                for model, chunk in zip(self.models, self.sequence_chunks):
                     output = model(chunk)
                     outputs.append(output)
         
-        # Synchronize all GPUs
         for gpu_id in range(self.num_gpus):
             torch.cuda.synchronize(torch.device(f"cuda:{gpu_id}"))
+        self._synchronize()
     
     def teardown(self) -> None:
-        """Cleanup: Clear CUDA cache."""
-        if torch.cuda.is_available():
-            for gpu_id in range(self.num_gpus):
-                torch.cuda.empty_cache()
+        self.models = None
+        self.sequence_chunks = None
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=20,
             warmup=3,
         )
     
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.models is None or len(self.models) == 0:
             return "Models not initialized"
         if self.sequence_chunks is None or len(self.sequence_chunks) == 0:
@@ -124,14 +108,12 @@ class OptimizedContextParallelismBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedContextParallelismBenchmark()
 
 
 if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
     benchmark = get_benchmark()
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
@@ -139,4 +121,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

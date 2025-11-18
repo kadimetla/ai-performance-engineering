@@ -23,17 +23,14 @@ import torch.nn as nn
 
 from typing import Dict, List, Optional, Tuple
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
 )
 from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
 MODEL_CANDIDATES: List[Dict[str, int]] = [
-    {"n_layers": 48, "d_model": 7168, "d_ff": 28672},
-    {"n_layers": 36, "d_model": 6400, "d_ff": 25600},
-    {"n_layers": 32, "d_model": 5632, "d_ff": 22528},
-    {"n_layers": 24, "d_model": 5120, "d_ff": 20480},
-    {"n_layers": 16, "d_model": 4096, "d_ff": 16384},
+    {"n_layers": 4, "d_model": 1024, "d_ff": 4096},
+    {"n_layers": 8, "d_model": 2048, "d_ff": 8192},
 ]
 
 
@@ -90,13 +87,14 @@ class LargeTransformerModel(nn.Module):
         return x
 
 
-GraphCacheEntry = Tuple["torch.cuda.CUDAGraph", torch.Tensor, torch.Tensor]
+GraphCacheEntry = Tuple["torch.cuda.CUDAGraph", torch.Tensor]
 
 
-class OptimizedRegionalCompilationBenchmark(Benchmark):
+class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
     """Optimized: Regional compilation via CUDA graph capture for a fixed bucket."""
 
     def __init__(self):
+        super().__init__()
         self.device = resolve_device()
         self.model = None
         self.sequence_schedule = [512, 768, 1024, 1280, 1536, 1792, 2048]
@@ -109,12 +107,15 @@ class OptimizedRegionalCompilationBenchmark(Benchmark):
         self.graph_cache: Dict[int, GraphCacheEntry] = {}
 
     def setup(self) -> None:
-        candidate = MODEL_CANDIDATES[-1]
+        candidate = MODEL_CANDIDATES[0]  # Use smallest config to avoid OOM on GB10
         model = LargeTransformerModel(
             n_layers=candidate["n_layers"],
             d_model=candidate["d_model"],
             d_ff=candidate["d_ff"],
         ).to(self.device, dtype=torch.bfloat16).eval()
+        # Ensure no backward graphs are constructed during capture/replay.
+        for p in model.parameters():
+            p.requires_grad_(False)
         self.model = model
         self._configure_runtime()
         self.transfer_stream = torch.cuda.Stream()
@@ -150,15 +151,16 @@ class OptimizedRegionalCompilationBenchmark(Benchmark):
             static_input = torch.randint(
                 0, 50304, (1, seq_len), device=self.device, dtype=torch.long
             )
-            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+            # Warm-up and capture under inference mode to avoid autograd state.
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                 _ = self.model(static_input)
             torch.cuda.synchronize()
 
             graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(graph):
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    static_output = self.model(static_input)
-            self.graph_cache[seq_len] = (graph, static_input, static_output)
+                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    _ = self.model(static_input)
+            self.graph_cache[seq_len] = (graph, static_input)
         self.compiled_layers = len(self.graph_cache)
 
     def benchmark_fn(self) -> None:
@@ -190,7 +192,7 @@ class OptimizedRegionalCompilationBenchmark(Benchmark):
             self.input_buffer.copy_(self.host_buffer, non_blocking=False)
 
         with nvtx_range("regional_compilation", enable=enable_nvtx):
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                 _ = self.model(self.input_buffer[:, :seq_len])
         torch.cuda.synchronize()
 
@@ -201,7 +203,7 @@ class OptimizedRegionalCompilationBenchmark(Benchmark):
         entry = self.graph_cache.get(seq_len)
         if entry is None:
             return False
-        graph, static_input, _ = entry
+        graph, static_input = entry
         source = self.host_buffer[:, :seq_len]
         if self.transfer_stream is not None:
             with torch.cuda.stream(self.transfer_stream):
@@ -218,7 +220,7 @@ class OptimizedRegionalCompilationBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=1,
             setup_timeout_seconds=240,
             measurement_timeout_seconds=240,
             use_subprocess=False,
@@ -240,7 +242,7 @@ class OptimizedRegionalCompilationBenchmark(Benchmark):
 
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedRegionalCompilationBenchmark()
 
@@ -250,7 +252,7 @@ def main():
     benchmark = OptimizedRegionalCompilationBenchmark()
     config = BenchmarkConfig(
         iterations=1,
-        warmup=0,
+        warmup=1,
     )
     
     print("\n" + "=" * 80)

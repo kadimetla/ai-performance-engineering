@@ -14,20 +14,16 @@ import torch.nn as nn
 
 from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda")
-
-
-class BaselineNcclBenchmark(Benchmark):
+class BaselineNcclBenchmark(BaseBenchmark):
     """Baseline: No NCCL - CPU-based or inefficient communication.
     
     NCCL: This baseline does not use NCCL for collective communication.
@@ -35,10 +31,17 @@ class BaselineNcclBenchmark(Benchmark):
     """
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.input = None
         self.output = None
+        self.batch = 256
+        self.hidden = 2048
+        tokens = self.batch * self.hidden
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model without NCCL."""
@@ -55,20 +58,11 @@ class BaselineNcclBenchmark(Benchmark):
         
         self.input = torch.randn(256, 2048, device=self.device)
         self.output = torch.zeros_like(self.input)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without NCCL."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_nccl", enable=enable_nvtx):
+        with self._nvtx_range("baseline_nccl"):
             with torch.no_grad():
                 output = self.model(self.input)
                 
@@ -76,6 +70,7 @@ class BaselineNcclBenchmark(Benchmark):
                 shards = torch.chunk(output, chunks=4, dim=0)
                 reduced = sum(shard.cpu() for shard in shards) / 4.0
                 self.output = reduced.to(self.device)
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -92,6 +87,9 @@ class BaselineNcclBenchmark(Benchmark):
             warmup=5,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+    
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
@@ -100,7 +98,7 @@ class BaselineNcclBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return BaselineNcclBenchmark()
 

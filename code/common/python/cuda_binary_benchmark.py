@@ -17,7 +17,7 @@ from typing import Optional, Sequence
 
 import torch
 
-from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.cuda_capabilities import pipeline_runtime_allowed
 
 ARCH_SUFFIX = {
@@ -73,7 +73,7 @@ class BinaryRunResult:
     raw_stderr: str
 
 
-class CudaBinaryBenchmark(Benchmark):
+class CudaBinaryBenchmark(BaseBenchmark):
     """Benchmark wrapper that builds and runs a CUDA executable."""
     
     def __init__(
@@ -89,6 +89,7 @@ class CudaBinaryBenchmark(Benchmark):
         time_regex: Optional[str] = r"([0-9]+(?:\.[0-9]+)?)\s*ms",
         requires_pipeline_api: bool = False,
     ) -> None:
+        super().__init__()
         self.chapter_dir = chapter_dir
         self.binary_name = binary_name
         self.friendly_name = friendly_name

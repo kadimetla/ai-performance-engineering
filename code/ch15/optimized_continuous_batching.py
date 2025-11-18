@@ -1,111 +1,67 @@
-"""optimized_continuous_batching.py - Optimized continuous batching in disaggregated inference context.
-
-Demonstrates continuous batching for optimal GPU utilization.
-Continuous batching: Implements dynamic batch composition.
-Batches are composed optimally from available samples.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_continuous_batching.py - Optimized continuous batching."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from collections import deque
+from typing import Optional
 
 import torch
 import torch.nn as nn
-from collections import deque
 
-from typing import Optional
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch15")
-    return torch.device("cuda")
-
-class OptimizedContinuousBatchingBenchmark(Benchmark):
-    """Optimized: Continuous batching - dynamic batch composition.
-    
-    Continuous batching: Implements continuous batching where samples can be
-    added or removed dynamically. Batches are composed optimally from available
-    samples, improving GPU utilization and reducing idle time.
-    """
+class OptimizedContinuousBatchingBenchmark(BaseBenchmark):
+    """Optimized: continuous batching with dynamic batch composition."""
     
     def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        self.sample_queue = None
+        super().__init__()
+        self.model: Optional[nn.Module] = None
+        self.sample_queue: Optional[deque] = None
+        self.max_batch_size = 8
+        self.hidden_dim = 1024
+        self.num_samples = 100
+        tokens = self.num_samples * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.num_samples),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
-        """Setup: Initialize model and sample queue."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        """Setup: initialize model and sample queue."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Optimization: Continuous batching - dynamic sample queue
         
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+            nn.Linear(self.hidden_dim, self.hidden_dim * 2),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
         ).to(self.device).eval()
         
-        # Simulate continuous batching: queue of samples ready for processing
-        num_samples = 100
-        self.sample_queue = deque([
-            torch.randn(1, 1024, device=self.device)
-            for _ in range(num_samples)
-        ])
-        torch.cuda.synchronize()
+        self.sample_queue = deque(
+            torch.randn(1, self.hidden_dim, device=self.device)
+            for _ in range(self.num_samples)
+        )
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Continuous batching - dynamic batch composition."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("optimized_continuous_batching", enable=enable_nvtx):
+        """Benchmark: continuous batching - dynamic batch composition."""
+        assert self.model is not None and self.sample_queue is not None
+        with self._nvtx_range("optimized_continuous_batching"):
             with torch.no_grad():
-                # Optimization: Continuous batching
-                # Compose batches dynamically from sample queue
-                max_batch_size = 8
-                
                 while self.sample_queue:
-                    # Compose batch from queue (continuous batching)
-                    current_batch_samples = []
+                    current_batch = []
                     current_size = 0
-                    
-                    # Add samples to batch until max size reached
-                    while self.sample_queue and current_size < max_batch_size:
+                    while self.sample_queue and current_size < self.max_batch_size:
                         sample = self.sample_queue.popleft()
-                        current_batch_samples.append(sample)
+                        current_batch.append(sample)
                         current_size += 1
-                    
-                    if current_batch_samples:
-                        # Stack into batch tensor
-                        batch = torch.cat(current_batch_samples, dim=0)
-                        
-                        # Process batch (continuous batching: optimal composition)
+                    if current_batch:
+                        batch = torch.cat(current_batch, dim=0)
                         _ = self.model(batch)
-                        
-                        # Continuous batching: New samples can be added to queue
-                        # without waiting for full batch completion
-
+            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -114,41 +70,21 @@ class OptimizedContinuousBatchingBenchmark(Benchmark):
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=10,
             warmup=2,
         )
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         if self.sample_queue is None:
             return "Sample queue not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
+
+def get_benchmark() -> BaseBenchmark:
     return OptimizedContinuousBatchingBenchmark()
-
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedContinuousBatchingBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: continuous_batching")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-if __name__ == "__main__":
-    main()

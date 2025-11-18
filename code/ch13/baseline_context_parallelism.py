@@ -2,7 +2,7 @@
 
 Demonstrates sequential processing of long sequences without context parallelism.
 Context parallelism: This baseline processes the entire sequence on a single GPU sequentially.
-Implements Benchmark protocol for harness integration.
+Implements BaseBenchmark for harness integration.
 """
 
 from __future__ import annotations
@@ -20,26 +20,27 @@ import torch.nn as nn
 from typing import Optional
 
 from common.python.benchmark_harness import (
-    Benchmark,
+    BaseBenchmark,
     BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch13")
-    return torch.device("cuda")
-
-
-class BaselineContextParallelismBenchmark(Benchmark):
+class BaselineContextParallelismBenchmark(BaseBenchmark):
     """Baseline: Sequential processing without context parallelism (single GPU)."""
     
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.model = None
         self.input_sequence = None
         self.sequence_length = 8192  # Long sequence for training
+        tokens = self.sequence_length
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and long input sequence."""
@@ -58,26 +59,24 @@ class BaselineContextParallelismBenchmark(Benchmark):
         # Long sequence that would benefit from context parallelism
         # Context parallelism splits sequences across GPUs for parallel processing
         self.input_sequence = torch.randn(self.sequence_length, 256, device=self.device)
-        torch.cuda.synchronize()
+        self._synchronize()
+        self.register_workload_metadata(
+            requests_per_iteration=self._workload.requests_per_iteration,
+            tokens_per_iteration=self._workload.tokens_per_iteration,
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Sequential processing of long sequence."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-        
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-        
         # Baseline: Process entire sequence sequentially on single GPU
         # No context parallelism - all tokens processed on one device
-        with nvtx_range("baseline_context_parallelism", enable=enable_nvtx):
+        with self._nvtx_range("baseline_context_parallelism"):
             with torch.no_grad():
                 output = self.model(self.input_sequence)
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def teardown(self) -> None:
         """Cleanup: Clear CUDA cache."""
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -95,7 +94,7 @@ class BaselineContextParallelismBenchmark(Benchmark):
         return None
 
 
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return BaselineContextParallelismBenchmark()
 
@@ -110,4 +109,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

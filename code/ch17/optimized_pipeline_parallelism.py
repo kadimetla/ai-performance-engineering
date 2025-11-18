@@ -1,43 +1,21 @@
-"""optimized_pipeline_parallelism.py - Optimized pipeline parallelism across GPUs.
-
-Demonstrates pipeline parallelism by splitting model layers across multiple GPUs.
-Pipeline parallelism: Splits model layers across GPUs for parallel processing of microbatches.
-Implements Benchmark protocol for harness integration.
-"""
+"""optimized_pipeline_parallelism.py - Optimized pipeline parallelism across GPUs."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from typing import Optional, List
 
 import torch
 import torch.nn as nn
 
-from typing import Optional, List
-
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch17")
-    return torch.device("cuda")
-
-
-class OptimizedPipelineParallelismBenchmark(Benchmark):
+class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
     """Optimized: Pipeline parallelism with layers split across GPUs."""
 
     def __init__(self):
-        self.device = resolve_device()
+        super().__init__()
         self.pipeline_stages: List[nn.Module] = []
         self.hidden_size = 1024
         self.batch_size = 256
@@ -46,9 +24,13 @@ class OptimizedPipelineParallelismBenchmark(Benchmark):
         self.stage_streams: List[torch.cuda.Stream] = []
         self.stage_events: List[List[torch.cuda.Event]] = []
         self.microbatch_inputs: Optional[List[torch.Tensor]] = None
+        tokens = self.batch_size * self.hidden_size
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
 
     def setup(self) -> None:
-        """Setup: Initialize pipeline stages across multiple GPUs."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
@@ -77,15 +59,9 @@ class OptimizedPipelineParallelismBenchmark(Benchmark):
             [torch.cuda.Event(enable_timing=False) for _ in range(self.micro_batches)]
             for _ in self.pipeline_stages
         ]
-        torch.cuda.synchronize()
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Pipeline parallelism processing across multiple GPUs."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
         if not self.pipeline_stages or self.microbatch_inputs is None:
             raise RuntimeError("Pipeline not initialized")
 
@@ -97,7 +73,7 @@ class OptimizedPipelineParallelismBenchmark(Benchmark):
 
         stage_devices = [next(stage.parameters()).device for stage in self.pipeline_stages]
 
-        with nvtx_range("optimized_pipeline_parallelism", enable=enable_nvtx):
+        with self._nvtx_range("optimized_pipeline_parallelism"):
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 for micro_idx in range(self.micro_batches + num_stages - 1):
                     for stage_idx, stage in enumerate(self.pipeline_stages):
@@ -122,41 +98,30 @@ class OptimizedPipelineParallelismBenchmark(Benchmark):
 
         for stream in self.stage_streams:
             stream.synchronize()
+        self._synchronize()
 
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.pipeline_stages = []
         self.microbatch_inputs = None
         self.stage_streams = []
         self.stage_events = []
-        torch.cuda.empty_cache()
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=12,
             warmup=2,
         )
 
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if not self.pipeline_stages:
             return "Pipeline stages not initialized"
         return None
 
 
-def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
+def get_benchmark() -> OptimizedPipelineParallelismBenchmark:
+    """Factory function for harness discovery."""
     return OptimizedPipelineParallelismBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(result)

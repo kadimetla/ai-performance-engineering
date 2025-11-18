@@ -32,7 +32,7 @@ After completing this chapter, you can:
 **What it demonstrates**:
 - Basic training loop structure
 - Common inefficiencies in naive implementations
-- Benchmark protocol integration
+- BaseBenchmark integration
 
 **How to run**:
 ```bash
