@@ -15,8 +15,8 @@ from ch8.baseline_occupancy_tuning import OccupancyBinaryBenchmark
 class OptimizedOccupancyTuningUnroll8(OccupancyBinaryBenchmark):
     def __init__(self) -> None:
         super().__init__(
-            friendly_name="Occupancy Tuning (block=64, unroll=8, inner=12)",
-            run_args=["--block-size", "64", "--unroll", "8", "--inner-iters", "12", "--reps", "60"],
+            friendly_name="Occupancy Tuning (block=64, unroll=8, inner=16)",
+            run_args=["--block-size", "64", "--unroll", "8", "--inner-iters", "16", "--reps", "60"],
         )
 
 

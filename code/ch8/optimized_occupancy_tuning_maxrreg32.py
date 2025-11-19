@@ -1,4 +1,4 @@
-"""Occupancy tuning with 128-thread blocks to illustrate block-size effects."""
+"""Occupancy tuning with maxrregcount cap to illustrate reg pressure vs occupancy."""
 
 from __future__ import annotations
 
@@ -12,26 +12,18 @@ if str(repo_root) not in sys.path:
 from ch8.baseline_occupancy_tuning import OccupancyBinaryBenchmark
 
 
-class OptimizedOccupancyTuningBS128(OccupancyBinaryBenchmark):
+class OptimizedOccupancyTuningMaxReg32(OccupancyBinaryBenchmark):
     def __init__(self) -> None:
         super().__init__(
-            friendly_name="Occupancy Tuning (block=128, unroll=8, inner=16)",
-            run_args=[
-                "--block-size",
-                "128",
-                "--unroll",
-                "8",
-                "--inner-iters",
-                "16",
-                "--reps",
-                "60",
-            ],
+            friendly_name="Occupancy Tuning (maxrregcount=32, block=256, unroll=8, inner=16)",
+            build_env={"MAXRREGCOUNT": "32"},
+            run_args=["--block-size", "256", "--unroll", "8", "--inner-iters", "16", "--reps", "60"],
         )
 
 
-def get_benchmark() -> OptimizedOccupancyTuningBS128:
+def get_benchmark() -> OptimizedOccupancyTuningMaxReg32:
     """Factory for discover_benchmarks()."""
-    return OptimizedOccupancyTuningBS128()
+    return OptimizedOccupancyTuningMaxReg32()
 
 
 if __name__ == "__main__":
@@ -41,5 +33,5 @@ if __name__ == "__main__":
     harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=benchmark.get_config())
     result = harness.benchmark(benchmark)
     print(
-        f"\nOccupancy Tuning (block=128): {result.timing.mean_ms if result.timing else 0.0:.3f} ms"
+        f"\nOccupancy Tuning (maxrregcount=32): {result.timing.mean_ms if result.timing else 0.0:.3f} ms"
     )

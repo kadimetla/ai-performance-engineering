@@ -48,7 +48,7 @@ class OccupancyBinaryBenchmark(CudaBinaryBenchmark):
                 "--inner-iters",
                 "1",
                 "--reps",
-                "40",
+                "60",
             ],
             time_regex=r"avg_kernel_ms=([0-9]+\.?[0-9]*)",  # Parse kernel time from binary output.
         )
