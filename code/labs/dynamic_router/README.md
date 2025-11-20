@@ -1,31 +1,36 @@
-# Dynamic Prefill/Decode Routing Lab
+# Lab - Dynamic Prefill/Decode Router
 
-This lab mirrors the book chapter on inference routing. It gives you a toy baseline (no feedback) and an optimized router (prefill/decode pools, TTFT/TPOT scoring, KV-aware decode placement, migration budget).
+## Summary
+Simulates and benchmarks dynamic routing policies for large-scale inference: split GPUs into prefill/decode pools, monitor TTFT/TPOT, honor KV locality, and migrate traffic only when the score gap warrants it.
 
-## Files
-- `baseline_router.py`: single-pool round-robin, no TTFT/TPOT, no KV locality or migration.
-- `optimized_router.py`: EWMA-smoothed metrics, pool-aware routing, KV locality hints, migration planner.
-- `driver.py`: synthetic simulator to compare baseline vs optimized.
-- `baseline_dynamic_router_vllm.py` / `optimized_dynamic_router_vllm.py`: harness targets that drive real vLLM engines (requires CUDA GPUs, vLLM installed, and `VLLM_MODEL` pointing to a local HF model path/id).
+## Learning Goals
+- Compare naive round-robin routing with telemetry-driven policies that stabilize TTFT.
+- Prototype migration budgets, KV-locality boosts, and per-pool thresholds.
+- Drive the router against synthetic workloads or real vLLM engines.
+- Export detailed metrics (TTFT, TPOT, queue depth) for visualization.
 
-## Run
+## Directory Layout
+| Path | Description |
+| --- | --- |
+| `baseline_router.py`, `optimized_router.py`, `driver.py` | Core router logic plus a synthetic simulator for deterministic comparisons. |
+| `baseline_dynamic_router.py`, `optimized_dynamic_router.py` | Harness-facing benchmarks derived from the simulator. |
+| `baseline_dynamic_router_vllm.py`, `optimized_dynamic_router_vllm.py`, `vllm_runner.py` | Integrations for running the routing policy against vLLM instances. |
+
+## Running the Benchmarks
+Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-python labs/dynamic_router/driver.py --mode baseline
-python labs/dynamic_router/driver.py --mode optimized
-# Or via the harness (preferred for consistency):
-python tools/cli/benchmark_cli.py run --targets labs/dynamic_router
-# vLLM pair (opt-in, requires model + 2 GPUs):
-VLLM_MODEL=/path/to/model python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:dynamic_router_vllm
+cd ai-performance-engineering
+python tools/cli/benchmark_cli.py list-targets --chapter labs/dynamic_router
+python tools/cli/benchmark_cli.py run --targets labs/dynamic_router --profile minimal
 ```
-The driver spins virtual GPUs, generates random requests, and logs average TTFT plus decode scores so you can see the control loop react.
+- Targets follow the `labs/dynamic_router:<workload>` naming convention listed by `list-targets`.
+- Use `--target-extra-arg labs/dynamic_router:<workload>="--flag value"` to sweep schedule knobs.
 
-## Concepts to watch
-- **Prefill vs decode specialization:** Prefill GPUs handle bursty GEMMs; decode GPUs stay cache-hot for steady token streaming.
-- **Signals:** TTFT as the latency leading indicator; TPOT (tokens per occupied time) as throughput indicator; queue depth and free HBM as congestion proxies.
-- **Routing policy:** Score GPUs (`α/TTFT + β·TPOT + γ·mem − δ·queue`) separately for prefill and decode; add a KV-locality boost when a GPU already holds the sequence’s KV.
-- **Admission shaping:** When TTFT inflates, narrow concurrent prefills; reopen when TTFT is healthy.
-- **Migration budget:** Allow limited mid-batch moves only when the score gap is meaningful; cap moves per window to avoid thrash.
+## Validation Checklist
+- `python labs/dynamic_router/driver.py --mode baseline` vs `--mode optimized` shows lower TTFT variance and higher TPOT for the optimized policy.
+- `python tools/cli/benchmark_cli.py run --targets labs/dynamic_router --profile minimal` records artifacts comparing baseline/optimized harness runs.
+- `VLLM_MODEL=/path/to/model python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:dynamic_router_vllm` succeeds on hosts with at least two GPUs and a local model copy.
 
-## Next steps (optional)
-- Replace the virtual GPUs with real engines (vLLM/SGLang/TRT-LLM) by wiring their telemetry into `update_metrics` and swap enqueue/dequeue points with your scheduler hooks.
-- Add logging for per-request pool transitions and migration latency to verify tail improvements.
+## Notes
+- `driver.py` accepts knobs such as `--prefill-gpus`, `--decode-gpus`, and `--migration-budget` to stress different regimes.
+- vLLM integration requires the `VLLM_MODEL` env var plus the associated tokenizer/model weights present on disk.

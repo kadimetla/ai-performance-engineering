@@ -21,6 +21,7 @@ tmp_profiles/
 tmp_profile_*/
 tmp_bench_*/
 tmp_*/
+gpt-oss-20b/
 *-plan.md
 benchmark_peak_results_*.json
 benchmark_profiles/

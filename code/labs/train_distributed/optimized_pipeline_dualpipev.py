@@ -1,0 +1,96 @@
+"""Optimized DualPipeV with deeper windows and async device transfers."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from time import perf_counter
+
+import torch
+
+from labs.train_distributed.pipeline import (
+    PipelineConfig,
+    PipelineExperiment,
+    PipelineTelemetry,
+    add_pipeline_args,
+    format_telemetry,
+)
+from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Optimized DualPipeV schedule.")
+    add_pipeline_args(parser)
+    parser.add_argument(
+        "--dual-window-multiplier",
+        type=int,
+        default=3,
+        help="Multiplier applied to n_stages when sizing the DualPipeV window.",
+    )
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    stage_count = args.n_stages
+    window = args.dual_window or (stage_count * max(2, args.dual_window_multiplier))
+    micro = args.micro_batch_size or max(stage_count * 2, stage_count + 2)
+
+    config = PipelineConfig(
+        schedule="dualpipev",
+        n_stages=stage_count,
+        batch_size=args.batch_size,
+        micro_batch_size=micro,
+        hidden_dim=args.hidden_dim,
+        depth=args.depth,
+        learning_rate=args.learning_rate * 2,
+        non_blocking=True,
+        dual_window=window,
+        seed=args.seed,
+    )
+
+    experiment = PipelineExperiment(config)
+    telemetry_total = PipelineTelemetry(config.n_stages, schedule=config.schedule)
+    total_loss = 0.0
+    start = perf_counter()
+
+    for step in range(args.steps):
+        inputs = torch.randn(config.batch_size, config.input_dim)
+        targets = torch.randn_like(inputs)
+        loss, telemetry = experiment.run_batch(inputs, targets)
+        telemetry_total.merge(telemetry)
+        total_loss += loss
+
+        if step % args.log_every == 0:
+            print(
+                f"[optimized-dualpipev] step {step + 1}/{args.steps} loss={loss:.4f} "
+                f"dual_window={config.dual_window} micro_batch={config.micro_batch_size}"
+            )
+
+    torch.cuda.synchronize()
+    elapsed = perf_counter() - start
+    avg_loss = total_loss / max(1, args.steps)
+    elems = args.steps * config.batch_size * config.input_dim
+    elems_per_sec = elems / elapsed if elapsed > 0 else 0.0
+
+    print(
+        f"[optimized-dualpipev] done in {elapsed:.2f}s | avg_loss={avg_loss:.4f} | "
+        f"elements/s={elems_per_sec:,.0f}"
+    )
+    print(format_telemetry("optimized-dualpipev", telemetry_total))
+
+
+if __name__ == "__main__":
+    main()
+
+
+def get_benchmark():
+    return TorchrunScriptBenchmark(
+        script_path=Path(__file__).parent / "pipeline_dualpipev.py",
+        base_args=["--mode", "optimized"],
+        config_arg_map={"iterations": "--steps"},
+        target_label="labs/train_distributed:dualpipev_2stages",
+        default_nproc_per_node=1,
+        multi_gpu_required=True,
+        name="optimized_pipeline_dualpipev_2stages",
+    )

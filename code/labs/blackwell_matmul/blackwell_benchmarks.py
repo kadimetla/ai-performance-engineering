@@ -45,6 +45,7 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
         self._lhs: Optional[torch.Tensor] = None
         self._rhs: Optional[torch.Tensor] = None
         self._output: Optional[torch.Tensor] = None
+        self._dtype = torch.float16
         self._reference: Optional[torch.Tensor] = None
         self._config = BenchmarkConfig(
             iterations=iterations,
@@ -91,10 +92,10 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
         torch.manual_seed(13)
         device = self.device
         self._lhs = torch.randn(
-            self._size_m, self._size_k, device=device, dtype=torch.float16
+            self._size_m, self._size_k, device=device, dtype=self._dtype
         )
         self._rhs = torch.randn(
-            self._size_k, self._size_n, device=device, dtype=torch.float16
+            self._size_k, self._size_n, device=device, dtype=self._dtype
         )
         torch.cuda.synchronize(device)
 
@@ -131,6 +132,15 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
         if max_diff > 2.5:
             return f"Max abs diff {max_diff:.3f} exceeds tolerance 2.5"
         return None
+
+    def get_problem_shape(self) -> tuple[int, int, int]:
+        """Return the (M, N, K) dimensions for this GEMM."""
+        return (self._size_m, self._size_n, self._size_k)
+
+    @property
+    def tensor_dtype(self) -> torch.dtype:
+        """Data type used for the operands/results (defaults to FP16)."""
+        return self._dtype
 
     def get_custom_metrics(self) -> Optional[dict[str, float]]:
         metrics: dict[str, float] = {}

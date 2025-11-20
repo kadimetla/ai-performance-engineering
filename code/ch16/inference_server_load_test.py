@@ -34,6 +34,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
+from ch16.capacity_planner import LittleLawCapacityPlanner
 from ch16.inference_serving_8xb200 import (
     DemoCausalLM,
     InferenceRequest,
@@ -257,6 +258,17 @@ def run_load_test(
     }
 
 
+def _summarize_samples(values: List[int]) -> Dict[str, float]:
+    if not values:
+        return {"p50": 0.0, "p95": 0.0, "avg": 0.0}
+    array = np.asarray(values, dtype=np.float64)
+    return {
+        "avg": float(array.mean()),
+        "p50": float(np.percentile(array, 50)),
+        "p95": float(np.percentile(array, 95)),
+    }
+
+
 def aggregate_results(local_result: Dict) -> Dict:
     gathered: List[Dict] = [None] * dist.get_world_size()  # type: ignore
     dist.all_gather_object(gathered, local_result)
@@ -267,14 +279,21 @@ def aggregate_results(local_result: Dict) -> Dict:
     tokens_generated = sum(item["stats"]["total_tokens_generated"] for item in gathered)
     elapsed = max(item["elapsed"] for item in gathered)
     latencies = [rec["latency_ms"] for item in gathered for rec in item["completions"]]
+    prompt_lengths = [rec["prompt_tokens"] for item in gathered for rec in item["completions"]]
+    generated_lengths = [rec["generated_tokens"] for item in gathered for rec in item["completions"]]
 
     throughput = tokens_generated / elapsed if elapsed > 0 else 0.0
     p50 = float(np.percentile(latencies, 50)) if latencies else 0.0
     p90 = float(np.percentile(latencies, 90)) if latencies else 0.0
     p99 = float(np.percentile(latencies, 99)) if latencies else 0.0
 
+    prompt_stats = _summarize_samples(prompt_lengths)
+    generated_stats = _summarize_samples(generated_lengths)
+    world_size = gathered[0]["world_size"] if gathered else 1
+
     return {
         "elapsed": elapsed,
+        "world_size": int(world_size),
         "total_requests": int(total_requests),
         "completed_requests": int(completed_requests),
         "rejected_requests": int(rejected_requests),
@@ -284,6 +303,8 @@ def aggregate_results(local_result: Dict) -> Dict:
         "latency_p90_ms": p90,
         "latency_p99_ms": p99,
         "samples_collected": len(latencies),
+        "prompt_token_stats": prompt_stats,
+        "generated_token_stats": generated_stats,
     }
 
 
@@ -316,6 +337,30 @@ def parse_args() -> argparse.Namespace:
         choices=COMPILE_MODES,
         default="default",
         help="torch.compile mode for optimized submodules.",
+    )
+    parser.add_argument(
+        "--prefill-tokens-per-s",
+        type=float,
+        default=40000.0,
+        help="Measured prompt tokens/sec per GPU (prefill phase).",
+    )
+    parser.add_argument(
+        "--decode-tokens-per-s",
+        type=float,
+        default=2000.0,
+        help="Measured decode tokens/sec per GPU.",
+    )
+    parser.add_argument(
+        "--tokens-per-gpu",
+        type=float,
+        default=None,
+        help="Override sustained tokens/sec per GPU instead of deriving from the run.",
+    )
+    parser.add_argument(
+        "--capacity-headroom",
+        type=float,
+        default=0.3,
+        help="Extra GPU headroom ratio when applying Little's Law (e.g., 0.3 = 30%%).",
     )
     args = parser.parse_args()
 
@@ -413,6 +458,63 @@ def main() -> None:
             f"P90={aggregate['latency_p90_ms']:.2f} "
             f"P99={aggregate['latency_p99_ms']:.2f}"
         )
+        prompt_stats = aggregate.get("prompt_token_stats", {})
+        generated_stats = aggregate.get("generated_token_stats", {})
+        qps_observed = (
+            aggregate["completed_requests"] / aggregate["elapsed"]
+            if aggregate["elapsed"] > 0
+            else 0.0
+        )
+        tokens_per_gpu = args.tokens_per_gpu
+        effective_world = float(aggregate.get("world_size") or world_size or 1)
+        if tokens_per_gpu is None and effective_world > 0:
+            tokens_per_gpu = (
+                aggregate["throughput_tok_per_s"] / effective_world
+                if aggregate["throughput_tok_per_s"] > 0
+                else 0.0
+            )
+
+        if tokens_per_gpu and tokens_per_gpu > 0 and qps_observed > 0:
+            planner = LittleLawCapacityPlanner(
+                prefill_tokens_per_s=args.prefill_tokens_per_s,
+                decode_tokens_per_s=args.decode_tokens_per_s,
+                tokens_per_gpu=tokens_per_gpu,
+                headroom_ratio=args.capacity_headroom,
+            )
+            estimates = planner.estimate_all(
+                qps=qps_observed,
+                prompt_token_stats=prompt_stats,
+                generated_token_stats=generated_stats,
+            )
+            if estimates:
+                print(
+                    "\nLittle's Law capacity plan | QPS={:.2f} | Prefill={:.0f} tok/s | Decode={:.0f} tok/s | Tokens/GPU={:.0f} tok/s | Headroom={:.0%}".format(
+                        qps_observed,
+                        args.prefill_tokens_per_s,
+                        args.decode_tokens_per_s,
+                        tokens_per_gpu,
+                        args.capacity_headroom,
+                    )
+                )
+                for est in estimates:
+                    print(
+                        "  {pct}: service={service_ms:.1f} ms (prefill={prefill_ms:.1f} ms, decode={decode_ms:.1f} ms) → GPUs={gpus:.2f}, GPUs+headroom={gpus_headroom:.2f}".format(
+                            pct=est.percentile.upper(),
+                            service_ms=est.total_service_time_s * 1000.0,
+                            prefill_ms=est.service_time_prefill_s * 1000.0,
+                            decode_ms=est.service_time_decode_s * 1000.0,
+                            gpus=est.required_gpus,
+                            gpus_headroom=est.required_gpus_with_headroom,
+                        )
+                    )
+                aggregate["capacity_plan"] = {
+                    "qps_observed": qps_observed,
+                    "prefill_tokens_per_s": args.prefill_tokens_per_s,
+                    "decode_tokens_per_s": args.decode_tokens_per_s,
+                    "tokens_per_gpu": tokens_per_gpu,
+                    "headroom_ratio": args.capacity_headroom,
+                    "estimates": [est.to_dict() for est in estimates],
+                }
         if args.output_json:
             args.output_json.parent.mkdir(parents=True, exist_ok=True)
             args.output_json.write_text(json.dumps(aggregate, indent=2))

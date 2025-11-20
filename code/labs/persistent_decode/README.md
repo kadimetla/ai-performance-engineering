@@ -1,57 +1,36 @@
-# Persistent Decode Lab
+# Lab - Persistent Decode & TMA Prefill
 
-Progressively upgrade a decode path from per-token launches to a cooperative persistent kernel with double-buffered K/V tiles and CUDA Graph capture for prefill vs. decode. Both CUDA and Triton variants ship side-by-side, and everything runs through the shared harness (no manual profiling scripts needed).
+## Summary
+Demonstrates Blackwell-friendly persistent decode kernels and TMA-powered prefill paths, all validated via Python harnesses plus CUDA/Triton implementations.
 
-## What it runs
-- `baseline_persistent_decode.py`: per-token Python/Torch decode loop (launch per token).
-- `optimized_persistent_decode_triton.py`: Triton persistent decode kernel with a device work queue.
-- `optimized_persistent_decode_cuda.py`: CUDA extension persistent kernel (tiled dot) driven from Python.
-- `optimized_persistent_decode_graphs.py`: wraps the Triton persistent path in CUDA Graphs (prefill captured separately from decode).
-- **Pseudo TMA pair**: `baseline_tma_prefill_decode.py` / `optimized_tma_prefill_decode.py` (sleep-based async copy simulation with burst shaping + decode graphs).
-- **Native TMA pair**: `baseline_native_tma_prefill_decode.py` / `optimized_native_tma_prefill_decode.py` (strict native async copy path via CUDA extension; raises if the GPU has no TMA support—no fallbacks).
+## Learning Goals
+- Contrast naive decode loops against persistent kernels that pin CTAs per sequence.
+- Adopt TMA-based prefill to stream activations into shared memory with minimal latency.
+- Benchmark CUDA vs Triton implementations with unified validation utilities.
+- Mix CUDA Graphs into the decode path to remove residual launch overhead.
 
-## Run via harness (profiles automatically)
+## Directory Layout
+| Path | Description |
+| --- | --- |
+| `baseline_persistent_decode.py`, `optimized_persistent_decode_cuda.py`, `optimized_persistent_decode_graphs.py`, `optimized_persistent_decode_triton.py` | Persistent decode variants spanning CUDA, graphs, and Triton. |
+| `baseline_tma_prefill_decode.py`, `optimized_tma_prefill_decode.py`, `baseline_native_tma_prefill_decode.py`, `optimized_native_tma_prefill_decode.py` | Prefill workloads illustrating cp.async vs native TMA scheduling. |
+| `persistent_decode_common.py`, `tma_extension.py`, `expectations_gb10.json` | Shared helpers, CUDA extension wrappers, and expectation thresholds. |
+
+## Running the Benchmarks
+Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-# Full lab
-python tools/cli/benchmark_cli.py run --targets labs/persistent_decode --profile
-
-# Specific example
-python tools/cli/benchmark_cli.py run --targets labs/persistent_decode:persistent_decode_triton --profile
-
-# Prefill-vs-decode + pseudo-TMA shaping sub-lab
-python tools/cli/benchmark_cli.py run --targets labs/persistent_decode:tma_prefill_decode --profile
-
-# Native TMA prefill-vs-decode sub-lab (requires TMA-capable GPU)
-python tools/cli/benchmark_cli.py run --targets labs/persistent_decode:native_tma_prefill_decode --profile
+cd ai-performance-engineering
+python tools/cli/benchmark_cli.py list-targets --chapter labs/persistent_decode
+python tools/cli/benchmark_cli.py run --targets labs/persistent_decode --profile minimal
 ```
+- Targets follow the `labs/persistent_decode:<workload>` naming convention listed by `list-targets`.
+- Use `--target-extra-arg labs/persistent_decode:<workload>="--flag value"` to sweep schedule knobs.
 
-The harness will emit Nsight Systems/Compute traces under `benchmark_profiles/labs/persistent_decode/` and JSON timings under `artifacts/<run_id>/`.
+## Validation Checklist
+- `python tools/cli/benchmark_cli.py run --targets labs/persistent_decode --profile minimal` compares all persistent/TMA variants in one sweep.
+- `python labs/persistent_decode/optimized_persistent_decode_graphs.py --iterations 50` shows lower launch overhead than `baseline_persistent_decode.py`.
+- `python labs/persistent_decode/optimized_native_tma_prefill_decode.py --validate` matches the math reference while reporting achieved memory throughput.
 
-## Nsight Systems quick-start for the TMA sub-lab
-
-The harness will emit separate baseline/optimized traces automatically when profiling is enabled:
-
-```bash
-python tools/cli/benchmark_cli.py run \
-  --targets labs/persistent_decode:tma_prefill_decode \
-  --profile \
-  --iterations 2 --warmup 0
-```
-
-What to inspect:
-- Prefill: A/B the NVTX ranges `prefill_baseline` vs. `prefill_shaped` to see stream overlap and reduced in-flight bursts.
-- Decode: `decode_baseline` shows host launch gaps; `decode_graph` collapses them via CUDA Graph replay.
-
-## Tunable knobs
-- `SEQ_LEN` (default 32), `BATCH` (8), `HEAD_DIM` (64) in `persistent_decode_common.py`.
-- `NUM_PROGRAMS`: number of persistent CTAs/programs (Triton path).
-- `BLOCK_K`: tile size along head_dim (Triton/CUDA paths).
-- Set `QUICK=1` to shrink shapes for fast CI smoke.
-
-## Milestones mirrored from the write-up
-1. Baseline per-token launches (harness run + Nsight via `--profile`).  
-2. Persistent decode (device queue) in Triton.  
-3. Persistent decode in CUDA (cooperative kernel).  
-4. Persistent + CUDA Graphs for prefill vs. decode capture (single graph node for decode).  
-5. Planned next drops: tiled attention (QKᵀ + softmax + V) inside the persistent loop, warp specialization + double-buffered K/V tiles, and cp.async/TMA pipelining with profile deltas.
-6. TMA burst shaping + decode graphs (this sub-lab) to visualize NVLink/SMEM contention shaping.
+## Notes
+- Set `TORCH_COMPILE_MODE` or `TMA_TILE_SIZE` via env vars before invoking the harness to sweep tile sizes.
+- `tma_extension.py` caches builds under `~/.cache/torch_extensions`; clean the cache when switching CUDA versions.

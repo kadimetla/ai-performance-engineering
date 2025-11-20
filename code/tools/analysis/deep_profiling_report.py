@@ -178,8 +178,12 @@ class RooflineSummary:
     arithmetic_intensity: float
     compute_utilization_pct: float
     memory_utilization_pct: float
+    tmem_utilization_pct: Optional[float]
+    l2_utilization_pct: Optional[float]
+    binding: str
     is_memory_bound: bool
     is_compute_bound: bool
+    is_tmem_bound: bool
     ridge_point: float
     memory_bound_limit_tflops: float
     peak_tflops: float
@@ -196,6 +200,7 @@ class Advisory:
     roofline: Optional[RooflineSummary]
     sm_util_pct: Optional[float]
     dram_util_pct: Optional[float]
+    tmem_util_pct: Optional[float]
     occupancy_pct: Optional[float]
     tensor_util_pct: Optional[float]
     warp_exec_pct: Optional[float]
@@ -404,6 +409,29 @@ def safe_pct(value: Optional[float]) -> Optional[float]:
     return value if value > 1.0 else value * 100.0
 
 
+def determine_binding_roof(
+    compute_pct: Optional[float],
+    tmem_pct: Optional[float],
+    dram_pct: Optional[float],
+    l2_pct: Optional[float],
+    threshold: float = 5.0,
+) -> str:
+    """Roughly classify whether compute, TMEM, or DRAM is the binding roof."""
+    best = "compute"
+    best_value = compute_pct or 0.0
+    for label, value in (
+        ("tmem", tmem_pct),
+        ("l2", l2_pct),
+        ("dram", dram_pct),
+    ):
+        if value is None:
+            continue
+        if value > best_value + threshold:
+            best = label
+            best_value = value
+    return best
+
+
 def derive_roofline(metrics: KernelMetrics) -> Tuple[Optional[RooflineSummary], Optional[float], Optional[float], Optional[float], str]:
     analyzer = RooflineAnalyzer()
     precision = pick_precision(metrics)
@@ -428,6 +456,18 @@ def derive_roofline(metrics: KernelMetrics) -> Tuple[Optional[RooflineSummary], 
         "Memory (Device) Throughput",
         "Device Memory Throughput",
     ))
+    tmem_util_pct = safe_pct(metrics.get_value(
+        "tmem__throughput.avg.pct_of_peak_sustained_elapsed",
+        "Tensor Memory Throughput",
+        "Tensor Memory (TMEM) Throughput",
+    ))
+    l2_util_pct = safe_pct(metrics.get_value(
+        "l2__throughput.avg.pct_of_peak_sustained_elapsed",
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed",
+        "L2 Throughput",
+    ))
+    binding = determine_binding_roof(compute_util_pct, tmem_util_pct, memory_util_pct, l2_util_pct)
+    is_tmem_bound = binding == "tmem"
     roofline_summary: Optional[RooflineSummary] = None
     if duration_ms and flops and bytes_transferred and duration_ms > 0 and bytes_transferred > 0:
         results = analyzer.analyze_kernel(duration_ms, flops, bytes_transferred, precision)
@@ -437,8 +477,12 @@ def derive_roofline(metrics: KernelMetrics) -> Tuple[Optional[RooflineSummary], 
             arithmetic_intensity=results["arithmetic_intensity"],
             compute_utilization_pct=results["compute_utilization_pct"],
             memory_utilization_pct=results["memory_utilization_pct"],
+            tmem_utilization_pct=tmem_util_pct,
+            l2_utilization_pct=l2_util_pct,
+            binding=binding,
             is_memory_bound=results["is_memory_bound"],
             is_compute_bound=results["is_compute_bound"],
+            is_tmem_bound=is_tmem_bound,
             ridge_point=results["ridge_point"],
             memory_bound_limit_tflops=results["memory_bound_tflops"],
             peak_tflops=results["peak_tflops"],
@@ -487,8 +531,12 @@ def derive_roofline(metrics: KernelMetrics) -> Tuple[Optional[RooflineSummary], 
             arithmetic_intensity=arithmetic_intensity or 0.0,
             compute_utilization_pct=compute_util_pct,
             memory_utilization_pct=memory_util_pct or 0.0,
+            tmem_utilization_pct=tmem_util_pct,
+            l2_utilization_pct=l2_util_pct,
+            binding=binding,
             is_memory_bound=is_memory_bound,
             is_compute_bound=is_compute_bound,
+            is_tmem_bound=is_tmem_bound,
             ridge_point=ridge_point,
             memory_bound_limit_tflops=memory_bound_limit_tflops or 0.0,
             peak_tflops=peak_tflops,
@@ -510,6 +558,11 @@ def build_advisory(metrics: KernelMetrics) -> Advisory:
         "Memory Throughput",
         "Memory (Device) Throughput",
         "Device Memory Throughput",
+    ))
+    tmem_util = safe_pct(metrics.get_value(
+        "tmem__throughput.avg.pct_of_peak_sustained_elapsed",
+        "Tensor Memory Throughput",
+        "Tensor Memory (TMEM) Throughput",
     ))
     occupancy = safe_pct(metrics.get_value("sm__warps_active.avg.pct_of_peak_sustained_active"))
     tensor_util = safe_pct(
@@ -545,6 +598,13 @@ def build_advisory(metrics: KernelMetrics) -> Advisory:
                 recommendations.append(
                     "HBM bandwidth already saturated (>80%); investigate cache blocking or compression to reduce traffic."
                 )
+        if roofline_summary.is_tmem_bound:
+            recommendations.append(
+                "TMEM throughput is binding; fix tensor-map alignment, reduce multicast fan-out, or streamline TMA descriptors."
+            )
+            recommendations.append(
+                "Capture Nsight metrics + labs/blackwell_matmul metadata and run tools/analysis/dual_roofline_plot.py to visualise the dual ceilings."
+            )
         elif roofline_summary.is_compute_bound:
             recommendations.append(
                 "Kernel is compute-bound; pursue higher SM utilisation (occupancy tuning, instruction-level parallelism)."
@@ -586,6 +646,7 @@ def build_advisory(metrics: KernelMetrics) -> Advisory:
         roofline=roofline_summary,
         sm_util_pct=sm_util,
         dram_util_pct=dram_util,
+        tmem_util_pct=tmem_util,
         occupancy_pct=occupancy,
         tensor_util_pct=tensor_util,
         warp_exec_pct=warp_exec,
@@ -620,6 +681,7 @@ def render_table(advisories: Sequence[Advisory], top_k: int) -> str:
         "GB/s",
         "AI",
         "SM %",
+        "TMEM %",
         "HBM %",
         "Occ %",
         "Advice",
@@ -636,6 +698,7 @@ def render_table(advisories: Sequence[Advisory], top_k: int) -> str:
             f"{roof.achieved_bandwidth_gbs:.1f}" if roof else "n/a",
             f"{ai:.2f}" if ai is not None else "n/a",
             f"{advisory.sm_util_pct:.1f}" if advisory.sm_util_pct is not None else "n/a",
+            f"{advisory.tmem_util_pct:.1f}" if advisory.tmem_util_pct is not None else "n/a",
             f"{advisory.dram_util_pct:.1f}" if advisory.dram_util_pct is not None else "n/a",
             f"{advisory.occupancy_pct:.1f}" if advisory.occupancy_pct is not None else "n/a",
             advisory.recommendations[0] if advisory.recommendations else "",
@@ -657,17 +720,22 @@ def aggregate_stats(advisories: Sequence[Advisory]) -> Dict[str, object]:
     ai_values = [adv.roofline.arithmetic_intensity for adv in advisories if adv.roofline]
     compute_util = [adv.roofline.compute_utilization_pct for adv in advisories if adv.roofline]
     memory_util = [adv.roofline.memory_utilization_pct for adv in advisories if adv.roofline]
+    tmem_util = [adv.roofline.tmem_utilization_pct for adv in advisories if adv.roofline and adv.roofline.tmem_utilization_pct is not None]
     return {
         "kernel_count": len(advisories),
         "mean_arithmetic_intensity": statistics.mean(ai_values) if ai_values else None,
         "median_arithmetic_intensity": statistics.median(ai_values) if ai_values else None,
         "mean_compute_util_pct": statistics.mean(compute_util) if compute_util else None,
         "mean_memory_util_pct": statistics.mean(memory_util) if memory_util else None,
+        "mean_tmem_util_pct": statistics.mean(tmem_util) if tmem_util else None,
         "memory_bound_kernels": [
             adv.kernel for adv in advisories if adv.roofline and adv.roofline.is_memory_bound
         ],
         "compute_bound_kernels": [
             adv.kernel for adv in advisories if adv.roofline and adv.roofline.is_compute_bound
+        ],
+        "tmem_bound_kernels": [
+            adv.kernel for adv in advisories if adv.roofline and adv.roofline.is_tmem_bound
         ],
     }
 
@@ -765,8 +833,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         "arithmetic_intensity": adv.roofline.arithmetic_intensity,
                         "compute_utilization_pct": adv.roofline.compute_utilization_pct,
                         "memory_utilization_pct": adv.roofline.memory_utilization_pct,
+                        "tmem_utilization_pct": adv.roofline.tmem_utilization_pct,
+                        "l2_utilization_pct": adv.roofline.l2_utilization_pct,
+                        "binding": adv.roofline.binding,
                         "is_memory_bound": adv.roofline.is_memory_bound,
                         "is_compute_bound": adv.roofline.is_compute_bound,
+                        "is_tmem_bound": adv.roofline.is_tmem_bound,
                         "ridge_point": adv.roofline.ridge_point,
                         "memory_bound_limit_tflops": adv.roofline.memory_bound_limit_tflops,
                         "peak_tflops": adv.roofline.peak_tflops,
@@ -774,6 +846,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     },
                     "sm_util_pct": adv.sm_util_pct,
                     "dram_util_pct": adv.dram_util_pct,
+                    "tmem_util_pct": adv.tmem_util_pct,
                     "occupancy_pct": adv.occupancy_pct,
                     "tensor_util_pct": adv.tensor_util_pct,
                     "warp_execution_pct": adv.warp_exec_pct,

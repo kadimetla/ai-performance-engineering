@@ -49,6 +49,9 @@ int main() {
     constexpr int kWarmup = 1;
     constexpr int kIters = 10;
 
+    // Allow many in-flight child launches from device
+    CUDA_CHECK(cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 8192));
+
     std::vector<float> h_data(kElements);
     for (int i = 0; i < kElements; ++i) {
         h_data[i] = std::cos(0.0013f * static_cast<float>(i));
@@ -73,6 +76,7 @@ int main() {
     reset_input();
     for (int i = 0; i < kWarmup; ++i) {
         parent_launcher<<<kGrid, kBlock>>>(d_data, d_segments, static_cast<int>(segments.size()));
+        CUDA_CHECK(cudaGetLastError());
     }
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -84,6 +88,7 @@ int main() {
     for (int iter = 0; iter < kIters; ++iter) {
         reset_input();
         parent_launcher<<<kGrid, kBlock>>>(d_data, d_segments, static_cast<int>(segments.size()));
+        CUDA_CHECK(cudaGetLastError());
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager
 
 import torch
+import torch.distributed as dist
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
-
-from accelerate import Accelerator
 
 
 def setup_tokenizer(model_id: str) -> AutoTokenizer:
@@ -19,12 +18,29 @@ def setup_tokenizer(model_id: str) -> AutoTokenizer:
     return tokenizer
 
 
-def load_tinystories(
-    tokenizer: AutoTokenizer, seq_len: int, accelerator: Accelerator | None = None
-) -> Dataset:
+@contextmanager
+def _main_process_first(is_main_process: bool):
+    """Ensure rank-0 runs the protected block before other ranks."""
+
+    distributed_ready = dist.is_available() and dist.is_initialized()
+    if not distributed_ready:
+        yield
+        return
+
+    if not is_main_process:
+        dist.barrier()
+
+    try:
+        yield
+    finally:
+        dist.barrier()
+
+
+def load_tinystories(tokenizer: AutoTokenizer, seq_len: int, *, is_main_process: bool) -> Dataset:
     """Tokenize and pack TinyStories into contiguous blocks for LM training."""
-    process_ctx = accelerator.main_process_first if accelerator else nullcontext
-    raw_dataset = load_dataset("roneneldan/TinyStories", split="train[:5%]")
+
+    with _main_process_first(is_main_process):
+        raw_dataset = load_dataset("roneneldan/TinyStories", split="train[:5%]")
 
     def tokenize_function(examples):
         tokens = tokenizer(
@@ -37,7 +53,7 @@ def load_tinystories(
         tokens["labels"] = tokens["input_ids"].copy()
         return tokens
 
-    with process_ctx():
+    with _main_process_first(is_main_process):
         tokenized_dataset = raw_dataset.map(tokenize_function, batched=True, remove_columns=["text"])
 
     def pack_sequences(examples):
@@ -58,7 +74,7 @@ def load_tinystories(
 
         return {"input_ids": packed_input_ids, "labels": packed_labels}
 
-    with process_ctx():
+    with _main_process_first(is_main_process):
         packed_dataset = tokenized_dataset.map(
             pack_sequences,
             batched=True,

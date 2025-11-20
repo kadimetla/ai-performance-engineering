@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import importlib
 import sys
 from pathlib import Path
+from typing import Optional
+
+import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -21,6 +25,13 @@ _VARIANT_MODULES = {
     "cluster": "labs.blackwell_matmul.optimized_blackwell_matmul_cluster",
 }
 
+_VARIANT_KERNEL_HINTS = {
+    "baseline": "baseline_kernel",
+    "tma": "tma_prefetch_kernel",
+    "pipeline": "pipeline_prefetch_kernel",
+    "cluster": "cluster_kernel",
+}
+
 
 def _ensure_cluster_available(requested_variant: str) -> None:
     if requested_variant != "cluster":
@@ -30,6 +41,60 @@ def _ensure_cluster_available(requested_variant: str) -> None:
     raise SystemExit(
         "[labs/blackwell_matmul] Cluster launch unsupported on this GPU."
     )
+
+
+def _append_roofline_row(
+    csv_path: Path,
+    kernel_hint: str,
+    arithmetic_intensity: float,
+    achieved_tflops: float,
+    variant: str,
+) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    needs_header = not csv_path.exists()
+    fieldnames = ["kernel", "intensity", "achieved_tflops", "label"]
+    with csv_path.open("a", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if needs_header:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "kernel": kernel_hint,
+                "intensity": f"{arithmetic_intensity:.6f}",
+                "achieved_tflops": f"{achieved_tflops:.4f}",
+                "label": variant,
+            }
+        )
+    print(f"[roofline] Appended {variant} metadata to {csv_path}")
+
+
+def _emit_dual_roofline_meta(
+    output_path: Optional[Path],
+    benchmark: BaseBenchmark,
+    mean_ms: float,
+    variant: str,
+) -> None:
+    if output_path is None or mean_ms <= 0.0:
+        return
+    if not hasattr(benchmark, "get_problem_shape"):
+        print("[roofline] Benchmark lacks get_problem_shape(); skipping metadata export.")
+        return
+    m, n, k = benchmark.get_problem_shape()  # type: ignore[attr-defined]
+    dtype = getattr(benchmark, "tensor_dtype", torch.float16)
+    dtype_bytes = torch.tensor([], dtype=dtype).element_size()
+    flops = float(2 * m * n * k)
+    bytes_moved = float((m * k) + (k * n) + (m * n)) * dtype_bytes
+    if bytes_moved <= 0:
+        print("[roofline] Unable to compute bytes moved; skipping metadata export.")
+        return
+    seconds = mean_ms / 1000.0
+    if seconds <= 0:
+        print("[roofline] Invalid runtime; skipping metadata export.")
+        return
+    arithmetic_intensity = flops / bytes_moved
+    achieved_tflops = (flops / 1e12) / seconds
+    kernel_hint = _VARIANT_KERNEL_HINTS.get(variant, variant)
+    _append_roofline_row(output_path, kernel_hint, arithmetic_intensity, achieved_tflops, variant)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override BenchmarkConfig.warmup",
     )
+    parser.add_argument(
+        "--roofline-meta",
+        type=Path,
+        default=None,
+        help="Optional CSV path for kernel,intensity,achieved_tflops rows (dual roofline helper).",
+    )
     args = parser.parse_args(argv)
 
     module_name = _VARIANT_MODULES[args.variant]
@@ -83,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"\nBlackwell matmul ({args.variant}, size={args.size}) : {mean_ms:.3f} ms"
     )
+    _emit_dual_roofline_meta(args.roofline_meta, benchmark, mean_ms, args.variant)
     return 0
 
 

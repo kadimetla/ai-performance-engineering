@@ -319,6 +319,7 @@ PY
         
         pip_uninstall -y torch torchvision torchdata functorch pytorch-triton >/dev/null 2>&1 || true
         if pip_install --no-input --force-reinstall --no-deps "${reassembled_wheel}"; then
+            install_torchao_packages
             echo "✓ PyTorch CUDA restored after ${context}"
             rm -rf "${tmp_dir}"
             return 0
@@ -360,16 +361,312 @@ with zipfile.ZipFile(wheel_path, "r") as src:
                     text = data.decode("utf-8").splitlines()
                     for idx, line in enumerate(text):
                         if line.startswith("Root-Is-Purelib:"):
-                            if line.strip().lower() != "root-is-purelib: true":
-                                text[idx] = "Root-Is-Purelib: true"
+                            if line.strip().lower() != "root-is-purelib: false":
+                                text[idx] = "Root-Is-Purelib: false"
                             break
                     else:
-                        text.append("Root-Is-Purelib: true")
+                        text.append("Root-Is-Purelib: false")
                     data = ("\n".join(text) + "\n").encode("utf-8")
                 dst.writestr(info, data)
-        shutil.move(tmp_path, wheel_path)
+    shutil.move(tmp_path, wheel_path)
 PY
 }
+
+patch_installed_transformer_engine_metadata() {
+    python3 <<'PY'
+import importlib.metadata as metadata
+from importlib.metadata import PackageNotFoundError
+
+def patch_distribution(name: str) -> None:
+    try:
+        dist = metadata.distribution(name)
+    except PackageNotFoundError:
+        return
+
+    files = dist.files or []
+    wheel_entry = None
+    for file in files:
+        if file.name == "WHEEL":
+            wheel_entry = dist.locate_file(file)
+            break
+
+    if not wheel_entry:
+        return
+
+    lines = wheel_entry.read_text().splitlines()
+    for idx, line in enumerate(lines):
+        if line.startswith("Root-Is-Purelib:"):
+            if line.strip().lower() != "root-is-purelib: false":
+                lines[idx] = "Root-Is-Purelib: false"
+            break
+    else:
+        lines.append("Root-Is-Purelib: false")
+
+    wheel_entry.write_text("\n".join(lines) + "\n")
+
+for dist_name in ("transformer_engine", "transformer_engine_torch", "transformer_engine_cu12"):
+    patch_distribution(dist_name)
+PY
+}
+
+patch_cutlass_synclog_guards() {
+    python3 <<'PY'
+import re
+from pathlib import Path
+
+TARGET_FILES = [
+    Path("third_party/cutlass/include/cute/arch/copy_sm90_tma.hpp"),
+]
+
+def patch_file(path: Path) -> bool:
+    if not path.exists():
+        return False
+    text = path.read_text()
+    include_marker = "#include \"cutlass/arch/synclog.hpp\"\n\n"
+    macro_block = (
+        "#if !defined(CUTE_CALL_SYNCLOG)\n"
+        "#if defined(CUTLASS_ENABLE_SYNCLOG)\n"
+        "#define CUTE_CALL_SYNCLOG(expr) expr\n"
+        "#else\n"
+        "#define CUTE_CALL_SYNCLOG(expr) ((void)0)\n"
+        "#endif\n"
+        "#endif\n\n"
+    )
+    changed = False
+    if include_marker in text and "CUTE_CALL_SYNCLOG" not in text:
+        text = text.replace(include_marker, include_marker + macro_block, 1)
+        changed = True
+    pattern = re.compile(r"(cutlass::arch::synclog_emit_[A-Za-z0-9_]+\([^;]+?\))\s*;")
+    def repl(match):
+        return f"CUTE_CALL_SYNCLOG({match.group(1)});"
+    new_text, count = pattern.subn(repl, text)
+    if count > 0:
+        text = new_text
+        changed = True
+    if changed:
+        path.write_text(text)
+    return changed
+
+patched = False
+for file_path in TARGET_FILES:
+    if patch_file(file_path):
+        print(f"[setup] Patched CUTLASS synclog guards in {file_path}")
+        patched = True
+
+if not patched:
+    print("[setup] CUTLASS synclog guard patch skipped (already applied or file missing)")
+PY
+}
+
+patch_transformer_engine_loader() {
+    python3 <<'PY'
+from importlib.metadata import PackageNotFoundError, distribution
+from pathlib import Path
+
+OLD_BLOCK = '''    if te_framework_installed:
+        assert te_installed_via_pypi, "Could not find `transformer-engine` PyPI package."
+        assert te_core_installed, "Could not find TE core package `transformer-engine-cu*`."
+
+        assert version(module_name) == version("transformer-engine") == te_core_version, (
+            "Transformer Engine package version mismatch. Found"
+            f" {module_name} v{version(module_name)}, transformer-engine"
+            f" v{version('transformer-engine')}, and {te_core_package_name}"
+            f" v{te_core_version}. Install transformer-engine using "
+            f"'pip3 install --no-build-isolation transformer-engine[{extra_dep_name}]==VERSION'"
+        )
+'''
+
+NEW_BLOCK = '''    if te_framework_installed:
+        if te_installed_via_pypi and te_core_installed:
+            assert version(module_name) == version("transformer-engine") == te_core_version, (
+                "Transformer Engine package version mismatch. Found"
+                f" {module_name} v{version(module_name)}, transformer-engine"
+                f" v{version('transformer-engine')}, and {te_core_package_name}"
+                f" v{te_core_version}. Install transformer-engine using "
+                f"'pip3 install --no-build-isolation transformer-engine[{extra_dep_name}]==VERSION'"
+            )
+        else:
+            pass
+'''
+
+patched = False
+for dist_name in ("transformer_engine", "transformer-engine"):
+    try:
+        dist = distribution(dist_name)
+    except PackageNotFoundError:
+        continue
+    path = Path(dist.locate_file("transformer_engine/common/__init__.py"))
+    if not path.exists():
+        continue
+    text = path.read_text()
+    if OLD_BLOCK in text:
+        text = text.replace(OLD_BLOCK, NEW_BLOCK, 1)
+        path.write_text(text)
+        patched = True
+
+if patched:
+    print("[setup] Patched Transformer Engine loader for local wheel support")
+else:
+    print("[setup] Transformer Engine loader patch skipped (already applied)")
+PY
+}
+
+install_proton_cli_stub() {
+    if command -v proton >/dev/null 2>&1; then
+        echo "Proton CLI already available (proton command found)"
+        return 0
+    fi
+    local target="/usr/local/bin/proton"
+    install -m 755 "${PROJECT_ROOT}/tools/proton_stub.py" "${target}"
+    echo "Installed Proton stub CLI at ${target}"
+}
+
+remove_conflicting_user_triton() {
+    if [ -z "${SUDO_USER:-}" ] || [ "${SUDO_USER}" = "root" ]; then
+        return 0
+    fi
+    local user_site
+    user_site=$(sudo -H -u "${SUDO_USER}" python3 - <<'PY' 2>/dev/null || true)
+import site
+try:
+    print(site.getusersitepackages())
+except Exception:
+    raise SystemExit(1)
+PY
+    if [ -z "${user_site}" ]; then
+        return 0
+    fi
+    if sudo -H -u "${SUDO_USER}" test -d "${user_site}/triton"; then
+        rm -rf "${user_site}/triton"
+    fi
+    sudo -H -u "${SUDO_USER}" sh -c "rm -rf ${user_site}/pytorch_triton-*.dist-info" 2>/dev/null || true
+}
+
+remove_usercustomize_shim() {
+    local targets=(
+        "$HOME/.local/lib/python3.12/site-packages/usercustomize.py"
+        "/usr/local/lib/python3.12/dist-packages/usercustomize.py"
+    )
+    for target in "${targets[@]}"; do
+        if [ -f "$target" ]; then
+            rm -f "$target"
+            echo "[setup] Removed legacy usercustomize shim at $target"
+        fi
+    done
+}
+
+disable_transformer_engine_sanity_check() {
+    python3 <<'PY'
+import ast
+import importlib.metadata as metadata
+from importlib.metadata import PackageNotFoundError
+from pathlib import Path
+
+def patch_module(module_path: Path) -> bool:
+    if not module_path.exists():
+        return False
+    source = module_path.read_text()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    target = None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "sanity_checks_for_pypi_installation":
+            target = node
+            break
+    if target is None or target.lineno is None or target.end_lineno is None:
+        return False
+    lines = source.splitlines()
+    replacement = [
+        "def sanity_checks_for_pypi_installation() -> None:",
+        "    \"\"\"Runtime environment bundles TE wheels directly; skip PyPI provenance checks.\"\"\"",
+        "    return None",
+        "",
+    ]
+    start = target.lineno - 1
+    end = target.end_lineno
+    lines[start:end] = replacement
+    module_path.write_text("\n".join(lines) + ("\n" if lines and lines[-1] else ""))
+    return True
+
+patched_any = False
+for dist_name in ("transformer_engine", "transformer-engine"):
+    try:
+        dist = metadata.distribution(dist_name)
+    except PackageNotFoundError:
+        continue
+    module_path = Path(dist.locate_file("transformer_engine/common/__init__.py"))
+    if patch_module(module_path):
+        print(f"[setup] Patched Transformer Engine sanity check at {module_path}")
+        patched_any = True
+
+if not patched_any:
+    print("[setup] Warning: transformer_engine.common not patched (module not found)")
+PY
+}
+
+patch_cutlass_synclog_guards
+patch_transformer_engine_loader
+install_proton_cli_stub
+remove_conflicting_user_triton
+remove_usercustomize_shim
+
+verify_fp8_functionality() {
+    python3 <<'PY'
+import torch
+status = {
+    "torchao": {"ok": False, "error": ""},
+    "transformer_engine": {"ok": False, "error": ""},
+}
+
+def torchao_fp8_smoke():
+    try:
+        from torchao.float8 import Float8LinearConfig, convert_to_float8_training
+    except Exception as exc:
+        return False, f"torchao import failed: {exc}"
+    try:
+        model = torch.nn.Sequential(torch.nn.Linear(128, 128, bias=False)).cuda().half()
+        model = convert_to_float8_training(model, config=Float8LinearConfig())
+        x = torch.randn(32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+        y = model(x)
+        y.float().sum().backward()
+        torch.cuda.synchronize()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+def te_fp8_smoke():
+    try:
+        import transformer_engine.pytorch as te
+    except Exception as exc:
+        return False, f"Transformer Engine import failed: {exc}"
+    try:
+        layer = te.Linear(128, 128, bias=False).to(torch.bfloat16).cuda()
+        x = torch.randn(32, 128, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+        with te.fp8_autocast(enabled=True):
+            y = layer(x)
+        y.float().sum().backward()
+        torch.cuda.synchronize()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+status["torchao"]["ok"], status["torchao"]["error"] = torchao_fp8_smoke()
+status["transformer_engine"]["ok"], status["transformer_engine"]["error"] = te_fp8_smoke()
+
+for name, result in status.items():
+    if result["ok"]:
+        print(f"[setup] ✓ {name} FP8 smoke test passed")
+    else:
+        print(f"[setup] ERROR: {name} FP8 smoke test failed: {result['error']}")
+
+if not all(entry["ok"] for entry in status.values()):
+    raise SystemExit(1)
+PY
+}
+
+TORCHAO_EXTRA_INDEX_URL="https://download.pytorch.org/whl/nightly/cu130"
 
 # Check Ubuntu version
 if ! command -v lsb_release &> /dev/null; then
@@ -656,6 +953,33 @@ pip_install --upgrade --ignore-installed pip setuptools packaging
 # Ensure wheel build backend is available for manual builds
 pip_install --no-cache-dir --upgrade --ignore-installed wheel
 
+install_torchao_packages() {
+    echo "Installing torchao (nightly, CUDA 13.x / cu130 index)..."
+    local install_args=(--no-cache-dir --upgrade --ignore-installed torchao --extra-index-url "${TORCHAO_EXTRA_INDEX_URL}")
+    if pip_install "${install_args[@]}"; then
+        echo "torchao installed in system Python site-packages"
+    else
+        echo "ERROR: torchao installation failed for system Python!"
+        exit 1
+    fi
+    python3 - <<'PY'
+try:
+    import torchao  # noqa: F401
+    print("[setup] torchao import verified (system)")
+except Exception as exc:
+    raise SystemExit(f"[setup] ERROR: torchao import failed after installation: {exc}")
+PY
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        echo "Installing torchao for ${SUDO_USER}'s user site-packages..."
+        if sudo -H -u "${SUDO_USER}" PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --user "${install_args[@]}"; then
+            echo "  ✓ torchao installed for ${SUDO_USER}"
+        else
+            echo "ERROR: Failed to install torchao for ${SUDO_USER}"
+            exit 1
+        fi
+    fi
+}
+
 # Fix python3-apt for the new Python version
 DISTUTILS_PTH="/usr/lib/python3/dist-packages/distutils-precedence.pth"
 if [ -f "$DISTUTILS_PTH" ]; then
@@ -798,6 +1122,8 @@ else
     echo "kvikio installation failed, but continuing..."
     echo "   Install manually with: pip install kvikio-cu13==25.10.0"
 fi
+
+install_torchao_packages
 
 # Install CUDA sanitizers and debugging tools (compute-sanitizer, cuda-memcheck, etc.)
 echo ""
@@ -1188,7 +1514,7 @@ rm -rf "${tmp_pytorch_dir}"
 # Verify the correct torch is installed and CUDA is available
 echo ""
 echo "Verifying PyTorch CUDA installation..."
-python3 <<'PY'
+if ! python3 <<'PY'; then
 import sys
 import torch
 
@@ -1234,14 +1560,15 @@ if torch.cuda.device_count() > 0:
     print(f"✓ GPU 0: {torch.cuda.get_device_name(0)}")
 PY
 
-if [ $? -ne 0 ]; then
     echo ""
-    echo "CRITICAL ERROR: PyTorch CUDA verification failed!"
-    echo "This should not happen after installing the CUDA wheel."
-    echo "Please check:"
-    echo "  1. NVIDIA driver is loaded: nvidia-smi"
-    echo "  2. CUDA libraries are accessible: echo \$LD_LIBRARY_PATH"
-    echo "  3. PyTorch wheel was built correctly"
+    cat <<'EOF'
+CRITICAL ERROR: PyTorch CUDA verification failed!
+This should not happen after installing the CUDA wheel.
+Please check:
+  1. NVIDIA driver is loaded: nvidia-smi
+  2. CUDA libraries are accessible: echo $LD_LIBRARY_PATH
+  3. PyTorch wheel was built correctly
+EOF
     exit 1
 fi
 
@@ -1640,6 +1967,10 @@ if ! install_wheel_from_cache "${TE_PREBUILT_WHEEL_NAME}"; then
     echo "Warning: Prebuilt Transformer Engine wheel not found (expected ${TE_PREBUILT_WHEEL_NAME}); source-built TE remains in place."
 fi
 
+patch_installed_transformer_engine_metadata
+patch_transformer_engine_loader
+disable_transformer_engine_sanity_check
+
 # CRITICAL: Verify PyTorch CUDA after Transformer Engine installation
 echo ""
 echo "Verifying PyTorch CUDA after Transformer Engine installation..."
@@ -1648,6 +1979,14 @@ if ! verify_and_restore_pytorch_cuda "Transformer Engine installation"; then
     exit 1
 fi
 echo "✓ PyTorch CUDA verified after Transformer Engine"
+
+echo ""
+echo "Running FP8 runtime smoke tests (torchao + Transformer Engine)..."
+if ! verify_fp8_functionality; then
+    echo "ERROR: FP8 runtime smoke tests failed"
+    exit 1
+fi
+echo "✓ FP8 runtime smoke tests passed"
 
 # Snapshot Transformer Engine capability (NVFP4 / MXFP8) after installation
 echo ""
@@ -1786,7 +2125,7 @@ PY
 python3 <<'PY'
 from importlib.metadata import PackageNotFoundError, distribution
 
-def mark_pure(dist_name: str) -> None:
+def mark_non_pure(dist_name: str) -> None:
     try:
         dist = distribution(dist_name)
     except PackageNotFoundError:
@@ -1804,12 +2143,12 @@ def mark_pure(dist_name: str) -> None:
     for idx, line in enumerate(lines):
         if line.startswith("Root-Is-Purelib:"):
             value = line.split(":", 1)[1].strip().lower()
-            if value != "true":
-                lines[idx] = "Root-Is-Purelib: true"
+            if value != "false":
+                lines[idx] = "Root-Is-Purelib: false"
                 changed = True
             break
     else:
-        lines.append("Root-Is-Purelib: true")
+        lines.append("Root-Is-Purelib: false")
         changed = True
     if changed:
         wheel_file.write_text("\n".join(lines) + "\n")
@@ -1821,7 +2160,47 @@ for name in (
     "transformer_engine_torch",
     "transformer-engine",
 ):
-    mark_pure(name)
+    mark_non_pure(name)
+PY
+
+python3 <<'PY'
+import ast
+from importlib.metadata import PackageNotFoundError, distribution
+from pathlib import Path
+
+def ensure_te_import_tolerant(dist_name: str) -> bool:
+    try:
+        dist = distribution(dist_name)
+    except PackageNotFoundError:
+        return False
+    init_path = Path(dist.locate_file("transformer_engine/__init__.py"))
+    if not init_path.exists():
+        return False
+    source = init_path.read_text()
+    if "_IN_TREE_TRANSFORMER_ENGINE" in source:
+        return True
+    injection = (
+        "\ntry:\n"
+        "    from importlib.metadata import PackageNotFoundError, distribution\n"
+        "    TE_METADATA_AVAILABLE = True\n"
+        "except ImportError:\n"
+        "    TE_METADATA_AVAILABLE = False\n"
+        "_IN_TREE_TRANSFORMER_ENGINE = False\n"
+        "if TE_METADATA_AVAILABLE:\n"
+        "    try:\n"
+        "        distribution(\"transformer-engine\")\n"
+        "        _IN_TREE_TRANSFORMER_ENGINE = True\n"
+        "    except PackageNotFoundError:\n"
+        "        _IN_TREE_TRANSFORMER_ENGINE = True\n"
+        "else:\n"
+        "    _IN_TREE_TRANSFORMER_ENGINE = True\n"
+    )
+    source = source.replace("from . import pytorch", "from . import pytorch" + injection, 1)
+    init_path.write_text(source)
+    return True
+
+ensure_te_import_tolerant("transformer_engine")
+ensure_te_import_tolerant("transformer-engine")
 PY
 
 # Install FlashAttention to unlock optimized SDPA paths
@@ -2749,3 +3128,18 @@ echo "  • Before additional builds: source /etc/profile.d/cuda-${CUDA_SHORT_VE
 echo "For more information, see the README.md file and chapter-specific documentation."
 echo ""
 echo "Happy performance engineering!"
+
+echo ""
+echo "Downloading GPT-OSS model and installing CLI..."
+huggingface-cli download openai/gpt-oss-20b --include "original/*" --local-dir gpt-oss-20b/ || {
+    echo "ERROR: Failed to download gpt-oss-20b model"
+    exit 1
+}
+if ! python3 -m pip install --no-cache-dir --upgrade gpt-oss; then
+    echo "ERROR: Failed to install gpt-oss package"
+    exit 1
+fi
+python3 -m gpt_oss.chat model/ || {
+    echo "ERROR: gpt_oss chat invocation failed"
+    exit 1
+}

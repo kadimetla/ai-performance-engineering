@@ -6,4 +6,9 @@ __all__ = [
     "flexattention",
     "fullstack_cluster",
     "moe_cuda",
+    "moe_parallelism",
+    "occupancy_tuning",
+    "persistent_decode",
+    "dynamic_router",
+    "train_distributed",
 ]

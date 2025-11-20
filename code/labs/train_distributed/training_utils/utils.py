@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import random
 from typing import Callable
 
@@ -18,15 +17,27 @@ MODEL_NAME = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
 
 
 def build_text_model(model_id: str = MODEL_NAME, dtype: torch.dtype = torch.bfloat16):
-    """Return a small causal LM we can shard/replicate."""
+    """Return a small causal LM we can shard/replicate (eager attention)."""
     return AutoModelForCausalLM.from_pretrained(
         model_id, torch_dtype=dtype, attn_implementation="eager"
+    )
+
+
+def build_text_model_flash(model_id: str = MODEL_NAME, dtype: torch.dtype = torch.bfloat16):
+    """Return a small causal LM using flash attention (requires compatible kernels)."""
+    return AutoModelForCausalLM.from_pretrained(
+        model_id, torch_dtype=dtype, attn_implementation="flash_attention_2"
     )
 
 
 def build_smol_model(model_id: str = MODEL_NAME, dtype: torch.dtype = torch.bfloat16):
     """Alias for ZeRO demos; kept for backward compatibility."""
     return build_text_model(model_id=model_id, dtype=dtype)
+
+
+def build_smol_model_flash(model_id: str = MODEL_NAME, dtype: torch.dtype = torch.bfloat16):
+    """Alias for ZeRO demos using flash attention."""
+    return build_text_model_flash(model_id=model_id, dtype=dtype)
 
 
 def build_tokenizer(model_id: str = MODEL_NAME):

@@ -1,32 +1,36 @@
-# FlexAttention Lab
+# Lab - FlexAttention Harness
 
-This lab lifts the Colfax FlexAttention CuTe DSL blog post into the shared harness so you can compare the eager path against the compiled fused kernel.
+## Summary
+Mirrors the FlexAttention CuTe DSL walkthrough: run eager vs compiled FlexAttention, compare to the CuTe path, and experiment with block masks, score modifiers, and Triton-style compilation.
 
-## What it runs
-- `baseline_flex_attention.py`: eager `flex_attention` with a Python `score_mod` and a block-sparse `block_mask`.
-- `optimized_flex_attention.py`: same mask and score mod, wrapped in `torch.compile` to generate the fused FlexAttention kernel.
-- `baseline_flex_attention_cute.py`: CuTe DSL path driving FlashAttention’s `_flash_attn_fwd` (no custom mask_mod/score_mod in the current FlashAttention API).
-- `optimized_flex_attention_cute.py`: same CuTe path wrapped in `torch.compile` to keep parity with the blog’s compiled entry.
+## Learning Goals
+- Benchmark FlexAttention eager mode against compiled variants using identical masks/score mods.
+- Validate CuTe-based FlashAttention fallbacks for platforms where FlexAttention is not available.
+- Sweep sparsity knobs (block size, doc span) without editing source.
+- Collect Nsight traces showing kernel fusion improvements after compiling.
 
-Run both via the harness:
+## Directory Layout
+| Path | Description |
+| --- | --- |
+| `baseline_flex_attention.py`, `optimized_flex_attention.py` | FlexAttention DSL workloads toggling `torch.compile` for fused kernels. |
+| `baseline_flex_attention_cute.py`, `optimized_flex_attention_cute.py` | CuTe/FlashAttention versions for hardware without FlexAttention support. |
+| `flexattention_common.py`, `expectations_gb10.json` | Shared input builders, score modifiers, and regression thresholds. |
+
+## Running the Benchmarks
+Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention --profile
-python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention_cute --profile
+cd ai-performance-engineering
+python tools/cli/benchmark_cli.py list-targets --chapter labs/flexattention
+python tools/cli/benchmark_cli.py run --targets labs/flexattention --profile minimal
 ```
+- Targets follow the `labs/flexattention:<workload>` naming convention listed by `list-targets`.
+- Use `--target-extra-arg labs/flexattention:<workload>="--flag value"` to sweep schedule knobs.
 
-# Tunable knobs
-- `block_size`: block size fed to `create_block_mask` (controls sparsity granularity). Defaults: 128 (64 in quick mode).
-- `doc_span`: tokens per “document” when building the document-boundary mask (prevents cross-doc attention). Defaults: 256 (128 in quick mode).
-- Shapes: `seq_len` (1024 / 512 quick), `batch` (2 / 1 quick), `heads` (8 / 4 quick), `head_dim` (64).
-- `TORCH_COMPILE_MODE`: set to `reduce-overhead` for faster compile or leave default for maximum fusion.
-- Shapes are fixed for now to keep the lab predictable: seq_len=1024, batch=2, heads=8, head_dim=64, block_size=128, doc_span=256.
+## Validation Checklist
+- `python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention --profile minimal` captures the eager vs compiled delta and stores artifacts.
+- `BLOCK_SIZE=64 DOC_SPAN=128 python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention` demonstrates masked sparsity sweeps.
+- `python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention_cute` succeeds even on systems missing FlexAttention bindings.
 
-To try different sparsity patterns, export env vars before running:
-```bash
-TORCH_COMPILE_MODE=reduce-overhead BLOCK_SIZE=64 DOC_SPAN=128 \
-python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention --profile
-```
-
-## What to inspect
-- Harness artifacts under `artifacts/<run_id>/labs_flexattention_*` for timing and Nsight traces.
-- Use `tools/analysis/deep_profiling_report.py artifacts/<run_id>` to confirm the compiled path avoids dense score materialization and reduces kernel launches relative to the eager baseline.
+## Notes
+- Environment variables such as `BLOCK_SIZE`, `DOC_SPAN`, and `TORCH_COMPILE_MODE` are read at runtime for quick experiments.
+- Artifacts include NVTX traces; feed them to `tools/analysis/deep_profiling_report.py` for convenience.

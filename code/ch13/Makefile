@@ -9,7 +9,7 @@ SUFFIX = $(TARGET_SUFFIX)
 BASE_TARGETS =
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
-.PHONY: all clean test compare b200 gb10 b300 gb300
+.PHONY: all clean test compare b200 gb10 b300 gb300 profile-baseline profile-tuned
 
 all:
 	@echo "Chapter 13: PyTorch training optimizations (Python-focused)"
@@ -45,3 +45,11 @@ clean:
 	rm -f __pycache__/*.pyc
 	@echo "Cleaned ch13 artifacts"
 
+PROFILE_CMD_BASELINE ?= python ch13/train.py
+PROFILE_CMD_TUNED ?= python ch13/train.py
+
+profile-baseline:
+	@cd .. && KERNEL_REGEX=".*" ./profile.sh baseline $(PROFILE_CMD_BASELINE)
+
+profile-tuned:
+	@cd .. && KERNEL_REGEX=".*" ./profile.sh tuned $(PROFILE_CMD_TUNED)

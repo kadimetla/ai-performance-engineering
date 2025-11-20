@@ -12,24 +12,29 @@ LAB_NAMES = {
     "fullstack_cluster",
     "blackwell_matmul",
     "moe_cuda",
+    "moe_parallelism",
     "flexattention",
     "train_distributed",
     "persistent_decode",
     "dynamic_router",
+    "occupancy_tuning",
 }
 LAB_ALIASES: Dict[str, str] = {
     "lab_fullstack_cluster": "labs/fullstack_cluster",
     "lab_blackwell_matmul": "labs/blackwell_matmul",
     "lab_moe_cuda": "labs/moe_cuda",
+    "lab_moe_parallelism": "labs/moe_parallelism",
     "lab_flexattention": "labs/flexattention",
     "lab_train_distributed": "labs/train_distributed",
     "lab_persistent_decode": "labs/persistent_decode",
     "lab_dynamic_router": "labs/dynamic_router",
+    "lab_occupancy_tuning": "labs/occupancy_tuning",
     "capstone": "labs/fullstack_cluster",
     "capstone2": "labs/blackwell_matmul",
     "capstone3": "labs/moe_cuda",
     "capstone4": "labs/flexattention",
     "capstone5": "labs/persistent_decode",
+    "capstone6": "labs/occupancy_tuning",
 }
 
 

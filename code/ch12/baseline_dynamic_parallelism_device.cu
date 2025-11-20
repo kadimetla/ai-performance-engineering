@@ -19,9 +19,9 @@ __global__ void childKernel(float* data, int count) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < count) {
         float v = data[idx];
-        // Heavier math in baseline to provide headroom for optimized variant
-        #pragma unroll 2
-        for (int i = 0; i < 128; ++i) {
+        // Moderate math applied in both baseline and optimized variants
+        #pragma unroll 4
+        for (int i = 0; i < 8; ++i) {
             v = fmaf(v, 1.0002f, 0.001f * (i + 1));
             v = tanhf(v);
         }
@@ -31,11 +31,13 @@ __global__ void childKernel(float* data, int count) {
 
 __global__ void parentKernel(float* data, int N, int* launch_count) {
     if (blockIdx.x == 0 && threadIdx.x == 0) {
-        const int seg = 512;  // baseline launches many segmented child grids
+        // Baseline: launch many tiny child grids to highlight launch overhead
+        const int seg = 32;
         for (int offset = 0; offset < N; offset += seg) {
             int count = min(seg, N - offset);
-            dim3 child_grid((count + 63) / 64);
-            dim3 child_block(64);
+            // Naive choice: tiny blocks (1 warp) for each segment
+            dim3 child_grid((count + 31) / 32);
+            dim3 child_block(32);
             childKernel<<<child_grid, child_block>>>(data + offset, count);
             atomicAdd(launch_count, 1);
         }

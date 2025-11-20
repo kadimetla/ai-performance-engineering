@@ -36,10 +36,6 @@ except ImportError:
 # Default timeout constant (15 seconds - required for all benchmarks)
 DEFAULT_TIMEOUT = 15
 
-# Map documentation-friendly example names to the canonical examples that
-# already exist inside each chapter directory. This keeps new CLI targets
-# (e.g., ch10:tmem_triple_overlap_baseline) functional without duplicating
-# benchmark implementations.
 EXAMPLE_ALIASES = {}
 
 from common.python.discovery import (
