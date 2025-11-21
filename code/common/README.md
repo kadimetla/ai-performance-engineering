@@ -1,134 +1,44 @@
 # Common Infrastructure
 
-Shared utilities for all chapter examples to ensure consistent build system, profiling workflow, and benchmarking methodology.
+## Summary
+Shared headers, CUDA build flags, and Python utilities that keep every chapter and lab on the same benchmarking, profiling, and build rails.
 
-## Directory Structure
+## Learning Goals
+- Reuse the benchmark harness, logging, and artifact plumbing instead of rebuilding them per chapter.
+- Target the right GPU features (TMA, pipeline API, SDPA backends) by querying capabilities up front.
+- Plug new CUDA/Triton kernels into the harness through the standard compare.py template.
+- Keep builds reproducible on Blackwell/Grace-Blackwell by leaning on the common Makefile fragments and env defaults.
 
-```
-common/
-├── headers/
-│   ├── arch_detection.cuh      # GPU architecture detection & limits
-│   └── tma_helpers.cuh         # Tensor Memory Accelerator utilities
-└── python/
-    ├── benchmark_harness.py    # Production-grade benchmarking harness
-    ├── chapter_compare_template.py  # Standard template for chapter compare.py
-    ├── compile_utils.py        # torch.compile and precision utilities
-    └── env_defaults.py         # Environment configuration helpers
-```
+## Directory Layout
+| Path | Description |
+| --- | --- |
+| `cuda_arch.mk`, `cuda/`, `cuda13_demo_runner.cuh` | Makefile includes and helper headers for dual-arch (sm100/sm121) builds and CUDA 13 samples. |
+| `headers/arch_detection.cuh`, `headers/tma_helpers.cuh` | Device feature probes plus TMA helpers shared by CUDA benchmarks and extensions. |
+| `python/benchmark_harness.py`, `python/chapter_compare_template.py` | Core benchmarking harness and the discovery/load helpers used by every `compare.py`. |
+| `python/compile_utils.py`, `python/env_defaults.py`, `python/build_utils.py` | torch.compile/precision utilities, environment defaults, and extension build helpers. |
+| `python/nvtx_helper.py`, `python/profiling_runner.py`, `python/profiler_wrapper.py` | NVTX helpers and unified Nsight/Proton profiling hooks wired into the harness. |
 
 ## Usage
+- **Build system**: include `../common/cuda_arch.mk` from chapter Makefiles to pick up architecture flags and helper rules.
+- **Environment**: `from common.python.env_defaults import apply_env_defaults; apply_env_defaults()` before running benchmarks to set CUDA paths, allocator knobs, and cache locations.
+- **Harness**: standard pattern inside chapter scripts:
+  ```python
+  from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+  from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
 
-### Build System
+  harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=BenchmarkConfig(iterations=10, warmup=3))
+  for baseline, optimized_list, _ in discover_benchmarks("."):
+      bench = load_benchmark(baseline, optimized_list[0])
+      result = harness.benchmark(bench)
+      print(result.timing.mean_ms)
+  ```
+- **CUDA headers**: include `../../common/headers/arch_detection.cuh` to select tiles and query limits; include `tma_helpers.cuh` to encode tensor maps for `cp.async.bulk.tensor` kernels.
 
-In your chapter Makefile:
+## Validation Checklist
+- `python - <<'PY'\nfrom common.python.env_defaults import dump_environment_and_capabilities\ndump_environment_and_capabilities()\nPY` prints CUDA paths, NCCL preload, and TMA/pipeline support.
+- `python - <<'PY'\nfrom common.python.chapter_compare_template import discover_benchmarks\nprint(len(discover_benchmarks(\"ch1\")))\nPY` confirms harness discovery works end-to-end.
+- Building any chapter extension after including `cuda_arch.mk` emits both `sm_100` and `sm_121` code objects, verifying dual-arch flags are active.
 
-```makefile
-# Include common architecture flags
-include ../common/cuda_arch.mk
-```
-
-This provides architecture detection and dual-architecture build support (sm_100 + sm_121).
-
-### CUDA Headers
-
-#### Architecture Detection
-```cpp
-#include "../../common/headers/arch_detection.cuh"
-
-int main() {
-    // Query GPU capabilities
-    const auto& limits = cuda_arch::get_architecture_limits();
-    
-    // Check features
-    if (limits.supports_clusters) {
-        printf("Cluster size: %d\n", limits.max_cluster_size);
-    }
-    if (limits.has_grace_coherence) {
-        printf("Grace-Blackwell coherence available\n");
-    }
-    
-    // Select optimal tile size
-    auto tile = cuda_arch::select_tensor_core_tile();
-    printf("Tensor core tile: %dx%dx%d\n", tile.m, tile.n, tile.k);
-    
-    // Get TMA limits
-    auto tma = cuda_arch::get_tma_limits();
-    printf("TMA 2D box: %ux%u\n", tma.max_2d_box_width, tma.max_2d_box_height);
-    
-    return 0;
-}
-```
-
-#### TMA (Tensor Memory Accelerator) Helpers
-```cpp
-#include "../../common/headers/arch_detection.cuh"
-#include "../../common/headers/tma_helpers.cuh"
-
-int main() {
-    // Check TMA support
-    if (!cuda_tma::device_supports_tma()) {
-        printf("TMA not supported (requires SM 9.0+)\n");
-        return 1;
-    }
-    
-    // Create tensor map
-    CUtensorMap desc;
-    auto encode = cuda_tma::load_cuTensorMapEncodeTiled();
-    bool ok = cuda_tma::make_2d_tensor_map(
-        desc, encode, d_data, width, height, ld,
-        box_width, box_height, CU_TENSOR_MAP_SWIZZLE_NONE);
-    
-    // Use in kernel with cp_async_bulk_tensor operations
-    return 0;
-}
-```
-
-### Python Utilities
-
-#### Environment Configuration
-```python
-from common.python.env_defaults import apply_env_defaults, dump_environment_and_capabilities
-
-# Apply default environment settings
-apply_env_defaults()
-
-# Print environment and hardware capabilities
-dump_environment_and_capabilities()
-```
-
-#### Benchmarking
-```python
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
-from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
-
-# Discover and run benchmarks
-harness = BenchmarkHarness()
-benchmarks = discover_benchmarks(chapter_dir)
-for baseline_path, optimized_paths, name in benchmarks:
-    benchmark = load_benchmark(baseline_path, optimized_paths[0])
-    results = harness.benchmark(benchmark)
-```
-
-#### Compilation Utilities
-```python
-from common.python.compile_utils import enable_tf32
-
-# Enable TF32 precision
-enable_tf32()
-```
-
-## Benefits
-
-1. **Consistency**: All chapters use the same profiling methodology
-2. **Maintainability**: Bug fixes and improvements propagate to all chapters
-3. **Pedagogy**: Students see the same patterns across all examples
-4. **Quality**: Professional-grade error checking and profiling built-in
-
-## Adding New Utilities
-
-To add new common utilities:
-
-1. Add header files to `headers/`
-2. Add Python modules to `python/`
-3. Update this README with usage examples
-4. Test with at least one chapter before rolling out
+## Notes
+- Env defaults create `.torch_extensions/` and `.torch_inductor/` under the current workspace to avoid `/tmp` contention during repeated runs.
+- Nsight/Proton helpers are optional; imports degrade gracefully when tools are missing so chapter scripts remain runnable on developer laptops.

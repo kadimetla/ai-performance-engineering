@@ -85,6 +85,19 @@ def matmul_tcgen05(a: torch.Tensor, b: torch.Tensor, *, module_name: str = "tcge
     return module.matmul_tcgen05(a, b)
 
 
+def matmul_tcgen05_bias_silu(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    bias: torch.Tensor,
+    *,
+    module_name: str = "tcgen05 matmul bias+SiLU",
+) -> torch.Tensor:
+    """Execute the tcgen05 GEMM with TMEM-resident bias+SiLU epilogue."""
+    ensure_tcgen05_supported(loader=load_matmul_tcgen05_module, module_name=module_name)
+    module = load_matmul_tcgen05_module()
+    return module.matmul_tcgen05_bias_silu(a, b, bias)
+
+
 def matmul_tiling_tcgen05(
     a: torch.Tensor,
     b: torch.Tensor,
@@ -101,5 +114,6 @@ __all__ = [
     "load_matmul_tcgen05_module",
     "load_tiling_tcgen05_module",
     "matmul_tcgen05",
+    "matmul_tcgen05_bias_silu",
     "matmul_tiling_tcgen05",
 ]

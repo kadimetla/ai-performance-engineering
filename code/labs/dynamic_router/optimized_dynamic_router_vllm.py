@@ -19,7 +19,9 @@ class OptimizedDynamicRouterVllmBenchmark(BaseBenchmark):
         return
 
     def benchmark_fn(self) -> None:
-        self._summary = run_vllm_routing("optimized")
+        from labs.dynamic_router import vllm_runner
+
+        self._summary = run_vllm_routing("optimized", cli_args=vllm_runner._CLI_ARGS)
 
     def get_config(self) -> Optional[BenchmarkConfig]:
         return BenchmarkConfig(iterations=1, warmup=0)

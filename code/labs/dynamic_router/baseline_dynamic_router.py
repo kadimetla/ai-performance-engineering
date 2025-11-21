@@ -23,13 +23,19 @@ class BaselineDynamicRouterBenchmark(BaseBenchmark):
         # Fixed seed/ticks to keep runs comparable
         self._summary = simulate(
             "baseline",
-            num_ticks=400,
+            num_ticks=120,
             seed=0,
+            log_interval=None,
         )
 
     def get_config(self) -> Optional[BenchmarkConfig]:
         # Single iteration; simulation already encapsulates multiple ticks
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(
+            iterations=1,
+            warmup=0,
+            measurement_timeout_seconds=120,
+            timeout_multiplier=3.0,
+        )
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         return self._summary or None

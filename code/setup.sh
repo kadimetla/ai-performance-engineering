@@ -92,7 +92,20 @@ TE_VERSION_TAG="2.10.0.dev0+e4bfa62"
 FLASH_ATTN_TAG="${FLASH_ATTN_TAG:-v2.8.3}"
 FLASH_ATTN_WHEEL_BASENAME="flash_attn-2.8.3-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
 FLASH_ATTN_EXPECTED_VERSION="${FLASH_ATTN_TAG#v}"
+FLASH_ATTENTION_FORCE_CUDA_SM_VALUE="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE:-121}"
+VLLM_REPO_URL="${VLLM_REPO_URL:-https://github.com/vllm-project/vllm.git}"
+VLLM_VERSION_TAG="${VLLM_VERSION_TAG:-main}"
+VLLM_GIT_REF="${VLLM_GIT_REF:-${VLLM_VERSION_TAG}}"
+VLLM_SRC_DIR="${VLLM_SRC_DIR:-${THIRD_PARTY_DIR}/vllm-src}"
+VLLM_WHEEL_DIR="${THIRD_PARTY_DIR}/wheels"
+VLLM_WHEEL_INFO_PATH="${VLLM_WHEEL_INFO_PATH:-${VLLM_WHEEL_DIR}/vllm-build-info.json}"
+VLLM_WHEEL_ARCH="$(uname -m)"
+if [ "${VLLM_WHEEL_ARCH}" = "arm64" ]; then
+    VLLM_WHEEL_ARCH="aarch64"
+fi
+VLLM_WHEEL_PATTERN="${VLLM_WHEEL_PATTERN:-${VLLM_WHEEL_DIR}/vllm-*-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_${VLLM_WHEEL_ARCH}.whl}"
 PIP_ROOT_USER_ACTION="ignore"
+GLUON_PIP_SPEC="git+https://github.com/triton-lang/gluon.git@main#subdirectory=python"
 export PROJECT_ROOT REQUIRED_DRIVER_VERSION PYTHON_TARGET_VERSION PYTHON_TARGET_MAJOR PYTHON_TARGET_MINOR PYTHON_TARGET_BIN PYTHON_ABI_TAG PYTHON_DIST_PACKAGES PIP_ROOT_USER_ACTION
 
 if command -v git >/dev/null 2>&1; then
@@ -263,6 +276,25 @@ pip_wheel() {
 
 pip_show() {
     pip_cmd show "$@"
+}
+
+install_gluon() {
+    echo "Installing Gluon from: ${GLUON_PIP_SPEC}"
+    if ! GIT_TERMINAL_PROMPT=0 pip_install --no-cache-dir --upgrade --no-deps "${GLUON_PIP_SPEC}"; then
+        echo "ERROR: Gluon installation failed for ${GLUON_PIP_SPEC}"
+        exit 1
+    fi
+
+    echo "Verifying Gluon import..."
+    if ! python3 - <<'PY'; then
+import gluon
+print(f"Gluon version: {getattr(gluon, '__version__', 'unknown')}")
+PY
+        echo "ERROR: Gluon import verification failed"
+        exit 1
+    fi
+
+    echo "✓ Gluon installation and import verification succeeded"
 }
 
 # Reusable function to reassemble split wheels
@@ -526,13 +558,7 @@ remove_conflicting_user_triton() {
         return 0
     fi
     local user_site
-    user_site=$(sudo -H -u "${SUDO_USER}" python3 - <<'PY' 2>/dev/null || true)
-import site
-try:
-    print(site.getusersitepackages())
-except Exception:
-    raise SystemExit(1)
-PY
+    user_site=$(sudo -H -u "${SUDO_USER}" python3 -c "import site; print(site.getusersitepackages())" 2>/dev/null) || true
     if [ -z "${user_site}" ]; then
         return 0
     fi
@@ -1624,7 +1650,7 @@ else
         echo "  Warning: Triton version ${TRITON_VERSION} doesn't match required 3.5.0"
         echo "  Reinstalling triton 3.5.0 with --no-deps..."
         pip_install --no-cache-dir --upgrade --no-deps triton==3.5.0 || {
-            echo "  Warning: Failed to reinstall triton 3.5.0"
+        echo "  Warning: Failed to reinstall triton 3.5.0"
         }
     fi
     
@@ -1634,6 +1660,12 @@ else
         exit 1
     fi
 fi
+
+# Install Gluon (warp-specialized Triton mid-layer)
+echo ""
+echo "Installing Gluon..."
+install_gluon
+echo "  Gluon installed."
 
 # Install torchvision separately with --no-deps to prevent torch override
 echo ""
@@ -2258,6 +2290,7 @@ install_flash_attention() {
         extra_args+=("${PYTORCH_WHEEL_PATH}")
     fi
     TORCH_CUDA_ARCH_LIST="12.1" \
+    FLASH_ATTENTION_FORCE_CUDA_SM="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE}" \
     pip_install --no-cache-dir --upgrade --ignore-installed --no-build-isolation --no-deps \
         "${extra_args[@]}" \
         "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}"
@@ -2297,7 +2330,7 @@ cache_flash_attention_wheel() {
 rebuild_flash_attention_cache() {
     if ensure_wheel_root_pure "${FLASH_ATTN_CACHE_PATH}" && \
        TORCH_CUDA_ARCH_LIST="12.1" \
-       FLASH_ATTENTION_FORCE_CUDA_SM=121 \
+       FLASH_ATTENTION_FORCE_CUDA_SM="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE}" \
        pip_wheel \
            --no-deps \
            --no-build-isolation \
@@ -2316,12 +2349,33 @@ if [ -n "${current_flash_attn_version}" ] && [ "${current_flash_attn_version}" !
     current_flash_attn_version=""
 fi
 
+detect_gpu_sm() {
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local cc
+        cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n1 | tr -d '.')
+        if [[ -n "${cc}" ]]; then
+            echo "${cc}"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+GPU_COMPUTE_SM=$(detect_gpu_sm || true)
+if [[ -n "${GPU_COMPUTE_SM}" && "${GPU_COMPUTE_SM}" -ge 120 ]]; then
+    echo "Detected SM ${GPU_COMPUTE_SM}; forcing FlashAttention rebuild for this arch."
+    FLASH_ATTENTION_FORCE_CUDA_SM_VALUE="${GPU_COMPUTE_SM}"
+    pip_uninstall -y flash-attn >/dev/null 2>&1 || true
+    rm -f "${FLASH_ATTN_CACHE_PATH}" "${FLASH_ATTN_SPLIT_PREFIX}"* 2>/dev/null || true
+    current_flash_attn_version=""
+fi
+
 if [ -z "${current_flash_attn_version}" ]; then
     if [ -f "${FLASH_ATTN_CACHE_PATH}" ]; then
         echo "Installing FlashAttention from cached wheel ${FLASH_ATTN_CACHE_PATH}..."
         if ensure_wheel_root_pure "${FLASH_ATTN_CACHE_PATH}" && \
            TORCH_CUDA_ARCH_LIST="12.1" \
-           FLASH_ATTENTION_FORCE_CUDA_SM=121 \
+           FLASH_ATTENTION_FORCE_CUDA_SM="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE}" \
            pip_install --no-cache-dir --upgrade --ignore-installed --no-deps "${FLASH_ATTN_CACHE_PATH}"; then
             cache_flash_attention_wheel
         else
@@ -2364,6 +2418,157 @@ if ! verify_and_restore_pytorch_cuda "FlashAttention installation"; then
     exit 1
 fi
 echo "✓ PyTorch CUDA verified after FlashAttention"
+
+# Install vLLM from source (latest main)
+echo ""
+echo "Ensuring vLLM (${VLLM_GIT_REF}) is built from latest GitHub source for this CUDA/toolchain..."
+VLLM_ARCH_LIST="12.1"
+if [ -n "${GPU_COMPUTE_SM:-}" ]; then
+    if [ "${#GPU_COMPUTE_SM}" -ge 3 ]; then
+        major="${GPU_COMPUTE_SM:0:2}"
+        minor="${GPU_COMPUTE_SM:2:1}"
+        VLLM_ARCH_LIST="${major}.${minor}"
+    fi
+fi
+
+echo "  Syncing vLLM source from ${VLLM_REPO_URL} (${VLLM_GIT_REF})..."
+mkdir -p "${VLLM_SRC_DIR}"
+if [ ! -d "${VLLM_SRC_DIR}/.git" ]; then
+    rm -rf "${VLLM_SRC_DIR}"
+    git clone --recursive "${VLLM_REPO_URL}" "${VLLM_SRC_DIR}"
+else
+    git -C "${VLLM_SRC_DIR}" fetch --all --tags --prune --force
+fi
+git -C "${VLLM_SRC_DIR}" checkout "${VLLM_GIT_REF}"
+git -C "${VLLM_SRC_DIR}" pull --ff-only origin "${VLLM_GIT_REF}" >/dev/null 2>&1 || \
+    echo "  Warning: Unable to fast-forward vLLM repository; proceeding with local ${VLLM_GIT_REF}"
+git -C "${VLLM_SRC_DIR}" submodule sync --recursive
+git -C "${VLLM_SRC_DIR}" submodule update --init --recursive
+VLLM_TARGET_SHA="$(git -C "${VLLM_SRC_DIR}" rev-parse --short HEAD)"
+
+VLLM_WHEEL_PATH=""
+if [ -f "${VLLM_WHEEL_INFO_PATH}" ]; then
+    VLLM_WHEEL_PATH="$(python3 <<PY || true
+import json
+import pathlib
+
+info_path = pathlib.Path("${VLLM_WHEEL_INFO_PATH}")
+if not info_path.exists():
+    raise SystemExit(0)
+
+try:
+    data = json.loads(info_path.read_text())
+except Exception:
+    raise SystemExit(0)
+
+if data.get("commit") != "${VLLM_TARGET_SHA}":
+    raise SystemExit(0)
+
+wheel_name = data.get("wheel")
+if not wheel_name:
+    raise SystemExit(0)
+
+candidate = pathlib.Path("${VLLM_WHEEL_DIR}") / wheel_name
+if candidate.exists():
+    print(candidate)
+PY
+)"
+fi
+
+VLLM_WHEEL_HAS_PARTS=0
+if [ -n "${VLLM_WHEEL_PATH}" ] && compgen -G "${VLLM_WHEEL_PATH}.part*" >/dev/null; then
+    VLLM_WHEEL_HAS_PARTS=1
+fi
+
+vllm_build_needed=0
+if [ -z "${VLLM_WHEEL_PATH}" ]; then
+    vllm_build_needed=1
+elif [ ! -f "${VLLM_WHEEL_PATH}" ] && [ "${VLLM_WHEEL_HAS_PARTS}" -eq 0 ]; then
+    vllm_build_needed=1
+fi
+
+if [ "${vllm_build_needed}" -eq 1 ]; then
+    echo "  Building vLLM wheel from ${VLLM_GIT_REF}@${VLLM_TARGET_SHA}..."
+    tmp_vllm_wheel_dir=$(mktemp -d "${TMPDIR:-/tmp}/vllm-wheel-build.XXXXXX")
+    pip_uninstall -y vllm >/dev/null 2>&1 || true
+    TORCH_CUDA_ARCH_LIST="${VLLM_ARCH_LIST}" \
+    VLLM_TARGET_DEVICE="cuda" \
+    CUDA_HOME="${CUDA_HOME_DIR}" \
+    CUDACXX="${CUDA_HOME_DIR}/bin/nvcc" \
+    MAX_JOBS="${MAX_JOBS:-$(nproc)}" \
+    pip_wheel --no-deps --no-build-isolation --wheel-dir "${tmp_vllm_wheel_dir}" "${VLLM_SRC_DIR}"
+
+    VLLM_WHEEL_SOURCE="$(find "${tmp_vllm_wheel_dir}" -maxdepth 1 -name "vllm-*.whl" -type f | sort | tail -n 1)"
+    if [ -z "${VLLM_WHEEL_SOURCE}" ] || [ ! -f "${VLLM_WHEEL_SOURCE}" ]; then
+        echo "ERROR: vLLM wheel build failed (no wheel found in ${tmp_vllm_wheel_dir})"
+        rm -rf "${tmp_vllm_wheel_dir}"
+        exit 1
+    fi
+
+    VLLM_WHEEL_BASENAME="$(basename "${VLLM_WHEEL_SOURCE}")"
+    mkdir -p "${VLLM_WHEEL_DIR}"
+    VLLM_WHEEL_PATH="${VLLM_WHEEL_DIR}/${VLLM_WHEEL_BASENAME}"
+    cp "${VLLM_WHEEL_SOURCE}" "${VLLM_WHEEL_PATH}"
+    rm -rf "${VLLM_WHEEL_PATH}.part"* 2>/dev/null || true
+    VLLM_WHEEL_HAS_PARTS=0
+
+    python3 <<PY
+import json
+import pathlib
+
+wheel_path = pathlib.Path("${VLLM_WHEEL_PATH}")
+info_path = pathlib.Path("${VLLM_WHEEL_INFO_PATH}")
+info = {
+    "wheel": wheel_path.name,
+    "git_ref": "${VLLM_GIT_REF}",
+    "commit": "${VLLM_TARGET_SHA}",
+    "arch_list": "${VLLM_ARCH_LIST}",
+}
+info_path.write_text(json.dumps(info, indent=2))
+print(f"[setup] Cached vLLM wheel metadata at {info_path}")
+PY
+    rm -rf "${tmp_vllm_wheel_dir}"
+else
+    echo "  Using cached vLLM wheel for commit ${VLLM_TARGET_SHA}: ${VLLM_WHEEL_PATH}"
+fi
+
+if [ -z "${VLLM_WHEEL_PATH}" ] || { [ ! -f "${VLLM_WHEEL_PATH}" ] && [ "${VLLM_WHEEL_HAS_PARTS}" -eq 0 ]; }; then
+    echo "ERROR: vLLM wheel is missing (expected under ${VLLM_WHEEL_DIR})"
+    exit 1
+fi
+
+if [ "${VLLM_WHEEL_HAS_PARTS}" -eq 0 ] && ! compgen -G "${VLLM_WHEEL_PATH}.part*" >/dev/null; then
+    echo "Splitting vLLM wheel into <50MB chunks under ${VLLM_WHEEL_DIR}"
+    split -b 45m -d -a 2 "${VLLM_WHEEL_PATH}" "${VLLM_WHEEL_PATH}.part"
+fi
+if compgen -G "${VLLM_WHEEL_PATH}.part*" >/dev/null; then
+    VLLM_WHEEL_HAS_PARTS=1
+fi
+
+tmp_vllm_install_dir=$(mktemp -d "${TMPDIR:-/tmp}/vllm-wheel-install.XXXXXX")
+vllm_wheel_to_install=$(reassemble_split_wheel "${VLLM_WHEEL_PATH}" "${tmp_vllm_install_dir}")
+
+if [ -z "${vllm_wheel_to_install}" ] || [ ! -f "${vllm_wheel_to_install}" ]; then
+    echo "ERROR: Could not reassemble vLLM wheel from ${VLLM_WHEEL_PATH}"
+    rm -rf "${tmp_vllm_install_dir}"
+    exit 1
+fi
+
+pip_uninstall -y vllm >/dev/null 2>&1 || true
+TORCH_CUDA_ARCH_LIST="${VLLM_ARCH_LIST}" \
+VLLM_TARGET_DEVICE="cuda" \
+pip_install --no-cache-dir --force-reinstall --upgrade --no-deps "${vllm_wheel_to_install}"
+rm -rf "${tmp_vllm_install_dir}"
+
+python3 <<'PY'
+try:
+    import vllm  # type: ignore
+    print(f"✓ vLLM installed: {vllm.__version__}")
+except Exception as exc:
+    print(f"ERROR: vLLM import failed: {exc}")
+    raise SystemExit(1)
+PY
+
 # Remove conflicting system packages that interfere with PyTorch
 echo ""
 echo "Removing conflicting system packages..."

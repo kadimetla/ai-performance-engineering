@@ -9,7 +9,11 @@ BF16 fast-path that still mirrors the baseline workload.
 
 from __future__ import annotations
 
-from common.python import compile_utils as _compile_utils_patch  # noqa: F401
+import torch
+import torch.nn as nn
+
+
+from typing import Dict, List, Optional, Tuple
 import sys
 from pathlib import Path
 
@@ -17,11 +21,8 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-
-from typing import Dict, List, Optional, Tuple
+from common.python import compile_utils as _compile_utils_patch  # noqa: F401
+from common.python.compile_utils import maybe_nested_compile_region
 from common.python.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -81,10 +82,15 @@ class LargeTransformerModel(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embed(x)
         for block in self.blocks:
-            x = block(x)
+            x = _run_block(block, x)
         x = self.ln_f(x)
         x = self.lm_head(x)
         return x
+
+
+@maybe_nested_compile_region
+def _run_block(block: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    return block(x)
 
 
 GraphCacheEntry = Tuple["torch.cuda.CUDAGraph", torch.Tensor]
@@ -126,6 +132,13 @@ class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
             1, self.max_seq_len, device="cpu", dtype=torch.long, pin_memory=True
         )
         self._prepare_cuda_graphs()
+
+    def setup_with_custom_regions(self, config: BenchmarkConfig, layer_indices: Optional[list[int]] = None) -> None:
+        """Compatibility shim: reuse standard setup for demo purposes."""
+        _ = config  # config is unused in this simplified path
+        _ = layer_indices
+        self._iteration = 0
+        self.setup()
 
     def _configure_runtime(self) -> None:
         """Enable TF32 tensor cores + high matmul precision for BF16 execution."""
@@ -195,6 +208,27 @@ class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                 _ = self.model(self.input_buffer[:, :seq_len])
         torch.cuda.synchronize()
+
+    def run(self, compare_eager: bool = False) -> torch.Tensor:
+        """Run a single forward pass for demo/validation."""
+        if self.model is None or self.input_buffer is None or self.host_buffer is None:
+            raise RuntimeError("Optimized model not initialized")
+
+        seq_len = self.sequence_schedule[0]
+        cpu_tokens = torch.randint(
+            0, 50304, (1, seq_len), device="cpu", dtype=torch.long
+        )
+        self.host_buffer[:, :seq_len].copy_(cpu_tokens)
+        if seq_len < self.max_seq_len:
+            self.host_buffer[:, seq_len:] = 0
+
+        self.input_buffer.copy_(self.host_buffer, non_blocking=False)
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            compiled_out = self.model(self.input_buffer[:, :seq_len])
+            if compare_eager:
+                _ = self.model(self.input_buffer[:, :seq_len])
+        self._synchronize()
+        return compiled_out
 
     def _run_with_cuda_graph(self, seq_len: int, enable_nvtx: bool) -> bool:
         """Replay a cached CUDA graph for the requested sequence length."""

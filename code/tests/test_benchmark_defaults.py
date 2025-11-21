@@ -26,7 +26,7 @@ class TestBenchmarkDefaults:
         assert defaults.enable_nsys is True
         assert defaults.enable_ncu is True
         assert defaults.use_subprocess is True
-        assert defaults.measurement_timeout_seconds == 15
+        assert defaults.measurement_timeout_seconds == 180
         assert defaults.execution_mode is None
         assert defaults.launch_via == "python"
     
@@ -74,12 +74,12 @@ class TestBenchmarkTimeoutMultiplier:
         """Default timeout fields should scale when multiplier > 1."""
         set_defaults(BenchmarkDefaults(timeout_multiplier=1.0))
         config = BenchmarkConfig(timeout_multiplier=2.0)
-        # setup_timeout_seconds default 30 -> 60 after scaling
-        assert config.setup_timeout_seconds == 60
-        # measurement_timeout_seconds default 15 -> 30 after scaling
-        assert config.measurement_timeout_seconds == 30
+        # setup_timeout_seconds default 60 -> 120 after scaling
+        assert config.setup_timeout_seconds == 120
+        # measurement_timeout_seconds default 180 -> 360 after scaling
+        assert config.measurement_timeout_seconds == 360
         # Derived warmup timeout should follow measurement timeout
-        assert config.warmup_timeout_seconds == 30
+        assert config.warmup_timeout_seconds == 360
         # Profiler-specific timeouts should also scale
         assert config.nsys_timeout_seconds == 240
         assert config.ncu_timeout_seconds == 360

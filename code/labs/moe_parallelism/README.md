@@ -15,7 +15,11 @@ Provides scenario planning for mixture-of-experts clusters: memory budgeting, ne
 | `baseline_memory_budget.py`, `optimized_memory_budget.py` | Memory planners that prove how optimized layouts free additional HBM for experts. |
 | `baseline_moe_grouping.py`, `optimized_moe_grouping.py`, `plan.py` | Grouping strategies spanning naive, locality-aware, and latency-balanced heuristics. |
 | `baseline_network_affinity.py`, `optimized_network_affinity.py` | Network-affinity calculators comparing NVLink, NVSwitch, and PCIe hops. |
+| `baseline_moe_vllm_env.py`, `optimized_moe_vllm_env.py` | NCCL/vLLM env presets for MoE inference on NVLink vs NVL72 (LL/LL128, graphs, dual-rail IB) with validation commands. |
+| `baseline_alltoall_tuning.py`, `optimized_alltoall_tuning.py` | Fabric-aware NCCL presets for MoE all-to-all (NVLink vs IB/EFA) with on-box validation commands. |
 | `baseline_parallelism_breakdown.py`, `optimized_parallelism_breakdown.py`, `baseline_pipeline_schedule.py`, `optimized_pipeline_schedule.py` | Parallelism and scheduling studies for sharding experts across GPUs. |
+| `baseline_gpt_gb200.py`, `optimized_gpt_gb200.py` | GPT-OSS-120B on GB200 NVL72 (baseline vs optimized layout). |
+| `baseline_deepseek_gb200.py`, `optimized_deepseek_gb200.py` | DeepSeek-R1-678B on GB200 NVL72 (baseline vs optimized layout). |
 | `benchmarking.py`, `run_lab.py`, `__init__.py` | Lab driver, Typer CLI, and exports used by the harness. |
 
 ## Running the Benchmarks
@@ -51,8 +55,11 @@ initializes, so every scenario automatically shares the same `ClusterSpec`/`Mode
 - `python tools/cli/benchmark_cli.py run --targets labs/moe_parallelism --profile minimal` runs every planner pair and drops JSON/Markdown summaries.
 - `python labs/moe_parallelism/run_lab.py --scenario grouped` prints an actionable plan (experts/GPU, bandwidth needs) for the chosen scenario.
 - `python labs/moe_parallelism/optimized_memory_budget.py --validate` ensures optimized allocations meet the same correctness checks as the baseline.
+- `python labs/moe_parallelism/optimized_moe_vllm_env.py --fabric nvl72` prints tuned exports for dual-rail NVL72 plus small-message NCCL + vLLM smoke tests; swap `--fabric nvlink` for the single-node NVSwitch preset.
+- From the harness, pass flags via `--target-extra-arg labs/moe_parallelism:moe_vllm_env="--model gpt-oss-20b/original/ --tp 8 --pp 3 --max-seqs 4096"` when running `benchmark_cli`; the same map hits both baseline_ and optimized_ variants.
 
 ## Notes
 - `plan.py` centralizes scenario definitions so you only update one file when adding a new MoE topology.
 - `benchmarking.py` can emit Markdown tables for documentation by passing `--format markdown`.
 - `custom_gpt_oss_gb200.py` shows how to swap in a GPT‑OSS‑120B model spec and compare an 8×NVL72 GB200 deployment over InfiniBand (`--fabric ib`) versus Ethernet (`--fabric ethernet`). Use it as a template for other clusters.
+- `tools/analysis/compare_benchmark_pairs.py` is a framework-level comparator: it discovers baseline/optimized pairs in any chapter/lab and prints a compact table (step_ms, throughput, ratios). Example: `python tools/analysis/compare_benchmark_pairs.py --chapter labs/moe_parallelism --targets gpt_gb200 deepseek_gb200`.

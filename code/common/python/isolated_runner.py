@@ -107,6 +107,8 @@ def run_benchmark_isolated(
             return result
         
         benchmark_module = importlib.util.module_from_spec(spec)
+        # Ensure module is visible to dataclasses/typing lookups during execution.
+        sys.modules[module_name] = benchmark_module
         spec.loader.exec_module(benchmark_module)
         
         # Get benchmark instance

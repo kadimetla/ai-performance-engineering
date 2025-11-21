@@ -1,0 +1,146 @@
+"""Baseline KV-cache benchmark using MXFP8 block scaling."""
+
+from __future__ import annotations
+
+from typing import List, Optional
+
+import torch
+import torch.nn as nn
+
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from labs.kv_cache_compression.kv_cache_common import (
+    KVCache,
+    KVCacheAttention,
+    allocate_kv_cache,
+    build_token_batches,
+    cache_is_finite,
+    reset_cache,
+    resolve_device,
+)
+
+try:  # Transformer Engine is optional; fail fast in setup when missing.
+    from transformer_engine.pytorch import Linear as TELinear
+    from transformer_engine.pytorch import LayerNorm as TELayerNorm
+    from transformer_engine.pytorch import autocast as te_autocast
+    from transformer_engine.pytorch import quantized_model_init
+    from transformer_engine.common import recipe as te_recipe
+
+    TE_AVAILABLE = True
+    TE_IMPORT_ERROR: Optional[Exception] = None
+except Exception as exc:  # pragma: no cover
+    TE_AVAILABLE = False
+    TE_IMPORT_ERROR = exc
+    TELinear = TELayerNorm = te_autocast = quantized_model_init = te_recipe = None  # type: ignore
+
+
+class BaselineKVCacheBenchmark(BaseBenchmark):
+    """MXFP8 KV-cache benchmark (prefill + decode)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.device = resolve_device()
+        self.tensor_dtype = torch.bfloat16
+        self.batch_size = 4
+        self.hidden_dim = 2048
+        self.num_heads = 16
+        self.prefill_seq = 256
+        self.decode_seq = 16
+        self.decode_steps = 8
+        self.prefill_inputs: List[torch.Tensor] = []
+        self.decode_inputs: List[torch.Tensor] = []
+        self.cache: Optional[KVCache] = None
+        self.model: Optional[nn.Module] = None
+        self.fp8_recipe = (
+            te_recipe.DelayedScaling(amax_history_len=16, amax_compute_algo="max") if TE_AVAILABLE else None
+        )
+        self.runtime_recipe = self.fp8_recipe
+        self._fallback_recipe = self.fp8_recipe
+
+    def setup(self) -> None:
+        self._setup_with_recipe(self.fp8_recipe)
+
+    def _setup_with_recipe(self, recipe) -> None:
+        if not TE_AVAILABLE or recipe is None:
+            raise RuntimeError(f"Transformer Engine not available: {TE_IMPORT_ERROR}")
+
+        torch.manual_seed(42)
+        with quantized_model_init(enabled=True, recipe=recipe):
+            self.model = KVCacheAttention(
+                hidden_dim=self.hidden_dim,
+                num_heads=self.num_heads,
+                linear_cls=TELinear,
+                layernorm_cls=TELayerNorm,
+            ).to(self.device, dtype=self.tensor_dtype)
+
+        self.prefill_inputs, self.decode_inputs = build_token_batches(
+            batch_size=self.batch_size,
+            prefill_seq=self.prefill_seq // 2,  # two prefill windows
+            decode_seq=self.decode_seq,
+            decode_steps=self.decode_steps,
+            hidden_dim=self.hidden_dim,
+            device=self.device,
+            dtype=self.tensor_dtype,
+        )
+        total_tokens = self.prefill_seq + self.decode_seq * self.decode_steps
+        tokens_per_iteration = self.batch_size * total_tokens
+        self.cache = allocate_kv_cache(
+            batch_size=self.batch_size,
+            total_tokens=total_tokens,
+            num_heads=self.num_heads,
+            head_dim=self.hidden_dim // self.num_heads,
+            device=self.device,
+            dtype=self.tensor_dtype,
+        )
+        self.runtime_recipe = recipe
+        self.register_workload_metadata(tokens_per_iteration=float(tokens_per_iteration))
+        self._calibrate_fp8(recipe)
+        torch.cuda.synchronize()
+
+    def _calibrate_fp8(self, recipe) -> None:
+        if self.model is None or self.cache is None or recipe is None:
+            return
+        reset_cache(self.cache)
+        with te_autocast(enabled=True, recipe=recipe, calibrating=True):
+            offset = 0
+            for prefill in self.prefill_inputs:
+                _ = self.model(prefill, self.cache, offset)
+                offset += prefill.shape[1]
+            for decode in self.decode_inputs:
+                _ = self.model(decode, self.cache, offset)
+                offset += decode.shape[1]
+        reset_cache(self.cache)
+
+    def benchmark_fn(self) -> None:
+        if self.model is None or self.cache is None or self.runtime_recipe is None:
+            raise RuntimeError("Benchmark not initialized")
+        reset_cache(self.cache)
+        offset = 0
+        with te_autocast(enabled=True, recipe=self.runtime_recipe):
+            for prefill in self.prefill_inputs:
+                _ = self.model(prefill, self.cache, offset)
+                offset += prefill.shape[1]
+            for decode in self.decode_inputs:
+                _ = self.model(decode, self.cache, offset)
+                offset += decode.shape[1]
+        torch.cuda.synchronize()
+
+    def teardown(self) -> None:
+        self.prefill_inputs = []
+        self.decode_inputs = []
+        self.cache = None
+        self.model = None
+        torch.cuda.empty_cache()
+
+    def validate_result(self) -> Optional[str]:
+        if self.cache is None:
+            return "Cache not initialized"
+        if not cache_is_finite(self.cache):
+            return "Non-finite entries detected in KV cache"
+        return None
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=10, warmup=3, deterministic=False)
+
+
+def get_benchmark() -> BaseBenchmark:
+    return BaselineKVCacheBenchmark()

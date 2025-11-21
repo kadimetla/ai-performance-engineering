@@ -13,6 +13,7 @@ Provides architecture awareness tooling for Blackwell-era systems-query SM and m
 | Path | Description |
 | --- | --- |
 | `hardware_info.py`, `cpu_gpu_topology_aware.py` | System scanners that record GPU capabilities, NUMA layout, NVLink/NVSwitch connectivity, and affinity hints. |
+| `baseline_uma_memory_reporting.py`, `optimized_uma_memory_reporting.py`, `uma_memory_utils.py` | UMA memory reporting pair: baseline trusts `cudaMemGetInfo`, optimized folds in `/proc/meminfo` (MemAvailable + reclaimable SwapFree) for DGX Spark/iGPU platforms where nvidia-smi hides framebuffer stats. |
 | `nvlink_c2c_bandwidth_benchmark.py`, `baseline_memory_transfer.py`, `optimized_memory_transfer.py`, `optimized_memory_transfer_nvlink.cu`, `optimized_memory_transfer_zero_copy.cu` | Peer-to-peer and zero-copy experiments for quantifying NVLink, PCIe, and coherent memory performance. |
 | `cpu_gpu_grace_blackwell_coherency.cu`, `cpu_gpu_grace_blackwell_coherency_sm121` | Grace-Blackwell cache-coherent samples that compare explicit transfers vs shared mappings. |
 | `baseline_cublas.py`, `optimized_cublas.py` | cuBLAS GEMM benchmark pair that toggles TF32, tensor op math, and stream affinity to highlight architecture knobs. |
@@ -37,3 +38,4 @@ python tools/cli/benchmark_cli.py run --targets ch2 --profile minimal
 ## Notes
 - Grace-only coherency tests require GB200/GB300 nodes; the binaries no-op on PCIe-only hosts.
 - `Makefile` builds both CUDA and CPU tools so results can be compared without leaving the chapter.
+- When nvidia-smi shows `Memory-Usage: Not Supported` on UMA/iGPU boxes, run `python optimized_uma_memory_reporting.py` to see a MemAvailable + SwapFree view (baseline shows raw `cudaMemGetInfo` for comparison). Add `--snapshot` to persist a JSON under `artifacts/uma_memory_snapshots/` for historical tracking.

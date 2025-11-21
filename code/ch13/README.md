@@ -35,6 +35,7 @@ python tools/cli/benchmark_cli.py run --targets ch13 --profile minimal
 - `python compare.py --examples training_standard` shows optimized training runs producing higher goodput with identical metrics.
 - `python optimized_precisionfp8_te.py --validate` confirms Transformer Engine calibration plus NVFP8 execution with max error tolerances enforced.
 - `python memory_profiling.py --dump` and the optimized variant demonstrate allocator fragmentation dropping after applying the recommended knobs.
+- `python optimized_context_parallelism.py --sequence-length 131072 --cp-ranks 4` shreds a long context across four GPUs; adjust `--sequence-length` / `--cp-ranks` to mirror TorchTitan-style CP tuning.
 
 ## Notes
 - `custom_allocator.py` contains a standalone torch allocator shim that can be re-used in other chapters when debugging fragmentation.

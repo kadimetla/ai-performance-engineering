@@ -292,6 +292,12 @@ class NVSHMEMPipelineEngine:
     - NVSHMEM reduces microbatch handoff latency by 10x
     
     Performance: ~1.8x throughput vs sequential, < 10% bubble time
+
+    Interleaved 1F1B:
+    - To smooth stage imbalance, you can split each physical stage into multiple
+      virtual stages per rank (e.g., two tiny stages per GPU) and reuse the same
+      NVSHMEM buffers. That reduces tail latency at the cost of extra pipeline
+      depth; tune num_microbatches accordingly (aim for M ≳ 4–8× virtual stages).
     """
     
     def __init__(

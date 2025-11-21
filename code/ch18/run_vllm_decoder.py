@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import math
 import os
-import contextlib
 import statistics
 import sys
 import time
+from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+from packaging import version
+
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    yaml = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -42,6 +50,89 @@ from ch17.dynamic_routing import (  # noqa: E402
     Request,
     WorkerMetrics,
 )
+
+
+DEFAULT_SPEC_CONFIG = Path(__file__).parent / "spec_configs" / "draft_and_verify.json"
+
+
+class GraphMode(Enum):
+    EAGER = "eager"
+    FULL = "full"
+    PIECEWISE = "piecewise"
+    FULL_AND_PIECEWISE = "full_and_piecewise"
+
+    @classmethod
+    def from_str(cls, raw: Optional[str]) -> "GraphMode":
+        normalized = (raw or cls.FULL_AND_PIECEWISE.value).strip().lower().replace("-", "_")
+        for mode in cls:
+            if normalized == mode.value:
+                return mode
+        return cls.FULL_AND_PIECEWISE
+
+
+class SpeculatorConfig:
+    """Speculators-style configuration for speculative decoding."""
+
+    def __init__(
+        self,
+        method: str = "draft_model",
+        draft_model: str = "SimpleMoEGPT-draft",
+        verifier_model: str = "SimpleMoEGPT-target",
+        chunk_size: int = 4,
+        max_spec_tokens: int = 4,
+        acceptance_target: float = 0.6,
+        fallback_chunk_size: Optional[int] = None,
+    ) -> None:
+        self.method = method
+        self.draft_model = draft_model
+        self.verifier_model = verifier_model
+        self.chunk_size = chunk_size
+        self.max_spec_tokens = max_spec_tokens
+        self.acceptance_target = acceptance_target
+        self.fallback_chunk_size = fallback_chunk_size
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SpeculatorConfig":
+        return cls(
+            method=str(data.get("method", "draft_model")),
+            draft_model=str(data.get("draft_model", "SimpleMoEGPT-draft")),
+            verifier_model=str(data.get("verifier_model", "SimpleMoEGPT-target")),
+            chunk_size=max(1, int(data.get("chunk_size", 4))),
+            max_spec_tokens=max(1, int(data.get("max_spec_tokens", 4))),
+            acceptance_target=float(data.get("acceptance_target", 0.6)),
+            fallback_chunk_size=(
+                max(1, int(data["fallback_chunk_size"])) if data.get("fallback_chunk_size") is not None else None
+            ),
+        )
+
+    @classmethod
+    def load(cls, path: Optional[Path]) -> "SpeculatorConfig":
+        if path is None or not path.exists():
+            return cls()
+        payload: Any
+        if path.suffix in {".yaml", ".yml"}:
+            if yaml is None:
+                raise ImportError("pyyaml is required to load YAML speculator configs")
+            payload = yaml.safe_load(path.read_text())
+        else:
+            payload = json.loads(path.read_text())
+        if not isinstance(payload, dict):
+            raise ValueError(f"Speculator config must be a mapping, got {type(payload)}")
+        return cls.from_dict(payload)
+
+    def summary(self) -> str:
+        return (
+            f"method={self.method}, chunk={self.chunk_size}, "
+            f"fallback={self.fallback_chunk_size}, target_accept={self.acceptance_target}"
+        )
+
+
+def _assert_vllm_baseline_torch() -> None:
+    """Ensure we are on the PyTorch stack aligned with vLLM v0.11.x (>=2.9)."""
+    parsed = version.parse(torch.__version__)
+    minimum = version.parse("2.9.0")
+    if parsed < minimum:
+        raise RuntimeError(f"PyTorch >= 2.9.0 required for V1 graph baseline; found {torch.__version__}")
 
 
 class PagedKVCache:
@@ -98,16 +189,20 @@ class PagedKVCache:
 class SpeculativeDecoder:
     """SGLang-style speculative decode helper using draft and target models."""
 
-    def __init__(self, target_model: SimpleMoEGPT, draft_model: SimpleMoEGPT, chunk_size: int = 4):
+    def __init__(self, target_model: SimpleMoEGPT, draft_model: SimpleMoEGPT, config: SpeculatorConfig):
         self.target_model = target_model
         self.draft_model = draft_model
-        self.chunk_size = max(1, chunk_size)
+        self.config = config
+        self._base_chunk = max(1, config.chunk_size)
+        self.chunk_size = self._base_chunk
+        self._fallback_chunk = max(1, config.fallback_chunk_size) if config.fallback_chunk_size else None
         self.accepted_tokens = 0
         self.total_tokens = 0
 
     def reset(self) -> None:
         self.accepted_tokens = 0
         self.total_tokens = 0
+        self.chunk_size = self._base_chunk
 
     def decode(
         self,
@@ -122,7 +217,7 @@ class SpeculativeDecoder:
 
         with torch.no_grad():
             while emitted < total_tokens:
-                chunk = min(self.chunk_size, total_tokens - emitted)
+                chunk = min(self.chunk_size, self.config.max_spec_tokens, total_tokens - emitted)
                 for _ in range(chunk):
                     start = time.perf_counter()
                     draft_hidden, draft_logits = self.draft_model.decode(tokens)
@@ -147,12 +242,22 @@ class SpeculativeDecoder:
 
                     if not matches.all():
                         break
+        self._maybe_adjust_chunk()
         return tokens, per_token_times
+
+    def _maybe_adjust_chunk(self) -> None:
+        if self._fallback_chunk is None:
+            return
+        if self.acceptance_rate() < self.config.acceptance_target:
+            self.chunk_size = self._fallback_chunk
 
     def acceptance_rate(self) -> float:
         if self.total_tokens == 0:
             return 0.0
         return self.accepted_tokens / self.total_tokens
+
+    def current_chunk_size(self) -> int:
+        return self.chunk_size
 
 
 class VLLMMoEInferenceBenchmark(BaseBenchmark):
@@ -167,10 +272,28 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         self.router = DisaggregatedRouter(config_path=os.getenv("DYNAMO_ROUTER_CONFIG"))
         self.paged_cache: Optional[PagedKVCache] = None
         self.spec_decoder: Optional[SpeculativeDecoder] = None
+        self.spec_config_path: Optional[Path] = None
+        self.spec_config: SpeculatorConfig = SpeculatorConfig()
+        self.enable_graphs = os.getenv("OPT_MOE_ENABLE_GRAPHS") == "1"
         self.prefill_workers = env_override_int("OPT_MOE_PREFILL_WORKERS", 2)
         self.decode_workers = env_override_int("OPT_MOE_DECODE_WORKERS", 2)
         self._dtype_bytes = dtype_bytes(self.config.dtype_obj)
         total_tokens = self.config.context_window + self.config.decode_tokens
+        self.engine_variant = "v1"
+        self.graph_mode = GraphMode.from_str(os.getenv("OPT_MOE_GRAPH_MODE"))
+        self.max_capture_tokens = env_override_int("OPT_MOE_MAX_CAPTURE_TOKENS", total_tokens)
+        self._full_graph: Optional[torch.cuda.CUDAGraph] = None
+        self._full_prefill_done: Optional[torch.cuda.Event] = None
+        self._full_decode_done: Optional[torch.cuda.Event] = None
+        self._piecewise_prefill_graph: Optional[torch.cuda.CUDAGraph] = None
+        self._piecewise_decode_graph: Optional[torch.cuda.CUDAGraph] = None
+        self._piecewise_prefill_done: Optional[torch.cuda.Event] = None
+        self._piecewise_decode_done: Optional[torch.cuda.Event] = None
+        self._prefill_next_tokens: Optional[torch.Tensor] = None
+        self._captured_full_spec_accept: Optional[float] = None
+        self._captured_full_spec_chunk: Optional[float] = None
+        self._captured_piecewise_spec_accept: Optional[float] = None
+        self._captured_piecewise_spec_chunk: Optional[float] = None
         self._workload_metadata = WorkloadMetadata(
             requests_per_iteration=float(self.config.batch_size),
             tokens_per_iteration=float(self.config.tokens_per_iteration),
@@ -180,12 +303,14 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
             "tpot": [],
             "throughput": [],
             "spec_accept": [],
+            "spec_chunk": [],
             "nvlink": [],
             "nvlink_measured": [],
             "prefill_share": [],
             "paged_hit": [],
             "page_faults": [],
             "memory_gb": [],
+            "graph_path": [],
         }
         self._iteration = 0
         self._mem_logger: Optional[GpuMemoryLogger] = None
@@ -212,6 +337,7 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
 
     # --------------------------------------------------------------------- setup
     def setup(self) -> None:
+        _assert_vllm_baseline_torch()
         torch.manual_seed(21)
         cfg = self.config
         self.model = SimpleMoEGPT(cfg, device=self.device).eval()
@@ -233,6 +359,13 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         )
         self.draft_model = SimpleMoEGPT(draft_cfg, device=self.device).eval()
 
+        config_path: Optional[Path] = None
+        if self.spec_config_path and self.spec_config_path.exists():
+            config_path = self.spec_config_path
+        elif DEFAULT_SPEC_CONFIG.exists():
+            config_path = DEFAULT_SPEC_CONFIG
+        self.spec_config = SpeculatorConfig.load(config_path)
+
         self.prompts = torch.randint(
             0,
             cfg.vocab_size,
@@ -250,7 +383,7 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         self.spec_decoder = SpeculativeDecoder(
             target_model=self.model,
             draft_model=self.draft_model,
-            chunk_size=env_override_int("OPT_MOE_SPEC_CHUNK", 4),
+            config=self.spec_config,
         )
         self._refresh_router_metrics()
         torch.cuda.synchronize(self.device)
@@ -265,6 +398,8 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
             if logger.start():
                 self._mem_logger = logger
                 self._mem_log_path = log_path
+        if self.enable_graphs and torch.cuda.is_available():
+            self._prepare_graphs()
 
     def _refresh_router_metrics(self) -> None:
         timestamp = time.time()
@@ -290,8 +425,151 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
             )
             self.router.update_worker_metrics("decode", f"decode-{idx}", metrics)
 
-    # --------------------------------------------------------------- benchmark_fn
-    def benchmark_fn(self) -> Dict[str, List[float]]:
+    # ----------------------------------------------------------- graph preparation
+    def _prepare_graphs(self) -> None:
+        cfg = self.config
+        if not self.enable_graphs:
+            return
+        if not torch.cuda.is_available():
+            return
+        if self.graph_mode == GraphMode.EAGER:
+            return
+        if self._prefill_next_tokens is None:
+            self._prefill_next_tokens = torch.empty(
+                (cfg.batch_size, 1),
+                device=self.device,
+                dtype=torch.long,
+            )
+        if self.graph_mode in (GraphMode.FULL, GraphMode.FULL_AND_PIECEWISE):
+            self._capture_full_graph()
+        if self.graph_mode in (GraphMode.PIECEWISE, GraphMode.FULL_AND_PIECEWISE):
+            self._capture_piecewise_graphs()
+
+    def _capture_full_graph(self) -> None:
+        if self._full_graph is not None or not torch.cuda.is_available():
+            return
+        cfg = self.config
+        self._full_graph = torch.cuda.CUDAGraph()
+        self._full_prefill_done = torch.cuda.Event(enable_timing=True)
+        self._full_decode_done = torch.cuda.Event(enable_timing=True)
+        # Reset state so the captured path mirrors a clean request.
+        if self.paged_cache is not None:
+            self.paged_cache.reset()
+        if self.spec_decoder is not None:
+            self.spec_decoder.reset()
+            self.spec_decoder._fallback_chunk = None  # stabilize capture path
+        with torch.cuda.graph(self._full_graph):
+            hidden, logits = self.model.prefill(self.prompts, kv_cache=self.paged_cache.buffer, cache_start=0)  # type: ignore[arg-type]
+            next_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+            self._prefill_next_tokens.copy_(next_tokens)
+            if self._full_prefill_done is not None:
+                self._full_prefill_done.record()
+            _tokens, _ = self.spec_decoder.decode(  # type: ignore[call-arg]
+                self._prefill_next_tokens,
+                cfg.decode_tokens,
+                self.paged_cache,  # type: ignore[arg-type]
+                base_position=cfg.context_window,
+            )
+            if self._full_decode_done is not None:
+                self._full_decode_done.record()
+        # Measure capture-time acceptance to reuse for metrics since replay skips Python.
+        if self.spec_decoder is not None:
+            self._captured_full_spec_accept = self.spec_decoder.acceptance_rate()
+            self._captured_full_spec_chunk = float(self.spec_decoder.current_chunk_size())
+            self.spec_decoder.reset()
+        torch.cuda.synchronize(self.device)
+
+    def _capture_piecewise_graphs(self) -> None:
+        if self._piecewise_prefill_graph is not None and self._piecewise_decode_graph is not None:
+            return
+        if not torch.cuda.is_available():
+            return
+        cfg = self.config
+        self._piecewise_prefill_graph = torch.cuda.CUDAGraph()
+        self._piecewise_decode_graph = torch.cuda.CUDAGraph()
+        self._piecewise_prefill_done = torch.cuda.Event(enable_timing=True)
+        self._piecewise_decode_done = torch.cuda.Event(enable_timing=True)
+
+        # Prefill graph: compute tokens for decode and populate KV cache.
+        if self.paged_cache is not None:
+            self.paged_cache.reset()
+        if self.spec_decoder is not None:
+            self.spec_decoder.reset()
+        with torch.cuda.graph(self._piecewise_prefill_graph):
+            hidden, logits = self.model.prefill(self.prompts, kv_cache=self.paged_cache.buffer, cache_start=0)  # type: ignore[arg-type]
+            next_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+            self._prefill_next_tokens.copy_(next_tokens)
+            if self._piecewise_prefill_done is not None:
+                self._piecewise_prefill_done.record()
+
+        # Decode graph: reuse prefetched tokens and capture decode path.
+        with torch.cuda.graph(self._piecewise_decode_graph):
+            _tokens, _ = self.spec_decoder.decode(  # type: ignore[call-arg]
+                self._prefill_next_tokens,
+                cfg.decode_tokens,
+                self.paged_cache,  # type: ignore[arg-type]
+                base_position=cfg.context_window,
+            )
+            if self._piecewise_decode_done is not None:
+                self._piecewise_decode_done.record()
+
+        if self.spec_decoder is not None:
+            self._captured_piecewise_spec_accept = self.spec_decoder.acceptance_rate()
+            self._captured_piecewise_spec_chunk = float(self.spec_decoder.current_chunk_size())
+            self.spec_decoder.reset()
+        torch.cuda.synchronize(self.device)
+
+    def _can_use_full_graph(self) -> bool:
+        total_tokens = self.config.context_window + self.config.decode_tokens
+        return self._full_graph is not None and total_tokens <= self.max_capture_tokens
+
+    def _can_use_piecewise_graph(self) -> bool:
+        return self._piecewise_prefill_graph is not None and self._piecewise_decode_graph is not None
+
+    def _replay_full_graph(self) -> Tuple[List[float], List[float], str]:
+        if not self._can_use_full_graph():
+            raise RuntimeError("Full graph replay requested but not captured")
+        assert self._full_prefill_done is not None and self._full_decode_done is not None
+        ttft_times: List[float] = []
+        tpot_times: List[float] = []
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        self._full_graph.replay()  # type: ignore[union-attr]
+        end.record()
+        torch.cuda.synchronize(self.device)
+        ttft_ms = start.elapsed_time(self._full_prefill_done)
+        decode_total_ms = self._full_prefill_done.elapsed_time(self._full_decode_done)
+        per_token_ms = decode_total_ms / max(1, self.config.decode_tokens)
+        ttft_times.append(ttft_ms)
+        tpot_times.extend([per_token_ms] * self.config.decode_tokens)
+        return ttft_times, tpot_times, "full_graph"
+
+    def _replay_piecewise_graph(self) -> Tuple[List[float], List[float], str]:
+        if not self._can_use_piecewise_graph():
+            raise RuntimeError("Piecewise graph replay requested but not captured")
+        assert self._piecewise_prefill_done is not None and self._piecewise_decode_done is not None
+        if self.paged_cache is not None:
+            self.paged_cache.reset()
+        ttft_times: List[float] = []
+        tpot_times: List[float] = []
+        start_prefill = torch.cuda.Event(enable_timing=True)
+        start_decode = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start_prefill.record()
+        self._piecewise_prefill_graph.replay()  # type: ignore[union-attr]
+        start_decode.record()
+        self._piecewise_decode_graph.replay()  # type: ignore[union-attr]
+        end.record()
+        torch.cuda.synchronize(self.device)
+        ttft_ms = start_prefill.elapsed_time(self._piecewise_prefill_done)
+        decode_total_ms = self._piecewise_prefill_done.elapsed_time(self._piecewise_decode_done)
+        per_token_ms = decode_total_ms / max(1, self.config.decode_tokens)
+        ttft_times.append(ttft_ms)
+        tpot_times.extend([per_token_ms] * self.config.decode_tokens)
+        return ttft_times, tpot_times, "piecewise_graph"
+
+    def _run_eager_path(self) -> Tuple[List[float], List[float], str, float, float]:
         if any(obj is None for obj in (self.model, self.prompts, self.paged_cache, self.spec_decoder)):
             raise RuntimeError("Benchmark not initialized")
 
@@ -300,6 +578,38 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         spec = self.spec_decoder  # type: ignore[assignment]
         paged_cache.reset()
         spec.reset()
+
+        ttft_times: List[float] = []
+        tpot_times: List[float] = []
+
+        with torch.no_grad(), self._nvtx_range("prefill_dualpipe"):
+            prefill_start = self._record_start()
+            hidden, logits = self.model.prefill(self.prompts, kv_cache=paged_cache.buffer, cache_start=0)
+            torch.cuda.synchronize(self.device)
+            ttft_ms = self._record_stop(prefill_start)
+            ttft_times.append(ttft_ms)
+            paged_cache.mark_prefill(cfg.context_window)
+
+        next_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+        with torch.no_grad(), self._nvtx_range("speculative_decode"):
+            chunk_used = spec.current_chunk_size()
+            _, decode_times = spec.decode(
+                next_tokens,
+                cfg.decode_tokens,
+                paged_cache,
+                base_position=cfg.context_window,
+            )
+            tpot_times.extend(decode_times)
+        return ttft_times, tpot_times, "eager", spec.acceptance_rate(), float(chunk_used)
+
+    # --------------------------------------------------------------- benchmark_fn
+    def benchmark_fn(self) -> Dict[str, List[float]]:
+        if any(obj is None for obj in (self.model, self.prompts, self.paged_cache, self.spec_decoder)):
+            raise RuntimeError("Benchmark not initialized")
+
+        cfg = self.config
+        paged_cache = self.paged_cache  # type: ignore[assignment]
+        spec = self.spec_decoder  # type: ignore[assignment]
 
         if torch.cuda.is_available() and hasattr(torch.cuda, "reset_peak_memory_stats"):
             torch.cuda.reset_peak_memory_stats(self.device)
@@ -327,25 +637,34 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
 
         ttft_times: List[float] = []
         tpot_times: List[float] = []
+        graph_path = "eager"
+        spec_accept_used: Optional[float] = None
+        spec_chunk_used: Optional[float] = None
 
-        with torch.no_grad():
-            with self._nvtx_range("prefill_dualpipe"):
-                prefill_start = self._record_start()
-                hidden, logits = self.model.prefill(self.prompts, kv_cache=paged_cache.buffer, cache_start=0)
-                torch.cuda.synchronize(self.device)
-                ttft_ms = self._record_stop(prefill_start)
-                ttft_times.append(ttft_ms)
-                paged_cache.mark_prefill(cfg.context_window)
-
-            next_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-            with self._nvtx_range("speculative_decode"):
-                _, decode_times = spec.decode(
-                    next_tokens,
-                    cfg.decode_tokens,
-                    paged_cache,
-                    base_position=cfg.context_window,
-                )
-                tpot_times.extend(decode_times)
+        # Select execution mode based on requested graph mode and capture viability.
+        with self._nvtx_range("graph_mode_select"):
+            if self.graph_mode == GraphMode.EAGER:
+                ttft_times, tpot_times, graph_path, spec_accept_used, spec_chunk_used = self._run_eager_path()
+            elif self.graph_mode == GraphMode.FULL and self._can_use_full_graph():
+                ttft_times, tpot_times, graph_path = self._replay_full_graph()
+                spec_accept_used = self._captured_full_spec_accept
+                spec_chunk_used = self._captured_full_spec_chunk
+            elif self.graph_mode == GraphMode.PIECEWISE and self._can_use_piecewise_graph():
+                ttft_times, tpot_times, graph_path = self._replay_piecewise_graph()
+                spec_accept_used = self._captured_piecewise_spec_accept
+                spec_chunk_used = self._captured_piecewise_spec_chunk
+            elif self.graph_mode == GraphMode.FULL_AND_PIECEWISE and self._can_use_full_graph():
+                ttft_times, tpot_times, graph_path = self._replay_full_graph()
+                spec_accept_used = self._captured_full_spec_accept
+                spec_chunk_used = self._captured_full_spec_chunk
+            elif self.graph_mode == GraphMode.FULL_AND_PIECEWISE and self._can_use_piecewise_graph():
+                # Fallback for prompts that exceed the capture boundary
+                with self._nvtx_range("graph_fallback_piecewise"):
+                    ttft_times, tpot_times, graph_path = self._replay_piecewise_graph()
+                    spec_accept_used = self._captured_piecewise_spec_accept
+                    spec_chunk_used = self._captured_piecewise_spec_chunk
+            else:
+                ttft_times, tpot_times, graph_path, spec_accept_used, spec_chunk_used = self._run_eager_path()
 
         telemetry_after = query_gpu_telemetry(logical_index)
 
@@ -353,7 +672,7 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         throughput = cfg.tokens_per_iteration / max(total_time_s, 1e-6)
         prefill_bytes = cfg.batch_size * cfg.context_window * cfg.hidden_size * self._dtype_bytes
         nvlink_gbps = 0.0
-        if ttft_times[0] > 0:
+        if ttft_times and ttft_times[0] > 0:
             nvlink_gbps = (prefill_bytes * 8.0 / 1e9) / (ttft_times[0] / 1000.0)
         measured_nvlink = self._compute_nvlink_delta(telemetry_before, telemetry_after, total_time_s)
         self._nvlink_status = telemetry_after.get("nvlink_status", "unknown")
@@ -361,7 +680,13 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         self._history["ttft"].extend(ttft_times)
         self._history["tpot"].extend(tpot_times)
         self._history["throughput"].append(throughput)
-        self._history["spec_accept"].append(spec.acceptance_rate())
+        if spec_accept_used is None:
+            spec_accept_used = spec.acceptance_rate()
+        if spec_chunk_used is None:
+            spec_chunk_used = spec.current_chunk_size()
+        self._history["spec_accept"].append(spec_accept_used)
+        self._history["spec_chunk"].append(spec_chunk_used)
+        self._history["graph_path"].append(graph_path)
         self._history["nvlink"].append(nvlink_gbps)
         if measured_nvlink is not None:
             self._history["nvlink_measured"].append(measured_nvlink)
@@ -381,6 +706,7 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         return {
             "ttft_times_ms": ttft_times,
             "tpot_times_ms": tpot_times,
+            "graph_path": graph_path,
         }
 
     def _compute_nvlink_delta(
@@ -432,6 +758,7 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
             "optimized_moe.ttft_mean_ms": float(statistics.mean(self._history["ttft"])),
             "optimized_moe.tpot_mean_ms": float(statistics.mean(self._history["tpot"])),
             "optimized_moe.spec_accept_rate": float(statistics.mean(self._history["spec_accept"])),
+            "optimized_moe.spec_chunk_size": float(statistics.mean(self._history["spec_chunk"])),
             "optimized_moe.nvlink_reported_gbps": float(statistics.mean(self._history["nvlink"])),
             "optimized_moe.prefill_share": float(statistics.mean(self._history["prefill_share"])),
             "optimized_moe.paged_cache_occupancy": float(statistics.mean(self._history["paged_hit"])),
@@ -467,10 +794,22 @@ def get_benchmark() -> BaseBenchmark:
     return VLLMMoEInferenceBenchmark()
 
 
-def _run_harness(iterations: Optional[int], warmup: Optional[int]) -> None:
+def _run_harness(
+    iterations: Optional[int],
+    warmup: Optional[int],
+    spec_config: Optional[str],
+    graph_mode: Optional[str],
+    max_capture_tokens: Optional[int],
+) -> None:
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 
     benchmark = get_benchmark()
+    if spec_config:
+        benchmark.spec_config_path = Path(spec_config)
+    if graph_mode:
+        benchmark.graph_mode = GraphMode.from_str(graph_mode)
+    if max_capture_tokens is not None:
+        benchmark.max_capture_tokens = max_capture_tokens
     config = benchmark.get_config()
     if iterations is not None:
         config.iterations = iterations
@@ -486,8 +825,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="vLLM-style MoE inference benchmark harness.")
     parser.add_argument("--iterations", type=int, help="Override benchmark iterations")
     parser.add_argument("--warmup", type=int, help="Override warmup iterations")
+    parser.add_argument(
+        "--graph-mode",
+        type=str,
+        choices=[m.value for m in GraphMode],
+        help="Graph execution mode (default: full_and_piecewise or OPT_MOE_GRAPH_MODE env)",
+    )
+    parser.add_argument(
+        "--max-capture-tokens",
+        type=int,
+        help="Maximum total tokens allowed for graph capture before falling back to piecewise/eager",
+    )
+    parser.add_argument(
+        "--spec-config",
+        type=str,
+        help=f"Optional path to Speculators-style config; defaults to {DEFAULT_SPEC_CONFIG}",
+    )
     args = parser.parse_args(argv)
-    _run_harness(args.iterations, args.warmup)
+    _run_harness(
+        args.iterations,
+        args.warmup,
+        args.spec_config,
+        args.graph_mode,
+        args.max_capture_tokens,
+    )
     return 0
 
 

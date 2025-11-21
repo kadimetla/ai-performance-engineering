@@ -1,0 +1,24 @@
+metrics:
+  ttft_hist: "vllm:time_to_first_token_seconds_bucket"
+  prefill_hist: "vllm:request_prefill_time_seconds_bucket"
+  decode_hist: "vllm:request_decode_time_seconds_bucket"
+  e2e_hist: "vllm:e2e_request_latency_seconds_bucket"
+  inter_token_hist: "vllm:time_per_output_token_seconds_bucket"
+  request_success: "vllm:request_success_total"
+  num_running: "vllm:num_requests_running"
+  num_waiting: "vllm:num_requests_waiting"
+  gpu_cache_usage: "vllm:gpu_cache_usage_perc"
+  cudagraph_mode_info: "vllm:cudagraph_mode_info"
+  enginecore_errors_total: "vllm_enginecore_errors_total"
+  scheduler_errors_total: "vllm_scheduler_errors_total"
+
+thresholds:
+  ttft_p90_warn: 0.6        # seconds
+  ttft_p99_crit: 1.5        # seconds
+  prefill_p90_warn: 1.5     # seconds
+  decode_p90_warn: 10.0     # seconds
+  inter_token_p90_warn: 0.15  # seconds per token
+  kv_warn: 90.0             # percent
+  kv_crit: 98.0             # percent
+  stalled_finished_rate: 0.05  # requests/sec considered "stalled"
+  stalled_active_floor: 50     # active requests before considering ratio alert

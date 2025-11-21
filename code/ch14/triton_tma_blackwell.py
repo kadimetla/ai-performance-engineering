@@ -294,7 +294,7 @@ def tma_gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     assert K == K2, f"Incompatible dimensions: {K} != {K2}"
     
     C = torch.empty((M, N), device=A.device, dtype=torch.float32)
-    
+
     # Use META-aware grid to correctly handle all autotune configs
     grid = lambda META: (triton.cdiv(M, META['BLOCK_M']), triton.cdiv(N, META['BLOCK_N']))
     tma_gemm_kernel[grid](
@@ -304,7 +304,171 @@ def tma_gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
         B.stride(0), B.stride(1),
         C.stride(0), C.stride(1),
     )
-    
+
+    return C
+
+
+# ============================================================================
+# TMA-Optimized GEMM with Descriptor Load + fused bias/SiLU epilogue
+# ============================================================================
+
+@triton.autotune(
+    configs=[
+        triton.Config(
+            {'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64, 'NUM_STAGES': 2},
+            num_warps=8,
+            num_stages=2,
+        ),
+        triton.Config(
+            {'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'NUM_STAGES': 2},
+            num_warps=8,
+            num_stages=2,
+        ),
+        triton.Config(
+            {'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'NUM_STAGES': 3},
+            num_warps=8,
+            num_stages=3,
+        ),
+    ],
+    key=['M', 'N', 'K'],
+)
+@triton.jit
+def tma_gemm_bias_silu_kernel(
+    A_ptr, B_ptr, bias_ptr, C_ptr,
+    M, N, K,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_bias,
+    stride_cm, stride_cn,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    NUM_STAGES: tl.constexpr,
+):
+    """Matrix multiplication + row-bias + SiLU using Triton tensor descriptors."""
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+
+    m0 = pid_m * BLOCK_M
+    n0 = pid_n * BLOCK_N
+
+    offs_m = m0 + tl.arange(0, BLOCK_M)
+    offs_n = n0 + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+
+    A_desc = tl.make_tensor_descriptor(
+        A_ptr,
+        shape=[M, K],
+        strides=[stride_am, stride_ak],
+        block_shape=[BLOCK_M, BLOCK_K],
+    )
+    B_desc = tl.make_tensor_descriptor(
+        B_ptr,
+        shape=[K, N],
+        strides=[stride_bk, stride_bn],
+        block_shape=[BLOCK_K, BLOCK_N],
+    )
+
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    K_tiles = (K + BLOCK_K - 1) // BLOCK_K
+    if K_tiles == 0:
+        c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
+        c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+        tl.store(c_ptrs, acc, mask=c_mask)
+        return
+
+    k0 = 0
+    if (m0 + BLOCK_M <= M) and (k0 + BLOCK_K <= K):
+        a_cur = A_desc.load([m0, k0])
+    else:
+        row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
+        col_offsets = tl.broadcast_to((k0 + offs_k)[None, :], (BLOCK_M, BLOCK_K))
+        a_cur = tl.load(
+            A_desc,
+            offsets=(row_offsets, col_offsets),
+            boundary_check=(0, 1),
+            padding_option="zero",
+        )
+
+    if (n0 + BLOCK_N <= N) and (k0 + BLOCK_K <= K):
+        b_cur = B_desc.load([k0, n0])
+    else:
+        row_offsets = tl.broadcast_to((k0 + offs_k)[:, None], (BLOCK_K, BLOCK_N))
+        col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
+        b_cur = tl.load(
+            B_desc,
+            offsets=(row_offsets, col_offsets),
+            boundary_check=(0, 1),
+            padding_option="zero",
+        )
+
+    for kt in tl.range(0, K_tiles, num_stages=NUM_STAGES, warp_specialize=True):
+        next_k = (kt + 1) * BLOCK_K
+
+        if kt + 1 < K_tiles:
+            if (m0 + BLOCK_M <= M) and (next_k + BLOCK_K <= K):
+                a_next = A_desc.load([m0, next_k])
+            else:
+                row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
+                col_offsets = tl.broadcast_to((next_k + offs_k)[None, :], (BLOCK_M, BLOCK_K))
+                a_next = tl.load(
+                    A_desc,
+                    offsets=(row_offsets, col_offsets),
+                    boundary_check=(0, 1),
+                    padding_option="zero",
+                )
+
+            if (n0 + BLOCK_N <= N) and (next_k + BLOCK_K <= K):
+                b_next = B_desc.load([next_k, n0])
+            else:
+                row_offsets = tl.broadcast_to((next_k + offs_k)[:, None], (BLOCK_K, BLOCK_N))
+                col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
+                b_next = tl.load(
+                    B_desc,
+                    offsets=(row_offsets, col_offsets),
+                    boundary_check=(0, 1),
+                    padding_option="zero",
+                )
+
+        acc += tl.dot(a_cur, b_cur, out_dtype=tl.float32)
+
+        if kt + 1 < K_tiles:
+            a_cur = a_next
+            b_cur = b_next
+
+    bias_vals = tl.load(
+        bias_ptr + offs_n * stride_bias,
+        mask=offs_n < N,
+        other=0.0,
+    ).to(tl.float32)
+    acc = acc + bias_vals[None, :]
+    acc = acc * (1.0 / (1.0 + tl.exp(-acc)))
+
+    c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
+    c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    tl.store(c_ptrs, acc, mask=c_mask)
+
+
+def tma_gemm_bias_silu(A: torch.Tensor, B: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+    """Matrix multiplication with fused bias+SiLU epilogue using TMA tensor descriptors."""
+    M, K = A.shape
+    K2, N = B.shape
+    assert K == K2, f"Incompatible dimensions: {K} != {K2}"
+    assert bias.dim() == 1 and bias.shape[0] == N, "bias shape mismatch"
+
+    C = torch.empty((M, N), device=A.device, dtype=torch.float32)
+
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']), triton.cdiv(N, META['BLOCK_N']))
+    tma_gemm_bias_silu_kernel[grid](
+        A, B, bias, C,
+        M, N, K,
+        A.stride(0), A.stride(1),
+        B.stride(0), B.stride(1),
+        bias.stride(0),
+        C.stride(0), C.stride(1),
+    )
+
     return C
 
 
@@ -342,7 +506,7 @@ def benchmark_tma_vs_standard(
         print(f"\n{'='*70}")
         print(f"Matrix Size: {size}x{size}")
         print(f"{'='*70}")
-        
+
         # Test 1: Matrix Copy
         print("\n[1/2] Testing Matrix Copy (TMA vs Standard)...")
         src = torch.randn(size, size, device=device, dtype=dtype)
@@ -365,30 +529,43 @@ def benchmark_tma_vs_standard(
         print("\n[2/2] Testing GEMM (TMA vs Standard)...")
         A = torch.randn(size, size, device=device, dtype=dtype)
         B = torch.randn(size, size, device=device, dtype=dtype)
-        
+
         # Pre-convert to float32 outside benchmark to avoid timing dtype conversions
         A_fp32 = A.float()
         B_fp32 = B.float()
-        
+        bias = torch.randn(size, device=device, dtype=dtype)
+
         tma_gemm_time = triton.testing.do_bench(lambda: tma_gemm(A, B), rep=num_iters) / 1000.0
         torch_gemm_time = triton.testing.do_bench(lambda: torch.matmul(A_fp32, B_fp32), rep=num_iters) / 1000.0
-        
 
         C_tma = tma_gemm(A, B)
         C_torch = torch.matmul(A_fp32, B_fp32)
-        
+
         flops = 2 * size ** 3
         tma_tflops = flops / tma_gemm_time / 1e12
         torch_tflops = flops / torch_gemm_time / 1e12
         speedup_gemm = torch_gemm_time / tma_gemm_time
-        
+
+        # Bias + SiLU variant
+        tma_bias_time = triton.testing.do_bench(
+            lambda: tma_gemm_bias_silu(A, B, bias), rep=num_iters
+        ) / 1000.0
+        bias_flops = flops + size * size * 6  # rough add+exp+mul cost
+        tma_bias_tflops = bias_flops / tma_bias_time / 1e12
+        C_bias = tma_gemm_bias_silu(A, B, bias)
+        C_ref = torch.matmul(A_fp32, B_fp32) + bias.float()
+        C_ref = torch.nn.functional.silu(C_ref)
+        max_bias_diff = torch.abs(C_bias - C_ref).max().item()
+
         print(f"  TMA GEMM:      {tma_gemm_time*1e3:.2f} ms ({tma_tflops:.2f} TFLOPS)")
         print(f"  PyTorch GEMM:  {torch_gemm_time*1e3:.2f} ms ({torch_tflops:.2f} TFLOPS)")
         print(f"  Speedup:       {speedup_gemm:.2f}x")
-        
+        print(f"  TMA GEMM + SiLU/bias: {tma_bias_time*1e3:.2f} ms ({tma_bias_tflops:.2f} TFLOPS)")
+        print(f"  Max Difference (bias+SiLU): {max_bias_diff:.2e}")
+
         max_diff = torch.abs(C_tma - C_torch).max().item()
         print(f"  Max Difference: {max_diff:.2e}")
-        
+
         results[size] = {
             'copy_speedup': speedup_copy,
             'copy_bandwidth_tma': tma_bw,
@@ -397,6 +574,8 @@ def benchmark_tma_vs_standard(
             'gemm_tflops_tma': tma_tflops,
             'gemm_tflops_torch': torch_tflops,
             'correctness': max_diff < 1e-2,
+            'bias_silu_correct': max_bias_diff < 1e-2,
+            'bias_silu_tflops': tma_bias_tflops,
         }
     
     print("\n" + "="*70)

@@ -332,7 +332,7 @@ You can turn the above inspirations into a concrete “baseline_ vs optimized_�
 
 | Component | `baseline_moe_inference.py` (pedagogical baseline_) | `optimized_moe_inference.py` (vLLM + Dynamo + SGLang inspired) |
 | --- | --- | --- |
-| Runtime core | PyTorch eager `generate()`; sequential prefill/ decode; experts colocated on two GPUs. | vLLM executor (`ch18/run_vllm_decoder.py`) with async event loop, request queues, CUDA Graph capture for hot paths. |
+| Runtime core | PyTorch eager `generate()`; sequential prefill/ decode; experts colocated on two GPUs. | vLLM V1 executor (`ch18/run_vllm_decoder.py`) on PyTorch 2.9 baseline with async event loop, request queues, and `FULL_AND_PIECEWISE` CUDA Graph capture as the default graph mode. |
 | Batching | Static batch at arrival (≤8 reqs), first-in-first-out scheduling, no prompt prefix consolidation. | Continuous batching with load-aware reordering. Adopt SGLang’s prefix tree to merge shared prompts and replay tokens once. |
 | Router | Top-1 gating, deterministic tie-breaks, no aux loss → straggler experts common. | Top-2 gating with capacity-factor penalties (`ch15/optimized_expert_parallelism.py`); enforce per-NVSwitch affinity to minimize cross-switch hops. |
 | Prefill vs decode | Single CUDA stream; decode blocked until prefill ends; tensor parallel only. | NVIDIA Dynamo-style disaggregation: 2 GPUs run prefill (tensor/sequence parallel), 2 GPUs run decode (token parallel). Controlled by `ch17/dynamic_routing.py`. |
@@ -340,7 +340,7 @@ You can turn the above inspirations into a concrete “baseline_ vs optimized_�
 | Speculative decoding | None; 1 token/iteration. | SGLang speculative draft with a 7B helper or reduced expert subset; accept tokens opportunistically to cut TTFT and boost TPOT. |
 | Expert compute | Experts pinned to GPU0/1; NCCL all-to-all blocking; no overlap with compute. | Expert-parallel groups across all GPUs; DualPipe overlap (`ch4/optimized_no_overlap.py`) and DeepEP-style PTX loads (`ch9`) keep copies off critical path. |
 | Communication | Default NCCL priorities; no pipelining with routing. | DualPipe-style overlap and priority-tuned NVLink lanes; optional NVSHMEM path for dispatcher buffers. |
-| Memory tactics | FP16 weights/activations; KV cache consumes ~55 GB at 32 k context; allocator fragmentation unchecked. | FP8 experts via TransformerEngine, KV cache compressed with `ch19/dynamic_quantized_cache.py` (FP8/FP4 mix), allocator tuned per `ch13/custom_allocator.py`. |
+| Memory tactics | FP16 weights/activations; KV cache consumes ~55 GB at 32 k context; allocator fragmentation unchecked. | FP8 experts via TransformerEngine, KV cache compressed with `ch19/dynamic_quantized_cache.py` (FP8/FP4 mix), allocator tuned per `ch13/custom_allocator.py`. PyTorch 2.9 is the tested serving stack for this graph mode until 2.10 reaches parity. |
 | Observability | PyTorch profiler trace only. | NVTX ranges for each stage, Nsight Systems + Nsight Compute captures, `tools/analysis/analyze_expectations.py` to track routing skew + TPOT in one JSON artifact. |
 
 ### Benchmark harness recipe

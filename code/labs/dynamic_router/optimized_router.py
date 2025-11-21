@@ -64,6 +64,7 @@ class GPUState:
     gpu_id: str
     is_prefill: bool
     is_decode: bool
+    hourly_cost: float
     metrics: GPUMetrics
     last_raw_metrics: Dict[str, float] = field(default_factory=dict)
 
@@ -114,7 +115,12 @@ class SequenceInfo:
 
 
 def default_scoring_fn(
-    gpu: GPUState, snap: Dict[str, float], *, role: str, kv_locality_boost: float = 0.0
+    gpu: GPUState,
+    snap: Dict[str, float],
+    *,
+    role: str,
+    kv_locality_boost: float = 0.0,
+    queue_weight: float = 1.0,
 ) -> float:
     """Higher is better."""
     ttft_ms = snap["ttft_ms"]
@@ -123,7 +129,7 @@ def default_scoring_fn(
     mem_free = snap["mem_free_gb"]
 
     inv_ttft = 1.0 / (1.0 + ttft_ms)
-    inv_qd = 1.0 / (1.0 + qd)
+    inv_qd = queue_weight / (1.0 + qd)
 
     if role == "prefill":
         score = (
@@ -165,6 +171,9 @@ class Router:
         migration_budget_per_window: int = 32,
         migration_window_seconds: float = 1.0,
         migration_min_score_gap: float = 0.5,
+        kv_locality_boost: float = 0.3,
+        queue_urgency: float = 1.0,
+        decode_cost_penalty: float = 0.0,
     ) -> None:
         self._gpus: Dict[str, GPUState] = {}
         self._scoring_fn_prefill = scoring_fn_prefill
@@ -177,14 +186,25 @@ class Router:
         self._migration_times: Deque[float] = deque()
 
         self._ewma_alpha = ewma_alpha
+        self._kv_locality_boost = kv_locality_boost
+        self._queue_urgency = queue_urgency
+        self._decode_cost_penalty = decode_cost_penalty
 
     # Registration
-    def register_gpu(self, gpu_id: str, *, is_prefill: bool, is_decode: bool) -> None:
+    def register_gpu(
+        self,
+        gpu_id: str,
+        *,
+        is_prefill: bool,
+        is_decode: bool,
+        hourly_cost: float = 1.0,
+    ) -> None:
         """Register a GPU in one or both pools."""
         if gpu_id in self._gpus:
             st = self._gpus[gpu_id]
             st.is_prefill = is_prefill
             st.is_decode = is_decode
+            st.hourly_cost = hourly_cost
             return
 
         metrics = GPUMetrics(
@@ -198,6 +218,7 @@ class Router:
             gpu_id=gpu_id,
             is_prefill=is_prefill,
             is_decode=is_decode,
+            hourly_cost=hourly_cost,
             metrics=metrics,
         )
 
@@ -214,14 +235,19 @@ class Router:
         snap = gpu.snapshot()
         if self._scoring_fn_prefill:
             return self._scoring_fn_prefill(gpu, snap)
-        return default_scoring_fn(gpu, snap, role="prefill")
+        return default_scoring_fn(gpu, snap, role="prefill", queue_weight=self._queue_urgency)
 
     def _score_decode_gpu(self, gpu: GPUState, kv_local: bool = False) -> float:
         snap = gpu.snapshot()
         if self._scoring_fn_decode:
-            return self._scoring_fn_decode(gpu, snap)
-        boost = 0.3 if kv_local else 0.0
-        return default_scoring_fn(gpu, snap, role="decode", kv_locality_boost=boost)
+            base = self._scoring_fn_decode(gpu, snap)
+        else:
+            base = default_scoring_fn(gpu, snap, role="decode", kv_locality_boost=0.0, queue_weight=self._queue_urgency)
+        kv_boost = self._kv_locality_boost if kv_local else 0.0
+        score = base + kv_boost
+        if self._decode_cost_penalty > 0.0:
+            score /= max(1e-6, gpu.hourly_cost ** self._decode_cost_penalty)
+        return score
 
     # Routing
     def choose_prefill_gpu(self) -> Optional[str]:

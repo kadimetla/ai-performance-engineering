@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shlex
 import signal
+import subprocess
 import sys
 import time
 import warnings
@@ -31,6 +32,15 @@ warnings.filterwarnings("ignore", message=".*Minimum and Maximum cuda capability
 repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
+
+UTILITY_SCRIPTS = {
+    "kv-cache": repo_root / "tools" / "utilities" / "kv_cache_calc.py",
+    "cost-per-token": repo_root / "tools" / "utilities" / "calculate_cost_per_token.py",
+    "compare-precision": repo_root / "tools" / "utilities" / "compare_precision_accuracy.py",
+    "detect-cutlass": repo_root / "tools" / "utilities" / "detect_cutlass_info.py",
+    "dump-hw": repo_root / "tools" / "utilities" / "dump_hardware_capabilities.py",
+    "probe-hw": repo_root / "tools" / "utilities" / "probe_hardware_capabilities.py",
+}
 
 
 def _expand_multi_value_option(option_names: List[str]) -> None:
@@ -134,6 +144,20 @@ def _apply_suite_timeout(seconds: Optional[int]) -> None:
 
     signal.signal(signal.SIGALRM, _on_timeout)
     signal.alarm(seconds)
+
+
+def _run_utility(tool: str, tool_args: Optional[List[str]]) -> int:
+    """Execute a utility script with passthrough arguments."""
+    script_path = UTILITY_SCRIPTS.get(tool)
+    if script_path is None:
+        raise ValueError(f"Unknown utility '{tool}'.")
+    if not script_path.exists():
+        raise FileNotFoundError(f"Utility script not found at {script_path}")
+
+    extra_args = tool_args or []
+    cmd = [sys.executable, str(script_path), *extra_args]
+    result = subprocess.run(cmd)
+    return result.returncode
 
 
 # Import architecture optimizations early
@@ -363,6 +387,31 @@ if TYPER_AVAILABLE:
 
         if not any_targets:
             typer.echo("No benchmark targets discovered.")
+
+    @app.command("utils")
+    def utils(
+        tool: str = Option(
+            ...,
+            "--tool",
+            "-u",
+            help=f"Utility to run. Available: {', '.join(sorted(UTILITY_SCRIPTS))}",
+        ),
+        tool_args: Optional[List[str]] = typer.Argument(
+            None,
+            help="Arguments forwarded to the utility (use -- to separate).",
+        ),
+    ):
+        """Run repository utilities (e.g., KV cache calculator) from one entrypoint."""
+        try:
+            exit_code = _run_utility(tool, tool_args)
+        except ValueError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1)
+        except FileNotFoundError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1)
+
+        raise typer.Exit(code=exit_code)
 
 
 def main():

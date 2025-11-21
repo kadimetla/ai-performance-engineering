@@ -27,6 +27,7 @@ from typing import Any, Callable, Optional, TypeVar, Union, cast
 
 import torch
 import torch.nn as nn
+from common.python.compile_utils import error_on_graph_break
 
 LayerSequence = Union[nn.ModuleList, nn.Sequential]
 
@@ -118,6 +119,7 @@ def safe_compile(
     timeout: Optional[int] = None,
     skip_if_large: bool = False,
     warn_on_skip: bool = True,
+    error_on_graph_break: Optional[bool] = None,
     **kwargs: Any
 ) -> nn.Module:
     """
@@ -161,15 +163,16 @@ def safe_compile(
         )
     
     def compile_target() -> nn.Module:
-        compiled_model = torch.compile(
-            model,
-            mode=mode,
-            fullgraph=fullgraph,
-            dynamic=dynamic,
-            backend=backend,
-            **kwargs
-        )
-        return cast(nn.Module, compiled_model)
+        with error_on_graph_break(error_on_graph_break):
+            compiled_model = torch.compile(
+                model,
+                mode=mode,
+                fullgraph=fullgraph,
+                dynamic=dynamic,
+                backend=backend,
+                **kwargs
+            )
+            return cast(nn.Module, compiled_model)
     
     try:
         # Attempt compilation with timeout

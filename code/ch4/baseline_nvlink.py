@@ -22,7 +22,7 @@ from common.python.benchmark_harness import (  # noqa: E402
 )
 
 
-class BaselineNvlinkBenchmark(BaseBenchmark):
+class BaselineNVLinkBenchmark(BaseBenchmark):
     """Baseline: PCIe-based communication (no NVLink).
     
     NVLink: This baseline does not use NVLink for high-speed GPU-to-GPU communication.
@@ -102,7 +102,7 @@ class BaselineNvlinkBenchmark(BaseBenchmark):
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
-    return BaselineNvlinkBenchmark()
+    return BaselineNVLinkBenchmark()
 
 
 def main() -> None:
@@ -113,7 +113,7 @@ def main() -> None:
         mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(iterations=50, warmup=5)
     )
-    benchmark = BaselineNvlinkBenchmark()
+    benchmark = BaselineNVLinkBenchmark()
     result = harness.benchmark(benchmark)
     
     print("=" * 70)

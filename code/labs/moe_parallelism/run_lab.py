@@ -24,6 +24,12 @@ from labs.moe_parallelism.baseline_memory_budget import get_benchmark as baselin
 from labs.moe_parallelism.optimized_memory_budget import get_benchmark as optimized_memory
 from labs.moe_parallelism.baseline_network_affinity import get_benchmark as baseline_network
 from labs.moe_parallelism.optimized_network_affinity import get_benchmark as optimized_network
+from labs.moe_parallelism.baseline_gpt_gb200 import get_benchmark as baseline_gpt_gb200
+from labs.moe_parallelism.optimized_gpt_gb200 import get_benchmark as optimized_gpt_gb200
+from labs.moe_parallelism.baseline_deepseek_gb200 import get_benchmark as baseline_deepseek_gb200
+from labs.moe_parallelism.optimized_deepseek_gb200 import get_benchmark as optimized_deepseek_gb200
+from labs.moe_parallelism.baseline_moe_vllm_env import get_benchmark as baseline_moe_env
+from labs.moe_parallelism.optimized_moe_vllm_env import get_benchmark as optimized_moe_env
 
 
 SCENARIOS: List[Tuple[str, Callable[[], PlanBenchmark]]] = [
@@ -37,6 +43,12 @@ SCENARIOS: List[Tuple[str, Callable[[], PlanBenchmark]]] = [
     ("optimized_memory_budget", optimized_memory),
     ("baseline_network_affinity", baseline_network),
     ("optimized_network_affinity", optimized_network),
+    ("baseline_gpt_gb200", baseline_gpt_gb200),
+    ("optimized_gpt_gb200", optimized_gpt_gb200),
+    ("baseline_deepseek_gb200", baseline_deepseek_gb200),
+    ("optimized_deepseek_gb200", optimized_deepseek_gb200),
+    ("baseline_moe_vllm_env", baseline_moe_env),
+    ("optimized_moe_vllm_env", optimized_moe_env),
 ]
 
 

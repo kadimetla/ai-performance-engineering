@@ -1,0 +1,9 @@
+{
+  "method": "n_gram_lookup",
+  "draft_model": "SimpleMoEGPT-draft",
+  "verifier_model": "SimpleMoEGPT-target",
+  "chunk_size": 6,
+  "max_spec_tokens": 8,
+  "acceptance_target": 0.7,
+  "fallback_chunk_size": 3
+}

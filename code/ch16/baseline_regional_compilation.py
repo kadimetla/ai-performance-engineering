@@ -14,6 +14,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from common.python import compile_utils as _compile_utils_patch  # noqa: F401
+from common.python.compile_utils import error_on_graph_break, maybe_nested_compile_region  # noqa: E402
 from common.python.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -53,8 +54,13 @@ class DummyTransformer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         for layer in self.layers:
-            x = x + layer(x)
+            x = x + _run_layer(layer, x)
         return x
+
+
+@maybe_nested_compile_region
+def _run_layer(layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    return layer(x)
 
 
 class BaselineRegionalCompilationBenchmark(BaseBenchmark):
@@ -109,8 +115,9 @@ class BaselineRegionalCompilationBenchmark(BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("baseline_regional_compilation", enable=enable_nvtx):
             try:
-                compiled = torch.compile(self.model, mode="max-autotune")  # type: ignore[attr-defined]
-                _ = compiled(self.inputs)
+                with error_on_graph_break(True):
+                    compiled = torch.compile(self.model, mode="max-autotune")  # type: ignore[attr-defined]
+                _ = compiled(self.inputs)  # type: ignore[misc]
             except Exception:
                 # Show the pitfall rather than failing the harness run
                 pass

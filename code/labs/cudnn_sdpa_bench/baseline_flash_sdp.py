@@ -1,0 +1,215 @@
+"""cuDNN vs Flash SDP attention microbenchmark lab."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+from typing import List, Optional
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.backends.cuda import SDPAParams, can_use_cudnn_attention
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
+
+_CLI_BACKEND: Optional[str] = None
+_BACKEND_CHOICES = ("auto", "cudnn", "flash", "math")
+
+
+def _resolve_backend(cli_choice: Optional[str] = None) -> str:
+    """Resolve backend selection from an explicit CLI choice or default to auto."""
+    if cli_choice in _BACKEND_CHOICES:
+        return cli_choice  # type: ignore[return-value]
+    return "auto"
+
+
+def _select_backend(requested: Optional[str]) -> str:
+    """Choose a backend, falling back when cuDNN is unsupported."""
+    backend = _resolve_backend(requested).lower()
+    if backend != "cudnn":
+        return backend
+    if not torch.cuda.is_available():
+        return "flash"
+    try:
+        q = torch.randn(1, 1, 4, 64, device="cuda", dtype=torch.float16)
+        params = SDPAParams(q, q, q, None, 0.0, False, False)
+        if not can_use_cudnn_attention(params, False):
+            return "flash"
+    except Exception:
+        return "flash"
+    return backend
+
+
+def _sdpa_context(backend: str):
+    """Return the configured SDPA context."""
+    backend = backend.lower()
+    if backend == "cudnn":
+        preference = []
+        for name in ("CUDNN_ATTENTION", "FLASH_ATTENTION", "EFFICIENT_ATTENTION"):
+            if hasattr(SDPBackend, name):
+                preference.append(getattr(SDPBackend, name))
+        return sdpa_kernel(preference)
+    if backend == "flash":
+        return sdpa_kernel([SDPBackend.FLASH_ATTENTION])
+    if backend == "math":
+        # Prefer new API if available; otherwise fall back to legacy toggle.
+        if hasattr(SDPBackend, "MATH"):
+            return sdpa_kernel([getattr(SDPBackend, "MATH")])
+        return torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True)
+
+    # Auto: try cuDNN, then Flash, then efficient attention.
+    preference = []
+    for name in ("CUDNN_ATTENTION", "FLASH_ATTENTION", "EFFICIENT_ATTENTION"):
+        if hasattr(SDPBackend, name):
+            preference.append(getattr(SDPBackend, name))
+    return sdpa_kernel(preference)
+
+
+def _ensure_backend_available(backend: str) -> None:
+    """Fail fast by actually invoking the selected backend."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("SDP benchmark requires a CUDA device.")
+    q = torch.randn(1, 1, 4, 64, device="cuda", dtype=torch.float16)
+    with _sdpa_context(backend):
+        _ = F.scaled_dot_product_attention(q, q, q, is_causal=False)
+    torch.cuda.synchronize()
+
+
+class SDPAAttentionModule(nn.Module):
+    """Minimal attention block with selectable SDP backend."""
+
+    def __init__(self, hidden_dim: int = 512, num_heads: int = 8, backend: str = "auto"):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.backend = backend
+        self.qkv = nn.Linear(hidden_dim, hidden_dim * 3, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, _ = x.shape
+        qkv = self.qkv(x)
+        qkv = qkv.view(B, T, 3, self.num_heads, self.hidden_dim // self.num_heads)
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        with _sdpa_context(self.backend):
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+        out = out.transpose(1, 2).reshape(B, T, self.hidden_dim)
+        return out
+
+
+class FlashSDPLabBenchmark(BaseBenchmark):
+    """Runs SDPA attention with selectable backend for cuDNN versus Flash comparisons."""
+
+    def __init__(self, backend: Optional[str] = None):
+        super().__init__()
+        self.model: Optional[SDPAAttentionModule] = None
+        self.inputs: Optional[torch.Tensor] = None
+        self.seq_len = 256
+        self.batch = 8
+        self.hidden = 512
+        self.backend = _select_backend(backend or _CLI_BACKEND)
+        tokens = self.batch * self.seq_len
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
+
+    def setup(self) -> None:
+        _ensure_backend_available(self.backend)
+        torch.manual_seed(0)
+        self.model = SDPAAttentionModule(hidden_dim=self.hidden, num_heads=8, backend=self.backend).to(
+            self.device, dtype=torch.float16
+        )
+        self.inputs = torch.randn(self.batch, self.seq_len, self.hidden, device=self.device, dtype=torch.float16)
+        torch.cuda.synchronize(self.device)
+
+    def benchmark_fn(self) -> None:
+        if self.model is None or self.inputs is None:
+            raise RuntimeError("Model/inputs not initialized")
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+        nvtx_label = f"sdp_{self.backend}_baseline"
+        with nvtx_range(nvtx_label, enable=enable_nvtx):
+            _ = self.model(self.inputs)
+        torch.cuda.synchronize(self.device)
+
+    def teardown(self) -> None:
+        self.model = None
+        self.inputs = None
+        torch.cuda.empty_cache()
+
+    def validate_result(self) -> Optional[str]:
+        if self.model is None or self.inputs is None:
+            return "Model/inputs not initialized"
+        return None
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(
+            iterations=1,
+            warmup=1,
+            enable_profiling=False,
+            enable_nsys=False,
+            enable_ncu=False,
+            use_subprocess=False,
+            measurement_timeout_seconds=30,
+            setup_timeout_seconds=30,
+        )
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
+
+    def get_custom_metrics(self) -> Optional[dict]:
+        return {"backend": self.backend}
+
+    # Harness hook: apply per-target CLI args (e.g., --backend cudnn)
+    def apply_target_overrides(self, argv: List[str]) -> None:
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument(
+            "--backend",
+            choices=_BACKEND_CHOICES,
+            default=None,
+            help="Select SDP backend: auto (cuDNN->Flash), cudnn, flash, or math",
+        )
+        args, _ = parser.parse_known_args(argv)
+        if args.backend:
+            self.backend = _select_backend(args.backend)
+
+
+def get_benchmark() -> BaseBenchmark:
+    return FlashSDPLabBenchmark()
+
+
+def _parse_cli_backend(argv: Optional[list[str]] = None) -> Optional[str]:
+    parser = argparse.ArgumentParser(description="cuDNN vs Flash SDP lab")
+    parser.add_argument(
+        "--backend",
+        choices=_BACKEND_CHOICES,
+        default=None,
+        help="Select SDP backend: auto (cuDNN->Flash), cudnn, flash, or math",
+    )
+    args, _ = parser.parse_known_args(argv)
+    return args.backend
+
+
+if __name__ == "__main__":
+    choice = _parse_cli_backend()
+    if choice:
+        _CLI_BACKEND = choice
+    bench = get_benchmark()
+    harness_cfg = bench.get_config()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=harness_cfg)
+    result = harness.benchmark(bench)
+    print(
+        f"[cudnn_sdpa_bench backend={bench.backend}] mean iteration "
+        f"{result.timing.mean_ms if result and result.timing else 0.0:.3f} ms"
+    )

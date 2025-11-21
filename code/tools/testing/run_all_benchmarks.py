@@ -1676,6 +1676,9 @@ def _test_chapter_impl(
         )
 
     # Create harness for Python benchmarks with explicit timeout to prevent hangs
+    cli_iterations_provided = iterations is not None
+    cli_warmup_provided = warmup is not None
+
     if iterations is None:
         iterations = 20
     if warmup is None:
@@ -1724,6 +1727,10 @@ def _test_chapter_impl(
                             **(getattr(merged, "target_extra_args", {}) or {}),
                             **value,
                         }
+                    continue
+                if field.name == "iterations" and cli_iterations_provided:
+                    continue
+                if field.name == "warmup" and cli_warmup_provided:
                     continue
                 if field.name == "env_passthrough" and not value:
                     continue

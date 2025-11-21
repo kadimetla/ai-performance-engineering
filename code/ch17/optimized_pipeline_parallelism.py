@@ -2,28 +2,39 @@
 
 from __future__ import annotations
 
+import argparse
 from typing import Optional, List
 
 import torch
 import torch.nn as nn
 
 from common.python.compile_utils import enable_tf32
-from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from common.python.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+    WorkloadMetadata,
+)
 
 
 class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
     """Optimized: Pipeline parallelism with layers split across GPUs."""
 
-    def __init__(self):
+    def __init__(self, micro_batches: Optional[int] = None):
         super().__init__()
         self.pipeline_stages: List[nn.Module] = []
         self.hidden_size = 1024
         self.batch_size = 256
         self.micro_batches = 4
+        if micro_batches is not None:
+            self.micro_batches = max(1, int(micro_batches))
         self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
         self.stage_streams: List[torch.cuda.Stream] = []
         self.stage_events: List[List[torch.cuda.Event]] = []
         self.microbatch_inputs: Optional[List[torch.Tensor]] = None
+        self._last_stage_durations_ms: List[float] = []
+        self._bubble_fraction: float = 0.0
         tokens = self.batch_size * self.hidden_size
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.micro_batches),
@@ -59,6 +70,12 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
             [torch.cuda.Event(enable_timing=False) for _ in range(self.micro_batches)]
             for _ in self.pipeline_stages
         ]
+        # Refresh workload metadata to reflect the possibly overridden microbatch count.
+        tokens = self.batch_size * self.hidden_size
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.micro_batches),
+            tokens_per_iteration=float(tokens),
+        )
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -66,6 +83,7 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
             raise RuntimeError("Pipeline not initialized")
 
         num_stages = len(self.pipeline_stages)
+        self._last_stage_durations_ms = [0.0 for _ in range(num_stages)]
         stage_buffers: List[List[Optional[torch.Tensor]]] = [
             [None for _ in range(self.micro_batches)] for _ in range(num_stages + 1)
         ]
@@ -87,7 +105,10 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
                             x = stage_buffers[stage_idx][chunk_idx]
                             if x is None:
                                 continue
-                            out = stage(x.to(stage_devices[stage_idx]))
+                            stage_start = self._record_start()
+                            with self._nvtx_range(f"stage{stage_idx}_mb{chunk_idx}"):
+                                out = stage(x.to(stage_devices[stage_idx]))
+                            self._last_stage_durations_ms[stage_idx] += self._record_stop(stage_start)
                             next_stage_idx = stage_idx + 1
                             if next_stage_idx < len(stage_devices):
                                 next_device = stage_devices[next_stage_idx]
@@ -99,6 +120,8 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
         for stream in self.stage_streams:
             stream.synchronize()
         self._synchronize()
+        # Bubble fraction approximates fill/drain overhead: (S-1)/M
+        self._bubble_fraction = (num_stages - 1) / float(self.micro_batches)
 
     def teardown(self) -> None:
         self.pipeline_stages = []
@@ -113,6 +136,22 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
             warmup=2,
         )
 
+    def get_custom_metrics(self) -> Optional[dict]:
+        """Expose bubble math and per-stage timing to spot imbalance."""
+        if not self._last_stage_durations_ms:
+            return None
+        max_stage = max(self._last_stage_durations_ms)
+        min_stage = min(self._last_stage_durations_ms)
+        imbalance = (max_stage / min_stage) if min_stage > 0 else float("inf")
+        return {
+            "pipeline_stages": len(self._last_stage_durations_ms),
+            "microbatches": self.micro_batches,
+            "bubble_fraction": self._bubble_fraction,
+            "stage_time_max_ms": max_stage,
+            "stage_time_min_ms": min_stage,
+            "stage_imbalance_ratio": imbalance,
+        }
+
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
 
@@ -125,3 +164,25 @@ class OptimizedPipelineParallelismBenchmark(BaseBenchmark):
 def get_benchmark() -> OptimizedPipelineParallelismBenchmark:
     """Factory function for harness discovery."""
     return OptimizedPipelineParallelismBenchmark()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Optimized pipeline parallel benchmark")
+    parser.add_argument(
+        "--microbatches",
+        type=int,
+        default=None,
+        help="Number of microbatches to pipeline (default: 4)",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    benchmark = OptimizedPipelineParallelismBenchmark(micro_batches=args.microbatches)
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=benchmark.get_config(),
+    )
+    result = harness.benchmark(benchmark)
+    print(result)

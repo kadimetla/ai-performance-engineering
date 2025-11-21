@@ -57,9 +57,9 @@ class BenchmarkDefaults:
     seed: Optional[int] = 1337
     
     # Timeout defaults (in seconds)
-    setup_timeout_seconds: Optional[int] = 30
+    setup_timeout_seconds: Optional[int] = 60
     warmup_timeout_seconds: Optional[int] = None  # Defaults to measurement_timeout
-    measurement_timeout_seconds: int = 15
+    measurement_timeout_seconds: int = 180
     profiling_timeout_seconds: Optional[int] = None  # Defaults to max(nsys, ncu)
     nsys_timeout_seconds: int = 120
     ncu_timeout_seconds: int = 180
@@ -68,7 +68,7 @@ class BenchmarkDefaults:
     ncu_sampling_interval: int = 75000
     
     # Legacy timeout (deprecated)
-    timeout_seconds: int = 15
+    timeout_seconds: int = 180
     
     # Output defaults
     profiling_output_dir: Optional[str] = None

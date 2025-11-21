@@ -4,6 +4,8 @@ file_inventory.csv
 third_party/wheels/torch-*.whl
 third_party/wheels/transformer_engine-*.whl
 third_party/wheels/flash_attn*.whl
+third_party/wheels/vllm*.whl
+third_party/vllm-src/
 benchmark_test_results.json
 benchmark_test_results.md
 benchmark_status_table.json
@@ -15,6 +17,7 @@ results_all/
 results_ch1/
 results_ch20/
 synthetic_moe_results.json
+accuracy_test_results_*/
 tmp_bench_ch20/
 tmp_results/
 tmp_profiles/

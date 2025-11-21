@@ -1,0 +1,13 @@
+{
+  "examples": {
+    "async_input_pipeline": {
+      "example": "async_input_pipeline",
+      "type": "python",
+      "metrics": {},
+      "metadata": {
+        "git_commit": "",
+        "updated_at": ""
+      }
+    }
+  }
+}

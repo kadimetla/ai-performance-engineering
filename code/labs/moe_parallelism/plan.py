@@ -104,6 +104,18 @@ def _build_spec_presets() -> Dict[str, Tuple[ClusterSpec, ModelSpec]]:
         ffn_expansion=4,
         dtype_bytes=2,
     )
+    deepseek_model = ModelSpec(
+        name="DeepSeek-R1-678B MoE",
+        params_billion=678.0,
+        hidden_size=14336,
+        sequence_length=4096,
+        layers=128,
+        moe_layers=48,
+        experts_total=256,
+        router_topk=2,
+        ffn_expansion=4,
+        dtype_bytes=2,
+    )
     dgx_cluster = ClusterSpec(
         name="DGX A100 (16 nodes, dual HDR100)",
         nodes=16,
@@ -128,6 +140,7 @@ def _build_spec_presets() -> Dict[str, Tuple[ClusterSpec, ModelSpec]]:
     return {
         "gpt_oss_120b_gb200_ib": (gpt_cluster_ib, gpt_model),
         "gpt_oss_120b_gb200_ethernet": (gpt_cluster_eth, gpt_model),
+        "deepseek_r1_678b_gb200_ib": (gpt_cluster_ib, deepseek_model),
         "dgx_a100_175b": (dgx_cluster, dgx_model),
     }
 

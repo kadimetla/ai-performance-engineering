@@ -1,0 +1,320 @@
+"""Optimized MXFP8 MoE microbenchmark using Transformer Engine grouped GEMMs."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from common.python import logger  # noqa: E402
+from common.python.benchmark_harness import (  # noqa: E402
+    BaseBenchmark,
+    BenchmarkConfig,
+    BenchmarkHarness,
+    BenchmarkMode,
+)
+from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from ch19 import arch_config  # noqa: E402
+from ch19.mxfp8_moe_common import (  # noqa: E402
+    MX_BLOCK_SIZE,
+    balanced_assignments,
+    bucket_by_expert,
+    require_blackwell,
+    restore_bucketed_reduce,
+)
+
+try:
+    from transformer_engine.pytorch.module import GroupedLinear  # type: ignore
+    from transformer_engine.pytorch import autocast as te_autocast  # type: ignore
+    from transformer_engine.pytorch import quantized_model_init  # type: ignore
+    from transformer_engine.common import recipe as te_recipe  # type: ignore
+
+    TE_AVAILABLE = True
+    TE_IMPORT_ERROR: Optional[Exception] = None
+except Exception as exc:  # pragma: no cover
+    TE_AVAILABLE = False
+    TE_IMPORT_ERROR = exc
+    GroupedLinear = te_autocast = quantized_model_init = te_recipe = None  # type: ignore
+
+_log = logger.get_logger(__name__)
+
+
+class OptimizedMXFP8MoEBenchmark(BaseBenchmark):
+    """MXFP8 MoE forward path with grouped GEMMs and fused quantization in TE."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.num_tokens = 4096
+        self.hidden_dim = 4096
+        self.ffn_dim = 14336
+        self.num_experts = 8
+        flags = self._parse_flags()
+        self.top_k = max(1, flags.top_k)
+        self.use_cuda_graphs = bool(flags.cuda_graphs)
+        self.inputs: Optional[torch.Tensor] = None
+        self.assignments: Optional[torch.Tensor] = None
+        self.bucketed_inputs: Optional[torch.Tensor] = None
+        self.bucket_indices: Optional[torch.Tensor] = None
+        self.expert_order: Optional[torch.Tensor] = None
+        self.bucket_token_ids: Optional[torch.Tensor] = None
+        self.gating_weights: Optional[torch.Tensor] = None
+        self.m_splits: List[int] = []
+        self.weights: Optional[torch.Tensor] = None
+        self.layer: Optional[GroupedLinear] = None
+        self.recipe = te_recipe.MXFP8BlockScaling(fp8_format=te_recipe.Format.E4M3) if TE_AVAILABLE else None
+        self._graph: Optional[torch.cuda.CUDAGraph] = None
+        self._graph_out: Optional[torch.Tensor] = None
+        self._graph_weight: Optional[torch.Tensor] = None
+
+    @staticmethod
+    def _parse_flags(argv: Optional[List[str]] = None) -> argparse.Namespace:
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--top-k", type=int, default=1, help="Top-k experts to route per token.")
+        parser.add_argument(
+            "--cuda-graphs",
+            action="store_true",
+            help="Enable CUDA Graph capture/replay for the grouped GEMM path.",
+        )
+        args, _ = parser.parse_known_args(argv)
+        return args
+
+    def _supergroup_tokens(
+        self,
+        bucketed: torch.Tensor,
+        m_splits: List[int],
+        bucket_indices: torch.Tensor,
+        expert_order: torch.Tensor,
+        bucket_token_ids: torch.Tensor,
+        gating_weights: torch.Tensor,
+    ) -> Tuple[torch.Tensor, List[int], torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Reorder experts by bucket size to improve L2 reuse."""
+        offsets: List[Tuple[int, int]] = []
+        cursor = 0
+        for m in m_splits:
+            offsets.append((cursor, cursor + m))
+            cursor += m
+        order = sorted(range(len(m_splits)), key=lambda i: m_splits[i], reverse=True)
+        reordered_inputs: List[torch.Tensor] = []
+        reordered_indices: List[torch.Tensor] = []
+        reordered_splits: List[int] = []
+        reordered_experts: List[int] = []
+        reordered_token_ids: List[torch.Tensor] = []
+        reordered_weights: List[torch.Tensor] = []
+        for idx in order:
+            start, end = offsets[idx]
+            reordered_inputs.append(bucketed.narrow(0, start, m_splits[idx]))
+            reordered_indices.append(bucket_indices.narrow(0, start, m_splits[idx]))
+            reordered_splits.append(m_splits[idx])
+            reordered_experts.append(expert_order[idx].item())
+            reordered_token_ids.append(bucket_token_ids.narrow(0, start, m_splits[idx]))
+            reordered_weights.append(gating_weights.narrow(0, start, m_splits[idx]))
+        new_bucketed = torch.cat(reordered_inputs, dim=0)
+        new_indices = torch.cat(reordered_indices, dim=0)
+        new_order = torch.tensor(reordered_experts, device=bucketed.device, dtype=torch.int64)
+        new_token_ids = torch.cat(reordered_token_ids, dim=0)
+        new_weights = torch.cat(reordered_weights, dim=0)
+        return new_bucketed, reordered_splits, new_indices, new_order, new_token_ids, new_weights
+
+    def _maybe_log_missing_te(self) -> None:
+        if TE_AVAILABLE:
+            return
+        raise RuntimeError(
+            f"Transformer Engine is required for optimized MXFP8 benchmarks: {TE_IMPORT_ERROR}"
+        )
+
+    def setup(self) -> None:
+        require_blackwell("ch19 optimized_mxfp8_moe")
+        self._maybe_log_missing_te()
+        if not arch_config.USE_TE_FP8:
+            raise RuntimeError("MXFP8 path disabled via arch_config.USE_TE_FP8.")
+        torch.manual_seed(7)
+        self.inputs = torch.randn(
+            self.num_tokens, self.hidden_dim, device=self.device, dtype=torch.bfloat16
+        )
+        self.weights = torch.randn(
+            self.num_experts, self.ffn_dim, self.hidden_dim, device=self.device, dtype=torch.bfloat16
+        )
+        base_assign = balanced_assignments(
+            num_tokens=self.num_tokens, num_experts=self.num_experts, device=self.device
+        )
+        top_k = max(1, int(self.top_k))
+        if top_k == 1:
+            assignments = base_assign
+            expanded_inputs = self.inputs
+            token_ids = torch.arange(self.num_tokens, device=self.device, dtype=torch.int64)
+            gating_weights = torch.ones(self.num_tokens, device=self.device, dtype=torch.float16)
+        else:
+            expert_matrix = [(base_assign + offset) % self.num_experts for offset in range(top_k)]
+            assignments = torch.stack(expert_matrix, dim=-1).reshape(-1)
+            expanded_inputs = self.inputs.repeat_interleave(top_k, dim=0)
+            token_ids = torch.arange(self.num_tokens, device=self.device, dtype=torch.int64).repeat_interleave(
+                top_k
+            )
+            gating_weights = torch.full(
+                (self.num_tokens * top_k,),
+                1.0 / float(top_k),
+                device=self.device,
+                dtype=torch.float16,
+            )
+        self.assignments = assignments
+        bucketed, m_splits, bucket_indices, expert_order, bucket_token_ids = bucket_by_expert(
+            expanded_inputs,
+            assignments,
+            num_experts=self.num_experts,
+            token_ids=token_ids,
+        )
+        bucketed, m_splits, bucket_indices, expert_order, bucket_token_ids, gating_weights = self._supergroup_tokens(
+            bucketed, m_splits, bucket_indices, expert_order, bucket_token_ids, gating_weights
+        )
+        self.bucketed_inputs = bucketed
+        self.bucket_indices = bucket_indices
+        self.expert_order = expert_order
+        self.bucket_token_ids = bucket_token_ids
+        self.gating_weights = gating_weights
+        self.m_splits = m_splits
+
+        ordered_weights = self.weights.index_select(0, self.expert_order)
+        with quantized_model_init(enabled=True, recipe=self.recipe):
+            self.layer = GroupedLinear(
+                num_gemms=len(self.m_splits),
+                in_features=self.hidden_dim,
+                out_features=self.ffn_dim,
+                bias=False,
+                params_dtype=torch.bfloat16,
+            ).to(self.device)
+            with torch.no_grad():
+                for idx in range(len(self.m_splits)):
+                    weight_param = getattr(self.layer, f"weight{idx}")
+                    weight_param.copy_(ordered_weights[idx])
+
+        self._calibrate_fp8()
+        if self.use_cuda_graphs:
+            self._capture_graph()
+        self.register_workload_metadata(tokens_per_iteration=float(self.num_tokens))
+        torch.cuda.synchronize(self.device)
+
+    def _calibrate_fp8(self) -> None:
+        if self.layer is None or self.bucketed_inputs is None:
+            return
+        with te_autocast(enabled=True, recipe=self.recipe, calibrating=True):
+            _ = self.layer(
+                self.bucketed_inputs,
+                self.m_splits,
+                is_first_microbatch=True,
+            )
+        torch.cuda.synchronize(self.device)
+
+    def _forward_grouped(self) -> torch.Tensor:
+        assert (
+            self.layer is not None
+            and self.bucketed_inputs is not None
+            and self.bucket_indices is not None
+            and self.bucket_token_ids is not None
+            and self.gating_weights is not None
+        )
+        with te_autocast(enabled=True, recipe=self.recipe):
+            bucketed_out = self.layer(
+                self.bucketed_inputs,
+                self.m_splits,
+                is_first_microbatch=False,
+            )
+        return restore_bucketed_reduce(
+            bucketed_out,
+            self.bucket_token_ids,
+            num_tokens=self.num_tokens,
+            weights=self.gating_weights,
+        )
+
+    def _capture_graph(self) -> None:
+        assert self.bucket_token_ids is not None and self.gating_weights is not None
+        self._graph = torch.cuda.CUDAGraph()
+        self._graph_out = torch.empty(
+            (self.num_tokens, self.ffn_dim), device=self.device, dtype=torch.float16
+        )
+        self._graph_weight = torch.empty((self.num_tokens,), device=self.device, dtype=torch.float16)
+        torch.cuda.synchronize(self.device)
+        with torch.cuda.graph(self._graph):
+            with te_autocast(enabled=True, recipe=self.recipe):
+                bucketed_out = self.layer(  # type: ignore[arg-type]
+                    self.bucketed_inputs,  # type: ignore[arg-type]
+                    self.m_splits,
+                    is_first_microbatch=False,
+                )
+            restore_bucketed_reduce(
+                bucketed_out,
+                self.bucket_token_ids,
+                num_tokens=self.num_tokens,
+                weights=self.gating_weights,
+                out=self._graph_out,
+                weight_out=self._graph_weight,
+            )
+
+    def benchmark_fn(self) -> None:
+        enable_nvtx = get_nvtx_enabled(self.get_config())
+        with nvtx_range("mxfp8_moe_optimized", enable=enable_nvtx):
+            if self.use_cuda_graphs and self._graph is not None and self._graph_out is not None:
+                self._graph.replay()
+            else:
+                _ = self._forward_grouped()
+        self._synchronize()
+
+    def teardown(self) -> None:
+        self.inputs = None
+        self.weights = None
+        self.assignments = None
+        self.bucketed_inputs = None
+        self.bucket_indices = None
+        self.expert_order = None
+        self.bucket_token_ids = None
+        self.gating_weights = None
+        self.m_splits = []
+        self.layer = None
+        self._graph = None
+        self._graph_out = None
+        self._graph_weight = None
+        torch.cuda.empty_cache()
+
+    def validate_result(self) -> Optional[str]:
+        if self.layer is None or self.bucketed_inputs is None:
+            return "Layer not initialized"
+        if any(m == 0 for m in self.m_splits):
+            return "Empty expert bucket detected"
+        return None
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(
+            iterations=10,
+            warmup=3,
+            deterministic=False,
+            enable_nvtx=True,
+            measurement_timeout_seconds=90,
+        )
+
+    def get_custom_metrics(self) -> Optional[Dict[str, float]]:
+        return {
+            "mxfp8_optimized.tokens": float(self.num_tokens),
+            "mxfp8_optimized.experts": float(self.num_experts),
+            "mxfp8_optimized.hidden_dim": float(self.hidden_dim),
+            "mxfp8_optimized.block": float(MX_BLOCK_SIZE),
+            "mxfp8_optimized.top_k": float(max(1, int(self.top_k))),
+            "mxfp8_optimized.cuda_graphs": float(1 if self.use_cuda_graphs else 0),
+        }
+
+
+def get_benchmark() -> BaseBenchmark:
+    return OptimizedMXFP8MoEBenchmark()
+
+
+if __name__ == "__main__":
+    benchmark = get_benchmark()
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=benchmark.get_config())
+    result = harness.benchmark(benchmark)
+    mean_ms = result.timing.mean_ms if result.timing else 0.0
+    print(f"Optimized MXFP8 MoE: {mean_ms:.3f} ms")

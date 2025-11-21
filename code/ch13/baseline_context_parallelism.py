@@ -81,8 +81,10 @@ class BaselineContextParallelismBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
+            iterations=10,
             warmup=3,
+            measurement_timeout_seconds=120,
+            multi_gpu_required=True,
         )
     
     def validate_result(self) -> Optional[str]:

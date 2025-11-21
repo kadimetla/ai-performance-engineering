@@ -5,7 +5,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 cd "${REPO_ROOT}"
 
 # Color output
@@ -25,7 +26,7 @@ echo ""
 
 # Step 1: Create evaluation datasets
 echo "Step 1: Creating evaluation datasets..."
-python3 tools/create_eval_datasets.py \
+python3 tools/utilities/create_eval_datasets.py \
     --output-dir "$RESULTS_DIR/eval_datasets" \
     --vocab-size 50000 \
     --num-tokens 20000
@@ -42,7 +43,7 @@ for dataset in "$RESULTS_DIR/eval_datasets"/*.txt; do
         echo "  Testing dataset: $dataset_name"
         
         # Run comparison
-        if python3 tools/compare_precision_accuracy.py \
+        if python3 tools/utilities/compare_precision_accuracy.py \
             --dataset "$dataset" \
             --precisions fp16 bf16 \
             --seq-len 256 \
@@ -165,5 +166,3 @@ echo "  - comparison_*.md: Per-dataset comparisons"
 echo "  - comparison_*.json: Raw metrics"
 echo "  - eval_datasets/: Generated test datasets"
 echo ""
-
-

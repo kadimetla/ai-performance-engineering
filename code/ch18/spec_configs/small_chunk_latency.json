@@ -1,0 +1,9 @@
+{
+  "method": "draft_model",
+  "draft_model": "SimpleMoEGPT-draft",
+  "verifier_model": "SimpleMoEGPT-target",
+  "chunk_size": 2,
+  "max_spec_tokens": 3,
+  "acceptance_target": 0.5,
+  "fallback_chunk_size": 1
+}

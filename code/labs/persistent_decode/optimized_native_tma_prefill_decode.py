@@ -7,6 +7,7 @@ import torch
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from labs.persistent_decode.persistent_decode_common import (
     build_inputs,
+    get_stream_priorities,
     resolve_device,
     resolve_shapes,
     tokens_per_iteration,
@@ -32,7 +33,9 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
         self.prefill_chunks = 8
         self.prefill_chunk_elems = 128 * 128
         self.cfg = NativeTmaBurstConfig()
-        self.prefill_streams = [torch.cuda.Stream() for _ in range(self.cfg.max_in_flight)]
+        self._prio_low, self._prio_high = get_stream_priorities()
+        self.prefill_streams = [torch.cuda.Stream(priority=self._prio_low) for _ in range(self.cfg.max_in_flight)]
+        self.decode_stream = torch.cuda.Stream(priority=self._prio_high)
         self.decode_graph = torch.cuda.CUDAGraph()
         self.graph_q = None
         self.graph_k = None
@@ -54,9 +57,8 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
         self.graph_v = self.inputs.v.clone()
         self.graph_out = torch.zeros_like(self.inputs.out)
 
-        capture_stream = torch.cuda.Stream()
         torch.cuda.synchronize()
-        with torch.cuda.graph(self.decode_graph, stream=capture_stream):
+        with torch.cuda.graph(self.decode_graph, stream=self.decode_stream):
             self._decode_body(self.graph_q, self.graph_k, self.graph_v, self.graph_out)
         torch.cuda.synchronize()
 
@@ -70,7 +72,7 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
             dot = (q_t * k_t).sum(dim=-1, keepdim=True)
             out[:, t, :] = v_t * dot
 
-    def _prefill_shaped_native(self) -> None:
+    def _prefill_shaped_native(self, *, async_only: bool = False) -> list[torch.cuda.Event] | None:
         """Launch native TMA copies on multiple streams with an in-flight cap."""
         events = []
         for idx in range(self.prefill_chunks):
@@ -82,26 +84,33 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
             events.append(evt)
             if len(events) > self.cfg.max_in_flight:
                 events.pop(0).synchronize()
+        if async_only:
+            return events
         for evt in events:
             evt.synchronize()
+        return None
 
     def _decode_graph(self) -> None:
         assert self.inputs is not None
-        self.graph_q.copy_(self.inputs.q)
-        self.graph_k.copy_(self.inputs.k)
-        self.graph_v.copy_(self.inputs.v)
-        self.graph_out.zero_()
-        self.decode_graph.replay()
-        self.inputs.out.copy_(self.graph_out)
+        with torch.cuda.stream(self.decode_stream):
+            self.graph_q.copy_(self.inputs.q)
+            self.graph_k.copy_(self.inputs.k)
+            self.graph_v.copy_(self.inputs.v)
+            self.graph_out.zero_()
+            self.decode_graph.replay()
+            self.inputs.out.copy_(self.graph_out)
 
     def benchmark_fn(self) -> None:
         if self.inputs is None:
             raise RuntimeError("Inputs not initialized")
 
-        with self._nvtx_range("prefill_native_shaped"):
-            self._prefill_shaped_native()
-        with self._nvtx_range("decode_graph"):
+        with self._nvtx_range("prefill_native_shaped_low_pri"):
+            pref_events = self._prefill_shaped_native(async_only=True)
+        with self._nvtx_range("decode_graph_high_pri"):
             self._decode_graph()
+        if pref_events:
+            for evt in pref_events:
+                evt.synchronize()
         self._synchronize()
 
     def teardown(self) -> None:

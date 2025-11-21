@@ -13,6 +13,7 @@ Explores NVFP4/FP8 workflows, KV-cache quantization, memory double buffering, an
 | Path | Description |
 | --- | --- |
 | `baseline_nvfp4_training.py`, `optimized_nvfp4_training.py`, `native_fp4_quantization.py`, `native_fp6_quantization.py`, `native_fp8_training.py` | Training and quantization recipes that switch between FP8 and NVFP4 with automatic calibration. |
+| `baseline_mxfp8_moe.py`, `optimized_mxfp8_moe.py`, `mxfp8_moe_common.py` | MXFP8 MoE grouped GEMM benchmarks contrasting unfused block quantization with TE-backed tcgen05 pipelines (`--top-k`/`--cuda-graphs` flags supported). |
 | `baseline_memory_double_buffering.py`, `optimized_memory_double_buffering.py`, `memory_allocator_with_monitoring.py`, `dynamic_memory_allocator.py`, `_allocator_worker.py` | Memory-management helpers covering double buffering, instrumentation, and adaptive worker pools. |
 | `baseline_kv_prefetch_overlap.cu`, `optimized_kv_prefetch_overlap.cu`, `kv_prefetch_overlap_sm121` binaries | CUDA kernels proving that quantized KV prefetch can overlap with compute when using cp.async pipelines. |
 | `baseline_dynamic_quantized_cache.py`, `optimized_dynamic_quantized_cache.py`, `dynamic_quantized_cache.py`, `token_precision_switching.py`, `dynamic_precision_switching.py` | Quantized cache management for dynamically switching between precisions based on accuracy budgets. |

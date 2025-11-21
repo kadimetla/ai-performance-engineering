@@ -26,7 +26,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.attention import sdpa_kernel, SDPBackend
-from common.python.compile_utils import compile_callable
+from common.python.compile_utils import compile_callable, maybe_nested_compile_region
 
 _ARCH_CFG = ArchitectureConfig()
 
@@ -61,6 +61,18 @@ import json
 import threading
 import queue
 
+
+@maybe_nested_compile_region
+def _run_attn(attn: nn.Module, x: torch.Tensor, kv_state=None):
+    if kv_state is None:
+        return attn(x)
+    return attn(x, kv_state=kv_state)
+
+
+@maybe_nested_compile_region
+def _run_ffn(ffn: nn.Module, x: torch.Tensor):
+    return ffn(x)
+
 def is_cuda_usable() -> bool:
     """Return True when a CUDA device is present and supported (treat sm121 as valid)."""
     if not torch.cuda.is_available():
@@ -92,6 +104,21 @@ PREFERRED_SDP_BACKENDS: Tuple[SDPBackend, ...] = (
     SDPBackend.FLASH_ATTENTION,
     SDPBackend.EFFICIENT_ATTENTION,
 )
+
+# Blackwell (SM12x) may not ship compatible Flash/CUTLASS kernels in all builds.
+if HAS_USABLE_CUDA:
+    try:
+        major, _ = torch.cuda.get_device_capability()
+    except Exception:
+        major = None
+    if major is not None and major >= 12:
+        PREFERRED_SDP_BACKENDS = (SDPBackend.MATH,)
+    try:
+        torch.backends.cuda.enable_flash_sdp(False)  # type: ignore[attr-defined]
+        torch.backends.cuda.enable_mem_efficient_sdp(False)  # type: ignore[attr-defined]
+        torch.backends.cuda.enable_math_sdp(True)  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def get_sdpa_context():
@@ -251,10 +278,10 @@ class PrefillKernel(nn.Module):
         key_states: List[torch.Tensor] = []
         value_states: List[torch.Tensor] = []
         for attn, ffn in zip(self.attention_layers, self.ffn_layers):
-            attn_out, key_state, value_state = attn(x)
+            attn_out, key_state, value_state = _run_attn(attn, x)
             key_states.append(key_state)
             value_states.append(value_state)
-            x = ffn(attn_out)
+            x = _run_ffn(ffn, attn_out)
         return x, tuple(key_states), tuple(value_states)
 
 
@@ -278,10 +305,10 @@ class DecodeKernel(nn.Module):
 
         for idx, (attn, ffn) in enumerate(zip(self.attention_layers, self.ffn_layers)):
             past_state = kv_state[idx] if kv_state and idx < len(kv_state) else None
-            attn_out, key_state, value_state = attn(x, kv_state=past_state)
+            attn_out, key_state, value_state = _run_attn(attn, x, kv_state=past_state)
             key_states.append(key_state)
             value_states.append(value_state)
-            x = ffn(attn_out)
+            x = _run_ffn(ffn, attn_out)
 
         logits = self.lm_head(x[:, -1, :])
         return logits, tuple(key_states), tuple(value_states)
@@ -450,6 +477,8 @@ class PrefillWorker:
                 self.prefill_kernel,
                 mode="reduce-overhead",
                 dynamic=True,
+                nested_compile_region=True,
+                error_on_graph_break=True,
             )
         
     def _create_attention_layers(self) -> nn.ModuleList:
@@ -539,6 +568,8 @@ class DecodeWorker:
                 mode="reduce-overhead",
                 fullgraph=True,
                 dynamic=False,
+                nested_compile_region=True,
+                error_on_graph_break=True,
             )
 
         # Seed with a random token for the first decode step.

@@ -909,6 +909,33 @@ ENTRIES["labs/cutlass_profiler_kernel_selector"] = lab_entry(
     ],
 )
 
+ENTRIES["labs/cudnn_sdpa_bench"] = lab_entry(
+    slug="labs/cudnn_sdpa_bench",
+    title="Lab - cuDNN SDPA Bench",
+    summary=dedent(
+        """\
+        Microbenchmarks cuDNN fused scaled-dot-product attention against Flash and math backends with explicit CLI backend selection."""
+    ),
+    goals=[
+        "Compare cuDNN fused SDPA to Flash and math backends on identical shapes.",
+        "Capture Nsight traces per backend to inspect kernel fusion and launch counts.",
+        "Keep regression thresholds per architecture in `expectations_gb10.json`.",
+    ],
+    contents=[
+        ("`baseline_flash_sdp.py`, `optimized_flash_sdp.py`", "Shared attention microbenchmarks; backend chosen via `--backend {auto,cudnn,flash,math}` passed with `--target-extra-arg`."),
+        ("`expectations_gb10.json`", "Current golden timings on GB10 for regression checking."),
+    ],
+    validation=[
+        "`python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend cudnn\"` captures cuDNN with Nsight traces.",
+        "`python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend flash\"` compares the Flash path against cuDNN.",
+        "`python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend math\"` sanity-checks the math backend where fused kernels are unsupported.",
+    ],
+    notes=[
+        "Backend selection is CLI-only; environment variables are intentionally ignored.",
+        "Profiling outputs are stored under `benchmark_profiles/labs/cudnn_sdpa_bench/<run_id>` with harness artifacts in `artifacts/<run_id>/`.",
+    ],
+)
+
 ENTRIES["labs/dynamic_router"] = lab_entry(
     slug="labs/dynamic_router",
     title="Lab - Dynamic Prefill/Decode Router",
@@ -926,15 +953,20 @@ ENTRIES["labs/dynamic_router"] = lab_entry(
         ("`baseline_router.py`, `optimized_router.py`, `driver.py`", "Core router logic plus a synthetic simulator for deterministic comparisons."),
         ("`baseline_dynamic_router.py`, `optimized_dynamic_router.py`", "Harness-facing benchmarks derived from the simulator."),
         ("`baseline_dynamic_router_vllm.py`, `optimized_dynamic_router_vllm.py`, `vllm_runner.py`", "Integrations for running the routing policy against vLLM instances."),
+        ("`baseline_dual_pool_vllm.py`, `optimized_dual_pool_vllm.py`", "Shared-pool vs dual-pool TTFT benchmarks that reuse `vllm_runner.py`."),
+        ("`topology.py`, `topology_probe.py`", "NUMA-aware GPU mapping helpers and a target that emits `artifacts/topology/topology.json` for routing hints."),
     ],
     validation=[
         "`python labs/dynamic_router/driver.py --mode baseline` vs `--mode optimized` shows lower TTFT variance and higher TPOT for the optimized policy.",
         "`python tools/cli/benchmark_cli.py run --targets labs/dynamic_router --profile minimal` records artifacts comparing baseline/optimized harness runs.",
-        "`VLLM_MODEL=/path/to/model python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:dynamic_router_vllm` succeeds on hosts with at least two GPUs and a local model copy.",
+        "`python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:dynamic_router_vllm --target-extra-arg labs/dynamic_router:dynamic_router_vllm=\"--model /path/to/model --decode-gpus 0,1\"` succeeds on hosts with at least two GPUs and a local model copy.",
+        "`python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:dual_pool_vllm --target-extra-arg labs/dynamic_router:dual_pool_vllm=\"--model /path/to/model --prefill-gpus 0 --decode-gpus 1\"` contrasts shared versus dual pools and emits per-pool TTFT and queue depth.",
+        "`python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:topology_probe` captures GPU↔NUMA mappings and distance matrices for consumption by the router.",
     ],
     notes=[
         "`driver.py` accepts knobs such as `--prefill-gpus`, `--decode-gpus`, and `--migration-budget` to stress different regimes.",
-        "vLLM integration requires the `VLLM_MODEL` env var plus the associated tokenizer/model weights present on disk.",
+        "vLLM integration now takes flags (`--model`, `--prefill-gpus`, `--decode-gpus`, etc.) plus locally available tokenizer/model weights.",
+        "Router scoring incorporates pinned-host KV slab availability and NUMA-locality bias; feed it real topology via `topology_probe.py` or NVML when available.",
     ],
 )
 
@@ -1104,12 +1136,14 @@ ENTRIES["labs/persistent_decode"] = lab_entry(
     contents=[
         ("`baseline_persistent_decode.py`, `optimized_persistent_decode_cuda.py`, `optimized_persistent_decode_graphs.py`, `optimized_persistent_decode_triton.py`", "Persistent decode variants spanning CUDA, graphs, and Triton."),
         ("`baseline_tma_prefill_decode.py`, `optimized_tma_prefill_decode.py`, `baseline_native_tma_prefill_decode.py`, `optimized_native_tma_prefill_decode.py`", "Prefill workloads illustrating cp.async vs native TMA scheduling."),
+        ("`kv_locality_microbench.py`", "Pinned/pageable/NUMA host slab copy microbench (HBM vs local/remote pinned vs pageable)."),
         ("`persistent_decode_common.py`, `tma_extension.py`, `expectations_gb10.json`", "Shared helpers, CUDA extension wrappers, and expectation thresholds."),
     ],
     validation=[
         "`python tools/cli/benchmark_cli.py run --targets labs/persistent_decode --profile minimal` compares all persistent/TMA variants in one sweep.",
         "`python labs/persistent_decode/optimized_persistent_decode_graphs.py --iterations 50` shows lower launch overhead than `baseline_persistent_decode.py`.",
         "`python labs/persistent_decode/optimized_native_tma_prefill_decode.py --validate` matches the math reference while reporting achieved memory throughput.",
+        "`python labs/persistent_decode/kv_locality_microbench.py` surfaces H2D copy time deltas for pageable vs pinned slabs; add `QUICK=1` for a short smoke run.",
     ],
     notes=[
         "Set `TORCH_COMPILE_MODE` or `TMA_TILE_SIZE` via env vars before invoking the harness to sweep tile sizes.",

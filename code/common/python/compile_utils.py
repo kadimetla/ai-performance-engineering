@@ -128,6 +128,44 @@ def get_optimal_compile_mode(preferred_mode: str = "max-autotune", sm_threshold:
 _CallableT = TypeVar("_CallableT", bound=Callable[..., Any])
 
 
+def _get_dynamo_error_on_graph_break() -> Optional[Callable[[bool], contextmanager]]:
+    try:
+        import torch._dynamo as _dynamo  # type: ignore[attr-defined]
+
+        return getattr(_dynamo, "error_on_graph_break", None)
+    except Exception:
+        return None
+
+
+@contextmanager
+def error_on_graph_break(enable: Optional[bool]) -> None:
+    """Contextually toggle Dynamo graph-break behavior when available."""
+
+    cm = _get_dynamo_error_on_graph_break()
+    if cm is None or enable is None:
+        yield
+    else:
+        with cm(enable):
+            yield
+
+
+def maybe_nested_compile_region(fn: _CallableT) -> _CallableT:
+    """
+    Decorate a callable with torch.compiler.nested_compile_region when available.
+
+    Safe to use on any callable; it is a no-op on Torch builds that lack the API.
+    """
+    compiler_api = getattr(torch, "compiler", None)
+    nested = getattr(compiler_api, "nested_compile_region", None)
+    if nested is None:
+        return fn
+    try:
+        return cast(_CallableT, nested(fn))
+    except Exception:
+        # Defensive: fall back to original callable if decorator wrapping fails.
+        return fn
+
+
 def _get_torch_compile() -> Callable[..., Any]:
     compile_fn = getattr(torch, "compile", None)
     if compile_fn is None:  # pragma: no cover - depends on PyTorch build
@@ -153,10 +191,14 @@ def compile_callable(fn: _CallableT, **kwargs: Any) -> _CallableT:
     Parameters mirror torch.compile's kwargs, plus ``mode`` which defaults to
     ``max-autotune`` but is automatically downgraded via ``get_optimal_compile_mode``.
     """
+    err_on_graph_break = kwargs.pop("error_on_graph_break", None)
+    use_nested_region = kwargs.pop("nested_compile_region", False)
     compile_fn = _get_torch_compile()
     chosen_mode, extra = _normalize_compile_kwargs(kwargs)
+    target_fn = maybe_nested_compile_region(fn) if use_nested_region else fn
     try:
-        compiled = compile_fn(fn, mode=chosen_mode, **extra)
+        with error_on_graph_break(err_on_graph_break):
+            compiled = compile_fn(target_fn, mode=chosen_mode, **extra)
     except Exception as exc:  # pragma: no cover - propagate compile failures
         raise RuntimeError(
             f"torch.compile failed in compile_callable (mode={chosen_mode}): {exc}"

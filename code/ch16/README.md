@@ -51,6 +51,7 @@ python tools/cli/benchmark_cli.py run --targets ch16 --profile minimal
     P95: service=214.9 ms (prefill=40.3 ms, decode=174.6 ms) → GPUs=2.84, GPUs+headroom=3.83
   ```
 - The aggregated JSON now contains a `capacity_plan` block so you can archive the exact inputs that produced the estimate.
+- All token/sec inputs (`--prefill-tokens-per-s`, `--decode-tokens-per-s`, `--tokens-per-gpu`) must be *per GPU* sustained numbers. If you have only cluster-wide throughput, divide by GPU count before feeding it to the planner; otherwise the Little’s Law math will undercount needed GPUs.
 
 ## Standalone Capacity CLI
 - Use `python ch16/capacity_planner.py --results ch16/results.json` to re-run the estimation offline or share the JSON with the ops team. Override any metric inline (for example, `--qps 500 --tokens-per-gpu 3500`).

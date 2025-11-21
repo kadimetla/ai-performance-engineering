@@ -121,9 +121,9 @@ class FlexDecodingModule(torch.nn.Module):
         head_dim = self.head_dim
         heads = self.cfg.heads
 
-        q_prefill = torch.randn(1, heads, 256, head_dim, device=device)
-        kv_prefill = torch.randn_like(q_prefill)
-        q_decode = torch.randn(1, heads, 1, head_dim, device=device)
+        q_prefill = torch.zeros(1, heads, 256, head_dim, device=device)
+        kv_prefill = torch.zeros_like(q_prefill)
+        q_decode = torch.zeros(1, heads, 1, head_dim, device=device)
         compile_kwargs = {"mode": self.compile_mode, "dynamic": None}
 
         def configure_sdpa_backend() -> None:

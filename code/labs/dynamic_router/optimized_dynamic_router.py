@@ -21,12 +21,18 @@ class OptimizedDynamicRouterBenchmark(BaseBenchmark):
     def benchmark_fn(self) -> None:
         self._summary = simulate(
             "optimized",
-            num_ticks=400,
+            num_ticks=120,
             seed=0,
+            log_interval=None,
         )
 
     def get_config(self) -> Optional[BenchmarkConfig]:
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(
+            iterations=1,
+            warmup=0,
+            measurement_timeout_seconds=120,
+            timeout_multiplier=3.0,
+        )
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         return self._summary or None

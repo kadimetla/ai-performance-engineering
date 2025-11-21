@@ -22,7 +22,7 @@ from common.python.benchmark_harness import (  # noqa: E402
 )
 
 
-class OptimizedNvlinkBenchmark(BaseBenchmark):
+class OptimizedNVLinkBenchmark(BaseBenchmark):
     """Optimized: NVLink for high-speed GPU-to-GPU communication.
     
     NVLink: Uses NVLink for optimized GPU-to-GPU transfers.
@@ -115,7 +115,7 @@ class OptimizedNvlinkBenchmark(BaseBenchmark):
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
-    return OptimizedNvlinkBenchmark()
+    return OptimizedNVLinkBenchmark()
 
 
 def main() -> None:
@@ -126,7 +126,7 @@ def main() -> None:
         mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(iterations=50, warmup=5)
     )
-    benchmark = OptimizedNvlinkBenchmark()
+    benchmark = OptimizedNVLinkBenchmark()
     result = harness.benchmark(benchmark)
     
     print("=" * 70)

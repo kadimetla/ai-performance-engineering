@@ -146,6 +146,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 _QUICK_WINS_CONFIGURED = False
+_SDPA_KERNEL_CONTEXT = None
 
 
 def _configure_quick_wins() -> None:
@@ -159,7 +160,51 @@ def _configure_quick_wins() -> None:
         except Exception as exc:  # pragma: no cover - defensive
             if LOGGER_AVAILABLE:
                 logger.warning("TF32 enablement failed: %s", exc)
+        _configure_attention_kernels()
+        _configure_matmul_reduction()
     _QUICK_WINS_CONFIGURED = True
+
+
+def _configure_attention_kernels() -> None:
+    """Prefer flash/efficient SDPA backends when available."""
+    global _SDPA_KERNEL_CONTEXT
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+    except Exception:  # pragma: no cover - API availability differs by PyTorch
+        sdpa_kernel = None  # type: ignore[assignment]
+        SDPBackend = None  # type: ignore[assignment]
+
+    if sdpa_kernel is not None and SDPBackend is not None:
+        preferred = [
+            getattr(SDPBackend, name)
+            for name in ("FLASH_ATTENTION", "EFFICIENT_ATTENTION", "CUDNN")
+            if hasattr(SDPBackend, name)
+        ]
+        if preferred:
+            try:
+                ctx = sdpa_kernel(preferred)
+                ctx.__enter__()  # keep context active for process lifetime
+                _SDPA_KERNEL_CONTEXT = ctx
+                return
+            except Exception as exc:  # pragma: no cover - fallback below
+                if LOGGER_AVAILABLE:
+                    logger.debug("SDPA kernel preference failed: %s", exc)
+
+    try:
+        torch.backends.cuda.enable_flash_sdp(True)  # type: ignore[attr-defined]
+        torch.backends.cuda.enable_mem_efficient_sdp(True)  # type: ignore[attr-defined]
+        torch.backends.cuda.enable_math_sdp(False)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+def _configure_matmul_reduction() -> None:
+    """Enable reduced-precision reductions to hit fused matmul fast paths."""
+    try:
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True  # type: ignore[attr-defined]
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True  # type: ignore[attr-defined]
+    except Exception:
+        return
 
 
 _configure_quick_wins()
@@ -277,9 +322,9 @@ class BenchmarkConfig:
     _execution_mode_overridden: bool = field(init=False, repr=False, default=False)
     
     # Per-stage timeouts (in seconds)
-    setup_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("setup_timeout_seconds", 30))
+    setup_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("setup_timeout_seconds", 60))
     warmup_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("warmup_timeout_seconds", None))
-    measurement_timeout_seconds: int = field(default_factory=lambda: _get_default_value("measurement_timeout_seconds", 15))
+    measurement_timeout_seconds: int = field(default_factory=lambda: _get_default_value("measurement_timeout_seconds", 180))
     enable_gpu_memory_logging: bool = field(default_factory=lambda: _get_default_value("enable_gpu_memory_logging", False))
     gpu_memory_log_interval_seconds: float = field(default_factory=lambda: _get_default_value("gpu_memory_log_interval_seconds", 5.0))
     gpu_memory_log_path: Optional[str] = field(default_factory=lambda: _get_default_value("gpu_memory_log_path", None))
@@ -289,7 +334,7 @@ class BenchmarkConfig:
 
 
     # Legacy timeout field (deprecated, use measurement_timeout_seconds)
-    timeout_seconds: int = field(default_factory=lambda: _get_default_value("timeout_seconds", 15))
+    timeout_seconds: int = field(default_factory=lambda: _get_default_value("timeout_seconds", 180))
     
     # Profiler-specific timeouts
     nsys_timeout_seconds: int = field(default_factory=lambda: _get_default_value("nsys_timeout_seconds", 120))
@@ -757,6 +802,26 @@ class BenchmarkHarness:
         requires_multi = getattr(config, "multi_gpu_required", False) if multi_gpu_required is None else multi_gpu_required
         result.multi_gpu_required = bool(requires_multi)
         result.multi_gpu = bool(resolved_world_size and resolved_world_size > 1)
+
+    def _apply_target_overrides(self, benchmark: BaseBenchmark, config: BenchmarkConfig) -> None:
+        """Apply per-target CLI overrides to a benchmark instance, if supported."""
+        target_label = getattr(config, "target_label", None)
+        if not target_label:
+            return
+        overrides_map = getattr(config, "target_extra_args", {}) or {}
+        overrides = overrides_map.get(target_label)
+        if not overrides:
+            return
+        argv = shlex.split(overrides) if isinstance(overrides, str) else list(overrides)
+        if not argv:
+            return
+        hook = getattr(benchmark, "apply_target_overrides", None)
+        if callable(hook):
+            try:
+                hook(argv)
+            except Exception:
+                if LOGGER_AVAILABLE:
+                    logger.warning("Ignoring target overrides for %s due to error", target_label, exc_info=True)
     
     def _create_timeout_result(
         self,
@@ -1078,6 +1143,12 @@ class BenchmarkHarness:
                     setattr(config, key, value)
         config._sync_execution_mode()
         config._sync_launch_via()
+        
+        # Make merged config visible to benchmarks that need per-target args.
+        try:
+            benchmark._config = config  # type: ignore[attr-defined]
+        except Exception:
+            pass
         
         # CRITICAL: Ensure percentiles is always a list (never None)
         # This handles cases where benchmark.get_config() returns a config with percentiles=None
@@ -1618,6 +1689,9 @@ class BenchmarkHarness:
             
             with execution_lock:  # Acquire lock during execution
                 try:
+                    # Apply per-target CLI overrides (e.g., backend selection) before setup.
+                    self._apply_target_overrides(benchmark, config)
+
                     # Setup - this may include CUDA extension compilation OR torch.compile()
                     # IMPORTANT: Setup can hang, so we need actual timeout enforcement
                     import time

@@ -48,6 +48,7 @@ class LittleLawCapacityPlanner:
     ) -> None:
         self.prefill_tokens_per_s = prefill_tokens_per_s
         self.decode_tokens_per_s = decode_tokens_per_s
+        # Kept for reporting; capacity is computed from service time directly.
         self.tokens_per_gpu = tokens_per_gpu
         self.headroom_ratio = max(0.0, headroom_ratio)
 
@@ -76,13 +77,13 @@ class LittleLawCapacityPlanner:
         prompt_tokens: float,
         generated_tokens: float,
     ) -> Optional[CapacityEstimate]:
-        if qps <= 0.0 or self.tokens_per_gpu <= 0.0:
+        if qps <= 0.0:
             return None
         service = self._service_time(prompt_tokens, generated_tokens)
         total = service["total"]
         if total <= 0.0:
             return None
-        required = (qps * total) / self.tokens_per_gpu
+        required = qps * total
         required_with_headroom = required * (1.0 + self.headroom_ratio)
         return CapacityEstimate(
             percentile=percentile,
@@ -134,6 +135,7 @@ def _resolve_stats(source: Dict, key: str) -> Dict[str, float]:
         value = raw.get(percentile)
         if value is not None:
             stats[percentile] = float(value)
+    stats["avg"] = float(raw.get("avg", 0.0)) if isinstance(raw.get("avg"), (int, float)) else stats.get("avg", 0.0)
     return stats
 
 
@@ -219,8 +221,10 @@ def main() -> None:
 
     qps = _resolve_qps(args, data)
     tokens_per_gpu = _resolve_tokens_per_gpu(args, data)
-    if qps is None or tokens_per_gpu is None:
-        raise SystemExit("QPS and tokens-per-gpu must be provided via --qps/--tokens-per-gpu or the results JSON")
+    if tokens_per_gpu is None or tokens_per_gpu <= 0:
+        tokens_per_gpu = 1.0
+    if qps is None:
+        raise SystemExit("QPS must be provided via --qps or the results JSON")
 
     cap = data.get("capacity_plan") if data else None
 

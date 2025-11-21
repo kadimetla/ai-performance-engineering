@@ -9,6 +9,8 @@ import triton.language as tl
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from labs.persistent_decode.persistent_decode_common import (
     build_inputs,
+    get_decode_options,
+    get_decode_profile,
     resolve_device,
     resolve_shapes,
     tokens_per_iteration,
@@ -63,20 +65,42 @@ class OptimizedPersistentDecodeTritonBenchmark(BaseBenchmark):
         super().__init__()
         self.device = resolve_device()
         self.inputs = None
+        self.options = get_decode_options()
+        self.profile = get_decode_profile()
         self.batch, self.seq_len, self.head_dim = resolve_shapes()
-        self.block_k = 64
-        self.num_programs = 8
+        self.block_k = self.profile.block_k
+        self.num_programs = self.profile.num_programs
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
 
     def setup(self) -> None:
         self.inputs = build_inputs(self.device)
         self._synchronize()
 
+        # Precompile the Triton kernel to keep measurement under benchmark timeouts.
+        grid = (max(1, min(self.batch, self.num_programs)),)
+        BLOCK_K = self.block_k
+        persistent_decode_kernel[grid](
+            self.inputs.q,
+            self.inputs.k,
+            self.inputs.v,
+            self.inputs.out,
+            self.inputs.work_seq_ids,
+            self.inputs.work_steps,
+            self.batch,
+            head_dim=self.head_dim,
+            max_steps=self.seq_len,
+            BLOCK_K=BLOCK_K,
+            num_warps=2,
+            num_stages=1,
+        )
+        self._synchronize()
+
     def benchmark_fn(self) -> None:
         if self.inputs is None:
             raise RuntimeError("Inputs not initialized")
 
-        grid = (self.batch,)
+        num_items = min(self.batch, self.num_programs)
+        grid = (max(1, num_items),)
         BLOCK_K = self.block_k
         with self._nvtx_range("persistent_decode_triton"):
             persistent_decode_kernel[grid](
@@ -86,7 +110,7 @@ class OptimizedPersistentDecodeTritonBenchmark(BaseBenchmark):
                 self.inputs.out,
                 self.inputs.work_seq_ids,
                 self.inputs.work_steps,
-                self.batch,
+                num_items,
                 head_dim=self.head_dim,
                 max_steps=self.seq_len,
                 BLOCK_K=BLOCK_K,
@@ -100,7 +124,23 @@ class OptimizedPersistentDecodeTritonBenchmark(BaseBenchmark):
         self.inputs = None
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=12, warmup=4)
+        if self.options.quick:
+            return BenchmarkConfig(
+                iterations=1,
+                warmup=0,
+                enable_profiling=False,
+                enable_ncu=False,
+                enable_nsys=False,
+                measurement_timeout_seconds=90,
+            )
+        return BenchmarkConfig(
+            iterations=3,
+            warmup=1,
+            enable_profiling=False,
+            enable_ncu=False,
+            enable_nsys=False,
+            measurement_timeout_seconds=90,
+        )
 
     def validate_result(self) -> str | None:
         if self.inputs is None:

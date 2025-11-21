@@ -32,7 +32,7 @@ python tools/cli/benchmark_cli.py run --targets ch17 --profile minimal
 
 ## Validation Checklist
 - `python optimized_dynamic_routing.py --trace` logs TTFT/TPOT trends that settle faster than the baseline's oscillations.
-- `python optimized_pipeline_parallelism.py --profile minimal` shows overlapping prefill/decode segments with fewer idle bubbles.
+- `python optimized_pipeline_parallelism.py --microbatches 8 --profile minimal` shows overlapping prefill/decode segments with fewer idle bubbles; bump `--microbatches` to shrink the pipeline bubble and check stage imbalance via the reported metrics.
 - `python blackwell_roofline_analysis.py --artifacts ./artifacts` reproduces the documented roofline points using your latest captures.
 
 ## Notes

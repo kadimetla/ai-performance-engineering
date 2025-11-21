@@ -54,6 +54,8 @@ __global__ void gemm_device(ATensor mA,
                             BTensor mB,
                             CTensor mC,
                             DTensor mD,
+                            TypeC const* __restrict__ bias_ptr,
+                            bool fuse_bias_silu,
                             MmaTiler_MNK mma_tiler,
                             TiledMMA tiled_mma,
                             ClusterShape cluster_shape,
@@ -159,7 +161,29 @@ __global__ void gemm_device(ATensor mA,
   Tensor tDrAcc = make_tensor<Accumulator>(shape(tDgD));
   copy(tiled_t2r_copy, tDtAcc, tDrAcc);
 
-  axpby(1.0f, tDrAcc, 0.0f, tDrC);
+  if (fuse_bias_silu && bias_ptr != nullptr) {
+    // Apply bias + SiLU while data is still on-chip (TMEM -> registers).
+    int tile_rows = size<0>(tDrAcc);
+    int tile_cols = size<1>(tDrAcc);
+    int tile_row_start = blockIdx.x * tile_rows;
+    int tile_col_start = blockIdx.y * tile_cols;
+
+    CUTE_UNROLL
+    for (int mi = 0; mi < tile_rows; ++mi) {
+      int global_m = tile_row_start + mi;
+      CUTE_UNROLL
+      for (int ni = 0; ni < tile_cols; ++ni) {
+        int global_n = tile_col_start + ni;
+        float acc_val = static_cast<float>(tDrAcc(make_coord(mi, ni)));
+        float bias_val = static_cast<float>(bias_ptr[global_n]);
+        float x = acc_val + bias_val;
+        float sig = 1.0f / (1.0f + expf(-x));
+        tDrC(make_coord(mi, ni)) = x * sig;
+      }
+    }
+  } else {
+    axpby(1.0f, tDrAcc, 0.0f, tDrC);
+  }
   copy(tDrC, tDgD);
 
   __syncthreads();
@@ -249,6 +273,7 @@ torch::Tensor run_tcgen05_matmul(torch::Tensor a, torch::Tensor b) {
       SharedStorageT,
       decltype(mA), decltype(mB),
       decltype(mC), decltype(mD),
+      TypeC const*,
       decltype(mma_tiler), decltype(tiled_mma),
       ClusterShape,
       decltype(tma_atom_A), decltype(tma_atom_B)>;
@@ -266,6 +291,7 @@ torch::Tensor run_tcgen05_matmul(torch::Tensor a, torch::Tensor b) {
       <<<dimGrid, dimBlock, smem_bytes,
          at::cuda::getCurrentCUDAStream()>>>(
           mA, mB, mC, mD,
+          /*bias_ptr=*/nullptr, /*fuse_bias_silu=*/false,
           mma_tiler, tiled_mma,
           make_shape(Int<1>{}, Int<1>{}, Int<1>{}),
           tma_atom_A, tma_atom_B);
@@ -280,6 +306,128 @@ torch::Tensor matmul_tcgen05(torch::Tensor a, torch::Tensor b) {
   return matmul_tcgen05_impl::run_tcgen05_matmul(a, b);
 }
 
+torch::Tensor matmul_tcgen05_bias_silu(torch::Tensor a,
+                                       torch::Tensor b,
+                                       torch::Tensor bias) {
+  using namespace matmul_tcgen05_impl;
+
+  TORCH_CHECK(a.dim() == 2 && b.dim() == 2, "expected 2D tensors");
+  TORCH_CHECK(a.size(1) == b.size(0), "incompatible shapes");
+  TORCH_CHECK(bias.dim() == 1, "bias must be 1D");
+  TORCH_CHECK(a.dtype() == torch::kFloat16 && b.dtype() == torch::kFloat16,
+              "tcgen05 kernels expect float16 inputs");
+  TORCH_CHECK(a.is_cuda() && b.is_cuda() && bias.is_cuda(),
+              "tensors must be CUDA tensors");
+
+  auto a_contig = a.contiguous();
+  auto b_contig = b.contiguous();
+  auto bias_contig = bias.contiguous();
+
+  auto m = a_contig.size(0);
+  auto k = a_contig.size(1);
+  auto n = b_contig.size(1);
+
+  if (bias_contig.scalar_type() != torch::kFloat32) {
+    bias_contig = bias_contig.to(torch::kFloat32);
+  }
+
+  TORCH_CHECK(bias_contig.size(0) == n,
+              "bias length must match output columns");
+
+  auto options = a.options().dtype(torch::kFloat32);
+  auto c_buffer = torch::zeros({m, n}, options);
+  auto d_buffer = torch::empty_like(c_buffer);
+
+  auto tiled_mma = make_tiled_mma(MmaTag{});
+
+  auto bM = tile_size<0>(tiled_mma);
+  auto bN = tile_size<1>(tiled_mma);
+  auto bK = tile_size<2>(tiled_mma) * Int<4>{};
+  auto mma_tiler = make_shape(bM, bN, bK);
+
+  TORCH_CHECK(evenly_divides(shape(mma_tiler), tile_shape(tiled_mma)),
+              "tcgen05 tile mismatch");
+  TORCH_CHECK(evenly_divides(make_shape(m, n, k), mma_tiler),
+              "Problem size must be divisible by the tcgen05 tile (128x256x64)");
+
+  auto mma_shape_A =
+      partition_shape_A(tiled_mma,
+                        make_shape(size<0>(mma_tiler), size<2>(mma_tiler)));
+  auto mma_shape_B =
+      partition_shape_B(tiled_mma,
+                        make_shape(size<1>(mma_tiler), size<2>(mma_tiler)));
+
+  auto sA_layout =
+      UMMA::tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeA>{},
+                              mma_shape_A);
+  auto sB_layout =
+      UMMA::tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeB>{},
+                              mma_shape_B);
+
+  using SharedStorageT =
+      SharedStorage<TypeA, TypeB, decltype(sA_layout), decltype(sB_layout)>;
+
+  Tensor mA = make_tensor(
+      make_gmem_ptr(reinterpret_cast<TypeA const*>(
+          a_contig.data_ptr<at::Half>())),
+      make_layout(make_shape(m, k), make_stride(k, Int<1>{})));
+  Tensor mB = make_tensor(
+      make_gmem_ptr(reinterpret_cast<TypeB const*>(
+          b_contig.data_ptr<at::Half>())),
+      make_layout(make_shape(n, k), make_stride(k, Int<1>{})));
+  Tensor mC = make_tensor(
+      make_gmem_ptr(c_buffer.data_ptr<TypeC>()),
+      make_layout(make_shape(m, n), make_stride(n, Int<1>{})));
+  Tensor mD = make_tensor(
+      make_gmem_ptr(d_buffer.data_ptr<TypeD>()),
+      make_layout(make_shape(m, n), make_stride(n, Int<1>{})));
+
+  auto tma_atom_A =
+      make_tma_atom(SM90_TMA_LOAD{}, mA, sA_layout, select<0, 2>(mma_tiler));
+  auto tma_atom_B =
+      make_tma_atom(SM90_TMA_LOAD{}, mB, sB_layout, select<1, 2>(mma_tiler));
+
+  dim3 dimBlock(128);
+  dim3 dimGrid((m + size(bM) - 1) / size(bM),
+               (n + size(bN) - 1) / size(bN));
+
+  int smem_bytes = sizeof(SharedStorageT);
+
+  using ClusterShape = decltype(make_shape(Int<1>{}, Int<1>{}, Int<1>{}));
+
+  auto* kernel_ptr = &gemm_device<
+      SharedStorageT,
+      decltype(mA), decltype(mB),
+      decltype(mC), decltype(mD),
+      TypeC const*,
+      decltype(mma_tiler), decltype(tiled_mma),
+      ClusterShape,
+      decltype(tma_atom_A), decltype(tma_atom_B)>;
+
+  AT_CUDA_CHECK(cudaFuncSetAttribute(
+      kernel_ptr, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes));
+
+  gemm_device<
+      SharedStorageT,
+      decltype(mA), decltype(mB),
+      decltype(mC), decltype(mD),
+      TypeC const*,
+      decltype(mma_tiler), decltype(tiled_mma),
+      ClusterShape,
+      decltype(tma_atom_A), decltype(tma_atom_B)>
+      <<<dimGrid, dimBlock, smem_bytes,
+         at::cuda::getCurrentCUDAStream()>>>(
+          mA, mB, mC, mD,
+          bias_contig.data_ptr<TypeC>(), /*fuse_bias_silu=*/true,
+          mma_tiler, tiled_mma,
+          make_shape(Int<1>{}, Int<1>{}, Int<1>{}),
+          tma_atom_A, tma_atom_B);
+  AT_CUDA_CHECK(cudaGetLastError());
+
+  return d_buffer.to(torch::kFloat16);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("matmul_tcgen05", &matmul_tcgen05);
+  m.def("matmul_tcgen05_bias_silu", &matmul_tcgen05_bias_silu);
 }

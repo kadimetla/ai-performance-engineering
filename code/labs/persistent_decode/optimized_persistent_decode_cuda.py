@@ -36,13 +36,30 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <cuda_pipeline_primitives.h>
 
 namespace {
 
 __device__ int g_work_item_idx = 0;
 
-// Simple tiled dot using shared memory for reduction.
-__device__ float dot_tile(const float* q, const float* k, int head_dim) {
+// Helper for cp.async tile copies. TILE_BYTES is a compile-time cap; we clamp
+// runtime valid_bytes to avoid over-fetching for smaller head_dims.
+template<int TILE_BYTES>
+__device__ inline void cp_async_tile(void* smem_dst, const void* gmem_src, int valid_bytes) {
+    unsigned smem_addr = static_cast<unsigned>(__cvta_generic_to_shared(smem_dst));
+    unsigned gmem_addr = static_cast<unsigned>(__cvta_generic_to_global(gmem_src));
+
+    int nbytes = valid_bytes > 0 ? valid_bytes : TILE_BYTES;
+    for (int offset = threadIdx.x * 16; offset < nbytes; offset += blockDim.x * 16) {
+        __pipeline_memcpy_async(
+            reinterpret_cast<void*>(smem_addr + offset),
+            reinterpret_cast<const void*>(gmem_addr + offset),
+            16);
+    }
+}
+
+// Simple tiled dot using shared memory for reduction (used for fallback).
+__device__ float dot_tile_fallback(const float* q, const float* k, int head_dim) {
     extern __shared__ float smem[];
     int tid = threadIdx.x;
     float acc = 0.0f;
@@ -69,7 +86,18 @@ __global__ void persistent_decode_kernel(
     int seq_len,
     int head_dim
 ) {
-    extern __shared__ float smem[];
+    // GPT-OSS-20B uses 128-dim heads; keep buffers sized accordingly.
+    constexpr int MAX_HEAD_DIM = 128;
+    constexpr int TILE_BYTES = MAX_HEAD_DIM * sizeof(float);
+
+    extern __shared__ float smem_f[];
+    float* smem_k0 = smem_f;
+    float* smem_k1 = smem_k0 + MAX_HEAD_DIM;
+    float* smem_v0 = smem_k1 + MAX_HEAD_DIM;
+    float* smem_v1 = smem_v0 + MAX_HEAD_DIM;
+    float* red = smem_v1 + MAX_HEAD_DIM;  // reduction buffer (threads slots)
+
+    const bool use_cp_async = head_dim <= MAX_HEAD_DIM;
 
     while (true) {
         int idx;
@@ -88,9 +116,62 @@ __global__ void persistent_decode_kernel(
             const float* v_ptr = v + (seq_id * seq_len + t) * head_dim;
             float* out_ptr = out + (seq_id * seq_len + t) * head_dim;
 
-            float dot = dot_tile(q_ptr, k_ptr, head_dim);
+            if (!use_cp_async) {
+                float dot = dot_tile_fallback(q_ptr, k_ptr, head_dim);
+                for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+                    out_ptr[d] = v_ptr[d] * dot;
+                }
+                __syncthreads();
+                continue;
+            }
+
+            // Double-buffered cp.async pipeline for K/V.
+            int buf = t & 1;
+            int nextbuf = buf ^ 1;
+            float* k_smem_curr = buf == 0 ? smem_k0 : smem_k1;
+            float* v_smem_curr = buf == 0 ? smem_v0 : smem_v1;
+
+            // Warmup: load first tile before compute.
+            if (t == 0) {
+                cp_async_tile<TILE_BYTES>(k_smem_curr, k_ptr, head_dim * static_cast<int>(sizeof(float)));
+                cp_async_tile<TILE_BYTES>(v_smem_curr, v_ptr, head_dim * static_cast<int>(sizeof(float)));
+                __pipeline_commit();
+            }
+
+            // Wait for the current tile to land before use.
+            __pipeline_wait_prior(0);
+            __syncthreads();
+
+            // Prefetch next tile while we work on this one.
+            int next_t = t + 1;
+            if (next_t < seq_len) {
+                const float* k_ptr_next = k + (seq_id * seq_len + next_t) * head_dim;
+                const float* v_ptr_next = v + (seq_id * seq_len + next_t) * head_dim;
+                float* k_smem_next = nextbuf == 0 ? smem_k0 : smem_k1;
+                float* v_smem_next = nextbuf == 0 ? smem_v0 : smem_v1;
+                cp_async_tile<TILE_BYTES>(k_smem_next, k_ptr_next, head_dim * static_cast<int>(sizeof(float)));
+                cp_async_tile<TILE_BYTES>(v_smem_next, v_ptr_next, head_dim * static_cast<int>(sizeof(float)));
+                __pipeline_commit();
+            }
+
+            // Compute dot(q, k_tile) using shared buffers.
+            float acc = 0.0f;
             for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
-                out_ptr[d] = v_ptr[d] * dot;
+                acc += q_ptr[d] * k_smem_curr[d];
+            }
+            red[threadIdx.x] = acc;
+            __syncthreads();
+            for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+                if (threadIdx.x < stride) {
+                    red[threadIdx.x] += red[threadIdx.x + stride];
+                }
+                __syncthreads();
+            }
+
+            float dot = red[0];
+            __syncthreads();
+            for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+                out_ptr[d] = v_smem_curr[d] * dot;
             }
             __syncthreads();
         }
@@ -104,14 +185,25 @@ void persistent_decode_cuda(torch::Tensor q, torch::Tensor k, torch::Tensor v, t
     TORCH_CHECK(q.scalar_type() == torch::kFloat, "q must be float32");
     TORCH_CHECK(q.sizes() == k.sizes() && q.sizes() == v.sizes(), "q/k/v shapes must match");
     TORCH_CHECK(out.sizes() == q.sizes(), "out shape mismatch");
+    TORCH_CHECK(q.size(2) <= 128, "head_dim exceeds MAX_HEAD_DIM=128 for cp.async path");
 
     const int batch = static_cast<int>(q.size(0));
     const int seq_len = static_cast<int>(q.size(1));
     const int head_dim = static_cast<int>(q.size(2));
     const int threads = 64;
-    const size_t smem_bytes = threads * sizeof(float);
+
+    constexpr int MAX_HEAD_DIM = 128;
+    const size_t smem_bytes = (
+        // K0/K1/V0/V1
+        4 * MAX_HEAD_DIM
+        // Reduction buffer
+        + threads
+    ) * sizeof(float);
 
     c10::cuda::CUDAGuard device_guard(q.get_device());
+    cudaDeviceProp prop{};
+    AT_CUDA_CHECK(cudaGetDeviceProperties(&prop, q.get_device()));
+    TORCH_CHECK(prop.major >= 8, "cp.async pipeline requires SM80+ (Ampere or newer)");
     cudaStream_t stream = at::cuda::getDefaultCUDAStream();
     int* counter_ptr = nullptr;
     AT_CUDA_CHECK(cudaGetSymbolAddress((void**)&counter_ptr, g_work_item_idx));

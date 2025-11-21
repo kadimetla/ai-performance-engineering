@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -96,6 +96,7 @@ class MoeInferenceConfig:
     context_window: int = 2048
     decode_tokens: int = 64
     router_noise: float = 0.0
+    capacity_factor: float | None = None
     dtype: torch.dtype | str = field(default_factory=lambda: torch.bfloat16)
 
     def __post_init__(self) -> None:
@@ -152,6 +153,7 @@ class MoEFeedForward(nn.Module):
         num_experts: int,
         top_k: int,
         router_noise: float = 0.0,
+        capacity_factor: Optional[float] = None,
         *,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
@@ -166,15 +168,34 @@ class MoEFeedForward(nn.Module):
         self.experts = nn.ModuleList([ExpertMLP(hidden, ffn, device=device, dtype=dtype) for _ in range(num_experts)])
         self.top_k = top_k
         self.router_noise = router_noise
+        self.capacity_factor = capacity_factor
+        self.num_experts = num_experts
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, *, collect_router_stats: bool = False) -> torch.Tensor | Tuple[torch.Tensor, Optional[dict]]:
         batch, seq, hidden = x.shape
         flat = x.reshape(batch * seq, hidden)
         logits = self.router(flat)
         if self.router_noise > 0:
             logits = logits + torch.randn_like(logits) * self.router_noise
         probs = torch.softmax(logits, dim=-1)
+        router_entropy = None
+        if collect_router_stats:
+            with torch.no_grad():
+                router_entropy = -(probs * torch.log(probs + 1e-9)).sum(dim=-1).mean()
         top_scores, top_indices = torch.topk(probs, k=self.top_k, dim=-1)
+        drop_mask = None
+        overflow_mask = None
+        expert_counts = None
+        if self.capacity_factor is not None:
+            tokens = flat.shape[0]
+            avg_tokens_per_expert = max(1, math.ceil((tokens * self.top_k) / max(self.num_experts, 1)))
+            capacity = max(1, math.ceil(self.capacity_factor * avg_tokens_per_expert))
+            expert_counts = torch.bincount(top_indices.reshape(-1), minlength=self.num_experts)
+            overloaded = expert_counts > capacity
+            drop_mask = overloaded[top_indices]
+            if drop_mask.any():
+                top_scores = top_scores * (~drop_mask).float()
+            overflow_mask = drop_mask.any(dim=-1)
         combined = torch.zeros_like(flat)
 
         for k in range(self.top_k):
@@ -183,10 +204,24 @@ class MoEFeedForward(nn.Module):
             for expert_id, expert in enumerate(self.experts):
                 mask = expert_ids == expert_id
                 if mask.any():
-                    expert_input = flat[mask]
+                    indices = mask.nonzero(as_tuple=False).squeeze(-1)
+                    expert_input = flat.index_select(0, indices)
                     expert_out = expert(expert_input)
-                    combined[mask] += expert_out * weights[mask]
-        return combined.view(batch, seq, hidden)
+                    selected_weights = weights.index_select(0, indices)
+                    if selected_weights.dim() == 1:
+                        selected_weights = selected_weights.unsqueeze(-1)
+                    selected_weights = selected_weights.to(expert_out.dtype)
+                    combined.index_add_(0, indices, expert_out * selected_weights)
+        combined = combined.view(batch, seq, hidden)
+        if collect_router_stats:
+            stats = {
+                "expert_indices": top_indices.detach(),
+                "overflow_mask": overflow_mask.detach() if overflow_mask is not None else None,
+                "expert_counts": expert_counts.detach() if expert_counts is not None else None,
+                "router_entropy": float(router_entropy.detach()) if router_entropy is not None else None,
+            }
+            return combined, stats
+        return combined
 
 
 class SimpleMoEBlock(nn.Module):
@@ -211,17 +246,25 @@ class SimpleMoEBlock(nn.Module):
                 num_experts=config.num_experts,
                 top_k=config.top_k,
                 router_noise=config.router_noise,
+                capacity_factor=config.capacity_factor,
                 device=device,
                 dtype=config.dtype_obj,
             )
         else:
             self.ff = DenseFeedForward(config.hidden_size, config.ffn_size, device=device, dtype=config.dtype_obj)
 
-    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+    def forward(self, hidden: torch.Tensor, *, collect_router_stats: bool = False) -> torch.Tensor | Tuple[torch.Tensor, Optional[dict]]:
         attn_out, _ = self.attn(self.ln_attn(hidden), self.ln_attn(hidden), self.ln_attn(hidden), need_weights=False)
         hidden = hidden + attn_out
-        ff_out = self.ff(self.ln_mlp(hidden))
-        return hidden + ff_out
+        if collect_router_stats and isinstance(self.ff, MoEFeedForward):
+            ff_out, stats = self.ff(self.ln_mlp(hidden), collect_router_stats=True)
+        else:
+            ff_out = self.ff(self.ln_mlp(hidden))
+            stats = None
+        hidden = hidden + ff_out
+        if collect_router_stats:
+            return hidden, stats
+        return hidden
 
 
 class SimpleMoEGPT(nn.Module):
@@ -250,24 +293,40 @@ class SimpleMoEGPT(nn.Module):
             dtype=config.dtype_obj,
         )
 
-    def forward_tokens(self, token_ids: torch.Tensor) -> torch.Tensor:
+    def forward_tokens(self, token_ids: torch.Tensor, *, collect_router_stats: bool = False) -> torch.Tensor | Tuple[torch.Tensor, List[dict]]:
         if token_ids.dtype != torch.long:
             token_ids = token_ids.long()
         hidden = self.embed(token_ids)
+        router_stats: List[dict] = []
         for block in self.layers:
-            hidden = block(hidden)
-        return self.final_norm(hidden)
+            if collect_router_stats:
+                hidden, stats = block(hidden, collect_router_stats=True)  # type: ignore[assignment]
+                if stats is not None:
+                    router_stats.append(stats)
+            else:
+                hidden = block(hidden)
+        hidden = self.final_norm(hidden)
+        if collect_router_stats:
+            return hidden, router_stats
+        return hidden
 
     def prefill(
         self,
         input_ids: torch.Tensor,
         kv_cache: Optional[torch.Tensor] = None,
         cache_start: int = 0,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden = self.forward_tokens(input_ids)
+        output_router_stats: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, List[dict]]:
+        if output_router_stats:
+            hidden, router_stats = self.forward_tokens(input_ids, collect_router_stats=True)  # type: ignore[misc]
+        else:
+            hidden = self.forward_tokens(input_ids)  # type: ignore[assignment]
+            router_stats = []
         if kv_cache is not None:
             kv_cache[:, cache_start:cache_start + hidden.size(1)].copy_(hidden)
         logits = self.lm_head(hidden)
+        if output_router_stats:
+            return hidden, logits, router_stats
         return hidden, logits
 
     def decode(
@@ -275,11 +334,18 @@ class SimpleMoEGPT(nn.Module):
         token_ids: torch.Tensor,
         kv_cache: Optional[torch.Tensor] = None,
         position: Optional[int] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden = self.forward_tokens(token_ids)
+        output_router_stats: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, List[dict]]:
+        if output_router_stats:
+            hidden, router_stats = self.forward_tokens(token_ids, collect_router_stats=True)  # type: ignore[misc]
+        else:
+            hidden = self.forward_tokens(token_ids)  # type: ignore[assignment]
+            router_stats = []
         if kv_cache is not None and position is not None:
             kv_cache[:, position:position + hidden.size(1)].copy_(hidden)
         logits = self.lm_head(hidden)
+        if output_router_stats:
+            return hidden, logits, router_stats
         return hidden, logits
 
 

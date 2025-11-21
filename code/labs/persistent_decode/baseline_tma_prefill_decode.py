@@ -10,6 +10,7 @@ from __future__ import annotations
 import torch
 
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from common.python.blackwell_requirements import ensure_blackwell_tma_supported
 from labs.persistent_decode.persistent_decode_common import (
     build_inputs,
     resolve_device,
@@ -33,6 +34,7 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
 
     def setup(self) -> None:
+        ensure_blackwell_tma_supported("baseline_tma_prefill_decode")
         self.inputs = build_inputs(self.device)
         self.prefill_src = torch.randn(
             self.prefill_chunks, self.prefill_chunk_elems, device=self.device
