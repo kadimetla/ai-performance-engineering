@@ -1,7 +1,0 @@
-[submodule "code/third_party/cutlass"]
-	path = code/third_party/cutlass
-	url = https://github.com/NVIDIA/cutlass.git
-[submodule "code/third_party/TransformerEngine"]
-	path = code/third_party/TransformerEngine
-	url = https://github.com/NVIDIA/TransformerEngine.git
-
