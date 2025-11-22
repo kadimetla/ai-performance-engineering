@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -23,7 +24,18 @@ def get_benchmark() -> BaselineNVLinkBenchmark:
 if __name__ == "__main__":
     from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 
+    parser = argparse.ArgumentParser(description="Run NVLink baseline across multiple GPUs.")
+    parser.add_argument("--iterations", type=int, default=None, help="Measurement iterations (overrides harness default).")
+    parser.add_argument("--warmup", type=int, default=None, help="Warmup iterations (overrides harness default).")
+    args = parser.parse_args()
+
     bench = get_benchmark()
-    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=BenchmarkConfig(iterations=3, warmup=1))
+    config = BenchmarkConfig()
+    if args.iterations is not None:
+        config.iterations = args.iterations
+    if args.warmup is not None:
+        config.warmup = args.warmup
+
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
     result = harness.benchmark(bench)
     print(f"NVLink baseline (multi-GPU): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

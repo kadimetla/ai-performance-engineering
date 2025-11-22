@@ -6,6 +6,7 @@ Implements BaseBenchmark for harness integration.
 
 from __future__ import annotations
 
+import argparse
 import sys
 import os
 from pathlib import Path
@@ -54,7 +55,8 @@ def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch4")
-    return torch.device("cuda:0")
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    return torch.device(f"cuda:{local_rank}")
 
 
 class MultiLayerNet(nn.Module):
@@ -97,7 +99,9 @@ class OptimizedOverlapDdpBenchmark(BaseBenchmark):
         
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
-        torch.cuda.set_device(0)
+        local_rank = int(os.environ.get("LOCAL_RANK", self.rank))
+        self.device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(local_rank)
         
         torch.manual_seed(42)
         model = MultiLayerNet(1024).to(self.device)
@@ -153,15 +157,11 @@ class OptimizedOverlapDdpBenchmark(BaseBenchmark):
         self.data = None
         self.target = None
         torch.cuda.empty_cache()
+        self._config = None
     
-    def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
-            enable_memory_tracking=False,
-            enable_profiling=False,
-        )
+    def get_config(self) -> Optional[BenchmarkConfig]:
+        """Return the active harness config (set during execution)."""
+        return getattr(self, "_config", None)
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -186,11 +186,27 @@ def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return OptimizedOverlapDdpBenchmark()
 
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description="DDP with communication overlap benchmark.")
+    parser.add_argument("--iterations", type=int, default=20, help="Number of measurement iterations.")
+    parser.add_argument("--warmup", type=int, default=5, help="Number of warmup iterations.")
+    parser.add_argument("--enable-profiling", action="store_true", help="Enable profiling for the run.")
+    parser.add_argument("--enable-memory-tracking", action="store_true", help="Track GPU memory usage.")
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    args = _parse_args()
+    config = BenchmarkConfig(
+        iterations=args.iterations,
+        warmup=args.warmup,
+        enable_memory_tracking=args.enable_memory_tracking,
+        enable_profiling=args.enable_profiling,
+    )
     benchmark = get_benchmark()
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
+        config=config
     )
     result = harness.benchmark(benchmark)
     print(f"\nOptimized Overlap DDP: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

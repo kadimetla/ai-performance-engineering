@@ -60,7 +60,9 @@ class OptimizedReinitCommBenchmark(BaseBenchmark):
         
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
-        torch.cuda.set_device(0)
+        local_rank = int(os.environ.get("LOCAL_RANK", self.rank))
+        self.device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(local_rank)
         self.tensor = torch.ones(1, device=self.device)
         torch.cuda.synchronize(self.device)
     

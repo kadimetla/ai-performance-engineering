@@ -207,6 +207,16 @@ def _configure_matmul_reduction() -> None:
         return
 
 
+def _is_chapter_or_labs_benchmark(benchmark: Any) -> bool:
+    """Return True if the benchmark originates from any chapter directory (chXX/) or labs/."""
+    try:
+        file_path = inspect.getfile(benchmark.__class__)
+    except Exception:
+        return False
+    normalized = str(Path(file_path)).replace("\\", "/")
+    return "/labs/" in normalized or "/ch" in normalized
+
+
 _configure_quick_wins()
 
 
@@ -562,14 +572,19 @@ class BaseBenchmark:
         """
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        # Clear any cached config from a previous harness run
+        try:
+            self._config = None
+        except Exception:
+            pass
     
     def get_config(self) -> Optional[BenchmarkConfig]:
-        """Return benchmark-specific config overrides.
+        """Return the active harness config when available.
         
-        Subclasses can override to provide custom configuration.
-        Default returns None (uses harness defaults).
+        Subclasses can override to provide custom overrides; the harness
+        will still stash the merged config on ``self._config`` for runtime checks.
         """
-        return None
+        return getattr(self, "_config", None)
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> Optional[TorchrunLaunchSpec]:
         """Optional torchrun launch description for multi-GPU benchmarks."""
@@ -687,7 +702,8 @@ class BaseBenchmark:
         """
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
         
-        config = self.get_config()
+        # Prefer the harness-merged config if present to honor CLI flags
+        config = getattr(self, "_config", None) or self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         
         with nvtx_range(name, enable=enable_nvtx):
@@ -1127,6 +1143,12 @@ class BenchmarkHarness:
         # dataclasses.replace from re-running __post_init__ (which re-applies multipliers)
         config = copy.deepcopy(self.config)
         bench_config = benchmark.get_config()
+        if bench_config and _is_chapter_or_labs_benchmark(benchmark):
+            try:
+                bench_config.iterations = None  # type: ignore[assignment]
+                bench_config.warmup = None  # type: ignore[assignment]
+            except Exception:
+                pass
         if bench_config:
             # Override with benchmark-specific settings
             for key, value in bench_config.__dict__.items():
@@ -1144,6 +1166,7 @@ class BenchmarkHarness:
         config._sync_execution_mode()
         config._sync_launch_via()
         
+        previous_config = getattr(benchmark, "_config", None)
         # Make merged config visible to benchmarks that need per-target args.
         try:
             benchmark._config = config  # type: ignore[attr-defined]
@@ -1178,6 +1201,10 @@ class BenchmarkHarness:
                 return self._benchmark_with_subprocess(benchmark, config)
             return self._benchmark_with_threading(benchmark, config)
         finally:
+            try:
+                benchmark._config = previous_config  # type: ignore[attr-defined]
+            except Exception:
+                pass
             if gpu_mem_logger is not None:
                 log_file = gpu_mem_logger.stop()
                 if LOGGER_AVAILABLE:

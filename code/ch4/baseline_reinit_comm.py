@@ -60,6 +60,8 @@ class BaselineReinitCommBenchmark(BaseBenchmark):
         setup_single_gpu_env()
         self.rank = int(os.environ.get("RANK", "0"))
         self.world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        local_rank = int(os.environ.get("LOCAL_RANK", self.rank))
+        self.device = torch.device(f"cuda:{local_rank}")
         torch.cuda.set_device(self.device)
         self.tensor = torch.ones(1, device=self.device)
         self._synchronize()
