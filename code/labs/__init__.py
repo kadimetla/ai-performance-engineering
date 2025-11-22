@@ -15,4 +15,5 @@ __all__ = [
     "train_distributed",
     "kv_cache_compression",
     "speculative_decode",
+    "fast_nanochat",
 ]

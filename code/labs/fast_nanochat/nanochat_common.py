@@ -1,0 +1,371 @@
+"""NanoChat-inspired decode microbenchmark with baseline and optimized paths.
+
+Shared helpers and configs for the fast_nanochat lab variants.
+"""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+import torch
+import torch.nn as nn
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
+
+try:  # Optional but strongly recommended for fast variants
+    import transformer_engine.pytorch as te
+    from transformer_engine.pytorch import Linear as TELinear
+    from transformer_engine.common.recipe import DelayedScaling
+    import transformer_engine.pytorch.constants as te_constants
+
+    TE_AVAILABLE = True
+except Exception:  # pragma: no cover - safe fallback
+    te = None  # type: ignore
+    TELinear = None  # type: ignore
+    DelayedScaling = None  # type: ignore
+    te_constants = None  # type: ignore
+    TE_AVAILABLE = False
+
+
+@dataclass
+class NanoChatConfig:
+    batch_size: int = 4
+    prompt_tokens: int = 256
+    decode_tokens: int = 64
+    hidden_size: int = 1024
+    vocab_size: int = 8192
+    use_fp8: bool = False
+    use_fp4: bool = False
+    use_pinned_host: bool = False
+    use_copy_stream: bool = False
+    use_compute_stream: bool = False
+    use_cuda_graphs: bool = False
+    graph_full_iteration: bool = False
+    use_torch_compile: bool = False
+    iterations: int = 8
+    warmup: int = 3
+    label: str = "fast_nanochat"
+
+
+class NanoChatBenchmark(BaseBenchmark):
+    """Lightweight decode loop benchmark."""
+
+    def __init__(self, cfg: NanoChatConfig):
+        super().__init__()
+        self.cfg = cfg
+        self.dtype = torch.float16
+        self.copy_stream: Optional[torch.cuda.Stream] = None
+        self.compute_stream: Optional[torch.cuda.Stream] = None
+        self.graph_stream: Optional[torch.cuda.Stream] = None
+        self.decode_graph: Optional[torch.cuda.CUDAGraph] = None
+        self.graph_includes_prefill: bool = False
+        self.graph_logits: Optional[torch.Tensor] = None
+        self.graph_next_token: Optional[torch.Tensor] = None
+        self._custom_metrics: Dict[str, float] = {}
+        self._fp8_enabled: bool = False
+        self._fp4_enabled: bool = False
+        self._graph_error: Optional[str] = None
+        self._compile_error: Optional[str] = None
+        self.fp8_recipe = None
+        if TE_AVAILABLE:
+            if self.cfg.use_fp4 and getattr(te_constants, "NVFP4_BLOCK_SCALING_SIZE", None) is not None:
+                try:
+                    from transformer_engine.common.recipe import NVFP4BlockScaling
+
+                    self.fp8_recipe = DelayedScaling(float8_block_scaling=NVFP4BlockScaling())
+                    self._fp4_enabled = True
+                except Exception:
+                    self.fp8_recipe = None
+                    self._fp4_enabled = False
+            elif self.cfg.use_fp8:
+                try:
+                    self.fp8_recipe = DelayedScaling()
+                    self._fp8_enabled = True
+                except Exception:
+                    self.fp8_recipe = None
+
+    def setup(self) -> None:
+        torch.manual_seed(0)
+        torch.cuda.manual_seed_all(0)
+        if self.cfg.use_copy_stream:
+            self.copy_stream = torch.cuda.Stream()
+        if self.cfg.use_compute_stream:
+            self.compute_stream = torch.cuda.Stream()
+        self._init_model()
+        self._init_buffers()
+        # Default to eager helpers; swap in compiled variants below when enabled.
+        self.prefill_fn = self._prefill
+        self.decode_fn = self._decode_step
+        if self.cfg.use_torch_compile:
+            self._maybe_compile()
+        if self.cfg.use_cuda_graphs:
+            self._capture_decode_graph()
+        total_tokens = self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.cfg.batch_size),
+            tokens_per_iteration=float(total_tokens),
+        )
+
+    # Model + buffer init
+    def _init_model(self) -> None:
+        hs = self.cfg.hidden_size
+        vs = self.cfg.vocab_size
+        self.embedding = nn.Embedding(vs, hs, device=self.device, dtype=self.dtype)
+
+        def _linear(in_features: int, out_features: int, *, bias: bool = True) -> nn.Module:
+            if (self.cfg.use_fp8 or self.cfg.use_fp4) and TE_AVAILABLE:
+                return TELinear(
+                    in_features,
+                    out_features,
+                    bias=bias,
+                    params_dtype=self.dtype,
+                    device=self.device,
+                )
+            return nn.Linear(in_features, out_features, bias=bias, device=self.device, dtype=self.dtype)
+
+        self.prefill_mlp = nn.Sequential(
+            nn.LayerNorm(hs, device=self.device, dtype=self.dtype),
+            _linear(hs, hs * 2),
+            nn.GELU(),
+            _linear(hs * 2, hs),
+        )
+        self.decode_mlp = nn.Sequential(
+            nn.LayerNorm(hs, device=self.device, dtype=self.dtype),
+            _linear(hs, hs),
+            nn.GELU(),
+            _linear(hs, hs),
+        )
+        self.lm_head = _linear(hs, vs, bias=False)
+        if self.cfg.use_fp8 and TE_AVAILABLE and not self._fp4_enabled:
+            self._fp8_enabled = True
+
+    def _init_buffers(self) -> None:
+        bsz, prompt = self.cfg.batch_size, self.cfg.prompt_tokens
+        self.host_prompt = torch.randint(
+            0, self.cfg.vocab_size, (bsz, prompt), dtype=torch.long, device="cpu"
+        )
+        if self.cfg.use_pinned_host:
+            self.host_prompt = self.host_prompt.pin_memory()
+
+        self.gpu_prompt = torch.empty_like(self.host_prompt, device=self.device)
+        self.state_buffer = torch.zeros((bsz, self.cfg.hidden_size), device=self.device, dtype=self.dtype)
+        self.current_tokens = torch.empty((bsz,), device=self.device, dtype=torch.long)
+        self.next_token_out = torch.empty_like(self.current_tokens)
+
+    # Compiled / graphed helpers
+    def _maybe_compile(self) -> None:
+        try:
+            self.prefill_fn = torch.compile(self._prefill, mode="reduce-overhead", fullgraph=False)
+            self.decode_fn = torch.compile(self._decode_step, mode="reduce-overhead", fullgraph=True)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._compile_error = str(exc)
+            self.prefill_fn = self._prefill
+            self.decode_fn = self._decode_step
+        else:
+            self._compile_error = None
+        # Ensure attributes exist even if compile failed
+        if not hasattr(self, "prefill_fn"):
+            self.prefill_fn = self._prefill
+        if not hasattr(self, "decode_fn"):
+            self.decode_fn = self._decode_step
+
+    def _capture_decode_graph(self) -> None:
+        # Allocate static outputs once
+        bsz = self.cfg.batch_size
+        self.graph_stream = torch.cuda.Stream()
+        self.graph_logits = torch.empty((bsz, self.cfg.vocab_size), device=self.device, dtype=self.dtype)
+        self.graph_next_token = torch.empty((bsz,), device=self.device, dtype=torch.long)
+        # Ensure prompt buffer is initialized with valid tokens before capture
+        self.gpu_prompt.copy_(self.host_prompt, non_blocking=False)
+        try:
+            # Warm up to populate kernels/caches prior to capture
+            with torch.cuda.stream(self.graph_stream):
+                for _ in range(2):
+                    if self.cfg.graph_full_iteration:
+                        prefill_state = self.prefill_fn(self.gpu_prompt)
+                        self.state_buffer.copy_(prefill_state)
+                        self.current_tokens.copy_(self.gpu_prompt[:, -1])
+                    logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
+                    self.state_buffer.copy_(next_state)
+                    self.graph_next_token.copy_(next_token)
+                    self.current_tokens.copy_(next_token)
+            torch.cuda.synchronize()
+            self.decode_graph = torch.cuda.CUDAGraph()
+            # Reset state before capture for determinism
+            self.state_buffer.zero_()
+            self.current_tokens.zero_()
+            torch.cuda.synchronize()
+            with torch.cuda.graph(self.decode_graph, stream=self.graph_stream):
+                if self.cfg.graph_full_iteration:
+                    prefill_state = self.prefill_fn(self.gpu_prompt)
+                    self.state_buffer.copy_(prefill_state)
+                    self.current_tokens.copy_(self.gpu_prompt[:, -1])
+                for _ in range(self.cfg.decode_tokens):
+                    logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
+                    self.state_buffer.copy_(next_state)
+                    self.graph_logits.copy_(logits)
+                    self.graph_next_token.copy_(next_token)
+                    if self.cfg.graph_full_iteration:
+                        self.current_tokens.copy_(next_token)
+            torch.cuda.synchronize()
+            self.graph_includes_prefill = bool(self.cfg.graph_full_iteration)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.decode_graph = None
+            self.graph_stream = None
+            self.graph_includes_prefill = False
+            self._graph_error = str(exc)
+
+    # Core math
+    def _prefill(self, tokens: torch.Tensor) -> torch.Tensor:
+        if self._fp8_enabled and te is not None and self.fp8_recipe is not None:
+            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
+                embeds = self.embedding(tokens)
+                hidden = self.prefill_mlp(embeds)
+        elif self._fp4_enabled and te is not None and self.fp8_recipe is not None:
+            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
+                embeds = self.embedding(tokens)
+                hidden = self.prefill_mlp(embeds)
+        else:
+            embeds = self.embedding(tokens)
+            hidden = self.prefill_mlp(embeds)
+        return hidden[:, -1, :]
+
+    def _decode_step(
+        self, tokens: torch.Tensor, state: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        token_hidden = self.embedding(tokens)
+        combined = token_hidden + state
+        if (self._fp8_enabled or self._fp4_enabled) and te is not None and self.fp8_recipe is not None:
+            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
+                hidden = self.decode_mlp(combined)
+                logits = self.lm_head(hidden)
+        else:
+            hidden = self.decode_mlp(combined)
+            logits = self.lm_head(hidden)
+        next_token = torch.argmax(logits, dim=-1)
+        return logits, hidden, next_token
+
+    # Execution helpers
+    def _copy_prompts_to_device(self) -> None:
+        non_blocking = bool(self.cfg.use_pinned_host)
+        if self.copy_stream is not None:
+            with torch.cuda.stream(self.copy_stream):
+                self.gpu_prompt.copy_(self.host_prompt, non_blocking=non_blocking)
+            torch.cuda.current_stream().wait_stream(self.copy_stream)
+        else:
+            self.gpu_prompt.copy_(self.host_prompt, non_blocking=non_blocking)
+
+    def benchmark_fn(self) -> None:
+        # Timers via CUDA events
+        prefill_start = torch.cuda.Event(enable_timing=True)
+        prefill_end = torch.cuda.Event(enable_timing=True)
+        decode_start = torch.cuda.Event(enable_timing=True)
+        decode_end = torch.cuda.Event(enable_timing=True)
+
+        # NVTX ranges for profiling clarity
+        try:
+            import torch.cuda.nvtx as nvtx  # type: ignore
+        except Exception:
+            nvtx = None  # type: ignore
+
+        prefill_start.record()
+        self._copy_prompts_to_device()
+        if nvtx:
+            nvtx.range_push("prefill")
+
+        if self.decode_graph is not None and self.graph_includes_prefill:
+            # Reset state each iteration to avoid cross-run contamination
+            self.state_buffer.zero_()
+            self.current_tokens.zero_()
+            decode_start.record()
+            self.decode_graph.replay()
+            decode_end.record()
+            torch.cuda.current_stream().wait_stream(self.graph_stream)  # ensure graph work is visible
+            prefill_end.record()  # best-effort TTFT when captured
+        else:
+            # Prefill
+            prefill_state = self.prefill_fn(self.gpu_prompt)
+            self.state_buffer.copy_(prefill_state)
+            self.current_tokens.copy_(self.gpu_prompt[:, -1])
+            prefill_end.record()
+
+            # Decode
+            if nvtx:
+                nvtx.range_pop()  # prefill
+                nvtx.range_push("decode")
+            decode_start.record()
+            if self.decode_graph is not None:
+                for _ in range(self.cfg.decode_tokens):
+                    self.decode_graph.replay()
+                    self.current_tokens.copy_(self.graph_next_token)
+                decode_end.record()
+                torch.cuda.current_stream().wait_stream(self.graph_stream)
+            else:
+                stream = self.compute_stream or torch.cuda.current_stream()
+                with torch.cuda.stream(stream):
+                    for _ in range(self.cfg.decode_tokens):
+                        logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
+                        self.state_buffer.copy_(next_state)
+                        self.current_tokens.copy_(next_token)
+                decode_end.record()
+                if self.compute_stream is not None:
+                    torch.cuda.current_stream().wait_stream(stream)
+            if nvtx:
+                nvtx.range_pop()
+        if nvtx:
+            nvtx.range_pop()
+
+        torch.cuda.synchronize()
+
+        ttft_ms = prefill_end.elapsed_time(prefill_start) if prefill_end.query() else 0.0
+        decode_ms = decode_end.elapsed_time(decode_start) if decode_end.query() else 0.0
+        total_ms = decode_end.elapsed_time(prefill_start) if decode_end.query() else ttft_ms + decode_ms
+        tpot_ms = decode_ms / max(self.cfg.decode_tokens, 1)
+        tokens_per_s = (self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)) / max(total_ms / 1000.0, 1e-6)
+
+        self._custom_metrics = {
+            "tokens_per_iteration": float(self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)),
+            "prompt_tokens": float(self.cfg.prompt_tokens),
+            "decode_tokens": float(self.cfg.decode_tokens),
+            "hidden_size": float(self.cfg.hidden_size),
+            "use_pinned_host": float(self.cfg.use_pinned_host),
+            "use_copy_stream": float(self.cfg.use_copy_stream),
+            "use_compute_stream": float(self.cfg.use_compute_stream),
+            "use_cuda_graphs": float(self.decode_graph is not None),
+            "graph_full_iteration": float(self.graph_includes_prefill),
+            "use_torch_compile": float(self.cfg.use_torch_compile and not self._compile_error),
+            "use_fp8": float(self._fp8_enabled),
+            "fp8_fallback": float(1.0 if (self.cfg.use_fp8 and not self._fp8_enabled) else 0.0),
+            "use_fp4": float(self._fp4_enabled),
+            "ttft_ms": float(ttft_ms),
+            "decode_time_ms": float(decode_ms),
+            "tpot_mean_ms": float(tpot_ms),
+            "tokens_per_s": float(tokens_per_s),
+            "total_time_ms": float(total_ms),
+        }
+        if self._compile_error:
+            self._custom_metrics["compile_error"] = 1.0
+        if self._graph_error:
+            self._custom_metrics["graph_capture_failed"] = 1.0
+
+    def validate_result(self) -> Optional[str]:
+        if torch.isnan(self.state_buffer).any():
+            return "NaN detected in decode state"
+        return None
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(
+            iterations=self.cfg.iterations,
+            warmup=self.cfg.warmup,
+            percentiles=[50, 90, 99],
+        )
+
+    def get_custom_metrics(self) -> Dict[str, float]:
+        return self._custom_metrics
