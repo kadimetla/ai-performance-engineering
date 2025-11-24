@@ -109,7 +109,8 @@ inline bool is_blackwell_device(
     if (out_error != nullptr) {
         *out_error = cudaSuccess;
     }
-    return props.major >= 12;
+    // Allow Blackwell SM10x and newer GB-series parts.
+    return props.major >= 10;
 #else
     if (out_props != nullptr) {
         *out_props = cudaDeviceProp{};

@@ -16,7 +16,7 @@ from common.python.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
 def _require_torch_2_10() -> None:
-    """Ensure PyTorch 2.10+ for consistency across Blackwell targets."""
+    """Ensure PyTorch 2.10+ for CUDA 13 TMA harness execution."""
     version = torch.__version__.split("+")[0]
     parts = version.split(".")
     major = int(parts[0]) if len(parts) > 0 else 0

@@ -63,8 +63,8 @@ __global__ void tma_copy_2d_kernel(const __grid_constant__ CUtensorMap in_desc,
         cde::cp_async_bulk_tensor_2d_global_to_shared(
             &tile,
             &in_desc,
-            tile_n,
-            tile_m,
+            tile_m,  // row offset (height)
+            tile_n,  // col offset (width)
             bar);
         token = cuda::device::barrier_arrive_tx(bar, 1, BYTES_PER_TILE);
     }
@@ -81,8 +81,8 @@ __global__ void tma_copy_2d_kernel(const __grid_constant__ CUtensorMap in_desc,
     if (threadIdx.x == 0 && threadIdx.y == 0) {
         cde::cp_async_bulk_tensor_2d_shared_to_global(
             &out_desc,
-            tile_n,
-            tile_m,
+            tile_m,  // row offset (height)
+            tile_n,  // col offset (width)
             &tile);
         cde::cp_async_bulk_commit_group();
         cde::cp_async_bulk_wait_group_read<0>();

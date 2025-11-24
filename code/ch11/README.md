@@ -13,7 +13,7 @@ Explains how to overlap compute, memory, and communication on Blackwell using CU
 | Path | Description |
 | --- | --- |
 | `baseline_streams.py`, `optimized_streams.py`, `baseline_streams.cu`, `optimized_streams_ordered.cu`, `stream_overlap_base.py` | Core stream overlap demos that contrast serialized launches with overlapped workloads. |
-| `baseline_stream_ordered.py`, `baseline_stream_ordered_kv_cache.py`, `optimized_stream_ordered.py`, `optimized_stream_ordered_kv_cache.py`, `optimized_stream_ordered_fast.py` | Stream-ordered allocator and KV-cache examples ensuring deterministic updates while enabling overlap. |
+| `baseline_stream_ordered.py`, `baseline_stream_ordered_kv_cache.py`, `optimized_stream_ordered.py`, `optimized_stream_ordered_kv_cache.py` | Stream-ordered allocator and KV-cache examples ensuring deterministic updates while enabling overlap. |
 | `baseline_gemm_streams.py`, `optimized_gemm_streams.py`, `baseline_tensor_cores_streams.py`, `optimized_tensor_cores_streams.py` | GEMM pipelines that schedule tensor-core kernels across multiple streams to decouple math vs IO phases. |
 | `baseline_distributed_streams.py`, `optimized_distributed_streams.py`, `baseline_adaptive_streams.py`, `optimized_adaptive_streams.py` | Adaptive streaming controllers that balance NCCL, compute, and IO tasks on large systems. |
 | `baseline_warp_specialization_multistream.*`, `optimized_warp_specialized_multistream.*`, `warp_specialized_cluster_pipeline_multistream.cu` | Warp-specialized multistream kernels demonstrating DSMEM usage and per-stream specialization. |

@@ -40,7 +40,7 @@ class OptimizedDdpBenchmark(BaseBenchmark):
 
     def __init__(self):
         super().__init__()
-        self.batch_size = 256
+        self.batch_size = 512
         self.input_size = 1024
         self.hidden_size = 256
         self.model: Optional[nn.Module] = None

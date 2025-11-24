@@ -1,4 +1,5 @@
 #pragma once
+// CUDA 13 + Blackwell: Uses Float8 (32-byte aligned) for 256-bit loads
 
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -7,6 +8,13 @@
 #include <cstdlib>
 #include <cmath>
 #include "../common/headers/profiling_helpers.cuh"
+
+// CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
+struct alignas(32) Float8 {
+    float elems[8];
+};
+static_assert(sizeof(Float8) == 32, "Float8 must be 32 bytes");
+static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
 
 namespace ilp_low_occ_vec4 {
 
@@ -25,32 +33,44 @@ __global__ void independent_ops_kernel(float* __restrict__ output,
     }
 }
 
+// ILP kernel using Float8 (256-bit loads, 8-way ILP)
 __global__ void unrolled_ilp_kernel(float* __restrict__ output,
                                     const float* __restrict__ input,
                                     int N) {
-    constexpr int VEC_WIDTH = 4;
+    constexpr int VEC_WIDTH = 8;
     int vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
+    
     for (int idx = vec_idx; idx * VEC_WIDTH < N; idx += stride) {
         int base_idx = idx * VEC_WIDTH;
         if (base_idx + (VEC_WIDTH - 1) < N) {
-            const float4* input4 = reinterpret_cast<const float4*>(input);
-            float4 vals = input4[idx];
-            float4 res;
-            res.x = vals.x * 2.0f + 1.0f;
-            res.y = vals.y * 3.0f - 5.0f;
-            res.z = vals.z * 4.0f + 2.0f;
-            res.w = vals.w * 5.0f - 3.0f;
-            float4* output4 = reinterpret_cast<float4*>(output);
-            output4[idx] = res;
+            const Float8* input8 = reinterpret_cast<const Float8*>(input);
+            Float8 vals = input8[idx];  // 256-bit load
+            Float8 res;
+            // 8-way ILP - all independent operations
+            res.elems[0] = vals.elems[0] * 2.0f + 1.0f;
+            res.elems[1] = vals.elems[1] * 3.0f - 5.0f;
+            res.elems[2] = vals.elems[2] * 4.0f + 2.0f;
+            res.elems[3] = vals.elems[3] * 5.0f - 3.0f;
+            res.elems[4] = vals.elems[4] * 2.5f + 0.5f;
+            res.elems[5] = vals.elems[5] * 3.5f - 2.0f;
+            res.elems[6] = vals.elems[6] * 4.5f + 1.5f;
+            res.elems[7] = vals.elems[7] * 5.5f - 4.0f;
+            Float8* output8 = reinterpret_cast<Float8*>(output);
+            output8[idx] = res;  // 256-bit store
         } else {
+            // Handle remainder
             for (int i = 0; i < VEC_WIDTH && base_idx + i < N; ++i) {
                 float val = input[base_idx + i];
                 switch (i) {
                     case 0: output[base_idx + i] = val * 2.0f + 1.0f; break;
                     case 1: output[base_idx + i] = val * 3.0f - 5.0f; break;
                     case 2: output[base_idx + i] = val * 4.0f + 2.0f; break;
-                    default: output[base_idx + i] = val * 5.0f - 3.0f; break;
+                    case 3: output[base_idx + i] = val * 5.0f - 3.0f; break;
+                    case 4: output[base_idx + i] = val * 2.5f + 0.5f; break;
+                    case 5: output[base_idx + i] = val * 3.5f - 2.0f; break;
+                    case 6: output[base_idx + i] = val * 4.5f + 1.5f; break;
+                    default: output[base_idx + i] = val * 5.5f - 4.0f; break;
                 }
             }
         }
@@ -149,14 +169,14 @@ inline int run_ilp_low_occupancy_vec4(const char* title, int max_active_blocks_o
                    cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
 
-    printf("\n2. Vectorized ILP (float4 loads/stores):\n");
+    printf("\n2. Vectorized ILP (Float8 loads/stores, 8-way ILP):\n");
     float unrolled_time = measure_kernel(
         unrolled_ilp_kernel, d_output, d_input, N,
         threads_per_block, active_blocks, stream, "unrolled_ilp");
     printf("   Time: %.3f ms\n", unrolled_time);
     cudaMemcpyAsync(h_output_unrolled, d_output, N * sizeof(float),
                    cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    cudaStreamSynchronize(stream)
 
     bool indep_correct = true;
     bool unrolled_correct = true;
@@ -186,9 +206,9 @@ inline int run_ilp_low_occupancy_vec4(const char* title, int max_active_blocks_o
     printf("  Independent:     %s\n", indep_correct ? "✓ Correct" : "✗ Incorrect");
     printf("  Vectorized ILP:  %s\n", unrolled_correct ? "✓ Correct" : "✗ Incorrect");
     if (indep_time > 0 && unrolled_time > 0) {
-        printf("\n  Vectorized ILP:  %.2fx speedup vs scalar\n", indep_time / unrolled_time);
+        printf("  Speedup:         %.2fx (vectorized vs scalar)\n", indep_time / unrolled_time);
     }
-    printf("\nKey insight: float4 vectorization and low occupancy caps increase per-thread ILP.\n");
+    printf("\nKey insight: Float8 (256-bit) vectorization + 8-way ILP maximize memory bandwidth.\n");
     printf("========================================\n");
 
     cudaFreeAsync(d_output, stream);

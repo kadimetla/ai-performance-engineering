@@ -31,7 +31,7 @@ test: all
 	@echo ""
 	@echo "Testing PyTorch optimizations..."
 	cd .. && PYTHONPATH=.:$$PYTHONPATH python3 ch1/baseline_performance.py
-	cd .. && PYTHONPATH=.:$$PYTHONPATH python3 ch1/optimized_performance_graphs.py
+	cd .. && PYTHONPATH=.:$$PYTHONPATH python3 ch1/optimized_performance.py
 
 compare: clean
 	@echo "========================================"

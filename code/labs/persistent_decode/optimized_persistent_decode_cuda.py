@@ -24,10 +24,9 @@ def _load_extension() -> object:
     ext_path = Path(__file__).with_name("persistent_decode_ext.cu")
     repo_root = Path(__file__).resolve().parents[2]
     include_dirs = [
-        # Prefer the TransformerEngine-bundled CUTLASS (stock/upstream) to avoid local patches.
-        repo_root / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include",
-        repo_root / "common" / "headers",
+        # Stick to the repo-pinned CUTLASS to avoid mixing cute headers from TransformerEngine.
         repo_root / "third_party" / "cutlass" / "include",
+        repo_root / "common" / "headers",
     ]
     return load(
         name="persistent_decode_ext",
@@ -36,6 +35,8 @@ def _load_extension() -> object:
             "--use_fast_math",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
+            "-DCUTE_ARCH_TCGEN05_TMEM_ENABLED",
+            "-gencode=arch=compute_100,code=sm_100",
         ]
         + [f"-I{p}" for p in include_dirs],
         verbose=False,

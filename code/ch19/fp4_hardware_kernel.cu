@@ -3,6 +3,28 @@
  * 
  * Demonstrates native FP4 (E2M1) tensor core usage on Grace-Blackwell systems.
  * Compares FP4 vs FP16 performance.
+ * 
+ * TODO (CUDA 13+): Check for native FP4 intrinsics
+ * ================================================
+ * Current implementation uses MANUAL quantization/dequantization.
+ * CUDA 13+ may provide native FP4 conversion intrinsics:
+ * 
+ * Potential APIs to check:
+ *   - __nv_cvt_float_to_fp4_rn(float x) -> uint8_t
+ *   - __nv_cvt_fp4_to_float(uint8_t x) -> float
+ *   - __nv_cvt_half_to_fp4_rn(half x) -> uint8_t
+ * 
+ * Also check cuBLAS 13.x for block-scaled FP4 GEMM:
+ *   - cublasLtMatmul with CUDA_R_4F or CUDA_R_4BF
+ *   - cuBLAS release notes mention "enhanced FP4 GEMM performance"
+ * 
+ * If native intrinsics are found:
+ *   - Expected performance: 8,000-10,000 TFLOPS on B200
+ *   - Current manual: ~2,500 TFLOPS
+ *   - Potential speedup: 3-4x
+ * 
+ * Research plan: See patches/003_fp4_intrinsics_research.md
+ * Last checked: November 2025 (CUDA 13.0.3)
  */
 
 #include <cuda_runtime.h>
@@ -22,6 +44,7 @@
     } while(0)
 
 // FP4 GEMM kernel (packed format: 2 FP4 values per byte)
+// NOTE: Uses manual quantization - see TODO above for potential native intrinsics
 template<int M, int N, int K>
 __global__ void fp4_gemm_kernel(
     const uint8_t* A_packed,  // Packed FP4: 2 values per byte

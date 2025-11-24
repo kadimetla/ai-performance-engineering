@@ -15,6 +15,8 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
+from contextlib import redirect_stdout
+from io import StringIO
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 # Ensure repo root is importable even when this file is executed via an absolute path
@@ -52,6 +54,7 @@ def run_benchmark_isolated(
     benchmark_class_name: str,
     config_dict: Dict[str, Any],
     device: Optional[str] = None,
+    initial_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run a benchmark in the current process (called from subprocess).
     
@@ -64,6 +67,7 @@ def run_benchmark_isolated(
         benchmark_class_name: Name of the benchmark class or 'get_benchmark' function
         config_dict: Dictionary of BenchmarkConfig values to override
         device: CUDA device string (e.g., 'cuda:0') or None for auto-detect
+        initial_state: Optional mapping of simple attribute values to set before setup
         
     Returns:
         Dictionary with keys: success, result_json (serialized BenchmarkResult), errors
@@ -144,6 +148,14 @@ def run_benchmark_isolated(
         # This handles cases where percentiles wasn't serialized
         if config.percentiles is None:
             config.percentiles = [25, 50, 75, 99]
+
+        if initial_state:
+            for key, value in initial_state.items():
+                try:
+                    setattr(benchmark, key, value)
+                except Exception:
+                    # Best-effort propagation; ignore attributes that cannot be set.
+                    pass
         
         # Disable subprocess in runner to avoid recursion (runner IS the subprocess)
         config.use_subprocess = False
@@ -196,46 +208,68 @@ def main():
     - benchmark_class_name: Name of benchmark class
     - config_dict: BenchmarkConfig overrides
     - device: Optional device string
-    
+    - initial_state: Optional mapping of simple attribute values
+
     Outputs JSON result to stdout with:
     - success: bool
     - result_json: Serialized BenchmarkResult (Pydantic JSON)
     - errors: List of error messages
     """
+    raw_input = sys.stdin.read()
     try:
-        input_data = json.loads(sys.stdin.read())
+        input_data = json.loads(raw_input)
         benchmark_module_path = input_data["benchmark_module_path"]
         benchmark_class_name = input_data["benchmark_class_name"]
         config_dict = input_data.get("config_dict", {})
         device = input_data.get("device")
-        
-        result = run_benchmark_isolated(
-            benchmark_module_path,
-            benchmark_class_name,
-            config_dict,
-            device
-        )
-        
-        # Output result as JSON
-        print(json.dumps(result))
-        
-    except (json.JSONDecodeError, KeyError) as e:
+        initial_state = input_data.get("initial_state")
+    except Exception as e:
         # Input parsing errors
         error_result = {
             "success": False,
-            "errors": [f"Invalid input: {type(e).__name__}: {str(e)}", traceback.format_exc()],
+            "result_json": None,
+            "errors": [
+                f"Invalid input: {type(e).__name__}: {str(e)}",
+                traceback.format_exc(),
+                f"Raw input: {raw_input}",
+            ],
         }
         print(json.dumps(error_result))
         sys.exit(1)
+
+    stdout_buffer = StringIO()
+    try:
+        with redirect_stdout(stdout_buffer):
+            result = run_benchmark_isolated(
+                benchmark_module_path,
+                benchmark_class_name,
+                config_dict,
+                device,
+                initial_state,
+            )
     except Exception as e:
-        # Catch-all for unexpected errors
+        # Catch-all for unexpected errors (ensure JSON-only stdout)
         error_result = {
             "success": False,
-            "errors": [f"Subprocess execution failed: {type(e).__name__}: {str(e)}", traceback.format_exc()],
             "result_json": None,
+            "errors": [
+                f"Subprocess execution failed: {type(e).__name__}: {str(e)}",
+                traceback.format_exc(),
+            ],
         }
+        captured = stdout_buffer.getvalue()
+        if captured:
+            error_result["stdout"] = captured
         print(json.dumps(error_result))
         sys.exit(1)
+
+    captured_stdout = stdout_buffer.getvalue()
+    if captured_stdout:
+        # Surface captured stdout for debugging; parent harness ignores this key.
+        result["stdout"] = captured_stdout
+
+    # Output result as JSON (only)
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <stdexcept>
 
+// Avoid macro collisions with CUTLASS prefetch helpers.
 #ifdef prefetch
 #undef prefetch
 #endif
@@ -17,7 +18,7 @@
 #include <cute/arch/tmem_allocator_sm100.hpp>
 #include <cute/atom/copy_traits_sm100.hpp>
 #include <cute/tensor.hpp>
-
+using cute::Copy_Atom;
 namespace {
 
 __device__ inline float dot_tile_fallback(const float* q, const float* k, int head_dim) {
@@ -38,12 +39,17 @@ __device__ inline float dot_tile_fallback(const float* q, const float* k, int he
     return smem[0];
 }
 
+constexpr bool kTmemAvailable =
 #if defined(CUTE_ARCH_TCGEN05_TMEM_ENABLED)
-// TMEM-capable epilogue is only built on SM100-class GPUs.
-constexpr bool kTmemAvailable = true;
+    true;
 #else
-constexpr bool kTmemAvailable = false;
+    false;
 #endif
+
+constexpr int TILE_M = 32;
+constexpr int TILE_N = 64;
+static_assert(TILE_N <= cute::TMEM::Allocator1Sm::Sm100TmemCapacityColumns,
+              "TILE_N exceeds TMEM column capacity");
 
 __global__ void persistent_decode_kernel(
     const float* __restrict__ q,
@@ -59,7 +65,7 @@ __global__ void persistent_decode_kernel(
     if (seq_id >= batch) {
         return;
     }
-    constexpr int MAX_SEQ_LEN = 48;
+    constexpr int MAX_SEQ_LEN = 64;
     if (seq_len > MAX_SEQ_LEN) {
         return;
     }
@@ -72,6 +78,9 @@ __global__ void persistent_decode_kernel(
     float* smem_v1 = smem_v0 + MAX_HEAD_DIM;
     float* red = smem_v1 + MAX_HEAD_DIM;
     float* tmep_stage = red + blockDim.x;  // up to MAX_SEQ_LEN x head_dim
+
+    __shared__ alignas(128) float tmem_tile[TILE_M][TILE_N];
+    __shared__ uint32_t tmem_base_ptr;
 
     for (int t = 0; t < seq_len; ++t) {
         const float* q_ptr = q + (seq_id * seq_len + t) * head_dim;
@@ -93,66 +102,74 @@ __global__ void persistent_decode_kernel(
         }
         __syncthreads();
     }
-    // TMEM epilogue when the tile matches 32x64 and TMEM is available.
-    bool use_tmem = kTmemAvailable && (head_dim == 64) && (seq_len == 32);
-#if defined(CUTE_ARCH_TCGEN05_TMEM_ENABLED)
-    if (use_tmem) {
-        __shared__ uint32_t tmem_base_ptr;
-        if (threadIdx.x == 0) {
-            cute::TMEM::Allocator1Sm allocator{};
-            allocator.allocate(cute::TMEM::Allocator1Sm::Sm100TmemCapacityColumns, &tmem_base_ptr);
-        }
-        __syncthreads();
-
-        auto tmem_tensor = cute::make_tensor(
-            cute::make_tmem_ptr<float>(tmem_base_ptr),
-            cute::make_layout(
-                cute::make_shape(cute::Int<32>{}, cute::Int<64>{}),
-                cute::make_stride(cute::TMEM::DP<float>{}, cute::Int<1>{})));
-
-        auto smem_tensor = cute::make_tensor(
-            cute::make_smem_ptr(tmep_stage),
-            cute::make_layout(
-                cute::make_shape(cute::Int<32>{}, cute::Int<64>{}),
-                cute::make_stride(cute::Int<64>{}, cute::Int<1>{})));
-
-        auto gmem_tensor = cute::make_tensor(
-            cute::make_gmem_ptr(out + seq_id * seq_len * head_dim),
-            cute::make_layout(
-                cute::make_shape(cute::Int<32>{}, cute::Int<64>{}),
-                cute::make_stride(cute::Int<64>{}, cute::Int<1>{})));
-
-        auto tmem_store = cute::make_tmem_copy(cute::SM100_TMEM_STORE_32dp32b2x{}, tmem_tensor);
-        auto tmem_load = cute::make_tmem_copy(cute::SM100_TMEM_LOAD_32dp32b2x{}, tmem_tensor);
-
-        if (threadIdx.x < 32) {
-            auto store_thr = tmem_store.get_slice(threadIdx.x);
-            auto src = store_thr.partition_S(smem_tensor);
-            auto dst = store_thr.partition_D(tmem_tensor);
-            cute::copy(tmem_store, src, dst);
-        }
-        __syncthreads();
-        if (threadIdx.x < 32) {
-            auto load_thr = tmem_load.get_slice(threadIdx.x);
-            auto src = load_thr.partition_S(tmem_tensor);
-            auto dst = load_thr.partition_D(gmem_tensor);
-            cute::copy(tmem_load, src, dst);
-        }
-        __syncthreads();
-        if (threadIdx.x == 0) {
-            cute::TMEM::Allocator1Sm allocator{};
-            allocator.release_allocation_lock();
-            allocator.free(tmem_base_ptr, cute::TMEM::Allocator1Sm::Sm100TmemCapacityColumns);
-        }
+    // TMEM epilogue: tiles of 32x64, no fallback path.
+    if (!kTmemAvailable) {
         return;
     }
-#endif
 
-    // Fallback store for all other shapes/hardware.
-    const int total = seq_len * head_dim;
-    const int base = seq_id * seq_len * head_dim;
-    for (int idx = threadIdx.x; idx < total; idx += blockDim.x) {
-        out[base + idx] = tmep_stage[idx];
+    // Allocate full TMEM slice once per CTA.
+    if (threadIdx.x == 0) {
+        cute::TMEM::Allocator1Sm allocator{};
+        allocator.allocate(cute::TMEM::Allocator1Sm::Sm100TmemCapacityColumns, &tmem_base_ptr);
+    }
+    __syncthreads();
+
+    for (int row = 0; row < seq_len; row += TILE_M) {
+        for (int col = 0; col < head_dim; col += TILE_N) {
+            const int rows_this = TILE_M;
+            const int cols_this = TILE_N;
+
+            // Load tile from tmep_stage into shared tile (full tiles only).
+            for (int idx = threadIdx.x; idx < rows_this * cols_this; idx += blockDim.x) {
+                int r = idx / cols_this;
+                int c = idx - r * cols_this;
+                tmem_tile[r][c] = tmep_stage[(row + r) * head_dim + (col + c)];
+            }
+            __syncthreads();
+
+            // TMEM store and load via CUTLASS copy atoms.
+            auto tmem_tensor = cute::make_tensor(
+                cute::make_tmem_ptr<float>(tmem_base_ptr),
+                cute::make_layout(
+                    cute::make_shape(cute::Int<TILE_M>{}, cute::Int<TILE_N>{}),
+                    cute::make_stride(cute::TMEM::DP<float>{}, cute::Int<1>{})));
+
+            auto smem_tensor = cute::make_tensor(
+                cute::make_smem_ptr(&tmem_tile[0][0]),
+                cute::make_layout(
+                    cute::make_shape(cute::Int<TILE_M>{}, cute::Int<TILE_N>{}),
+                    cute::make_stride(cute::Int<TILE_N>{}, cute::Int<1>{})));
+
+            auto gmem_tensor = cute::make_tensor(
+                cute::make_gmem_ptr(out + (seq_id * seq_len + row) * head_dim + col),
+                cute::make_layout(
+                    cute::make_shape(cute::Int<TILE_M>{}, cute::Int<TILE_N>{}),
+                    cute::make_stride(cute::Int<TILE_N>{}, cute::Int<1>{})));
+
+            auto tmem_store = cute::make_tmem_copy(Copy_Atom<cute::SM100_TMEM_STORE_32dp32b4x, float>{}, tmem_tensor);
+            auto tmem_load = cute::make_tmem_copy(Copy_Atom<cute::SM100_TMEM_LOAD_32dp32b4x, float>{}, tmem_tensor);
+
+            if (threadIdx.x < 32) {
+                auto store_thr = tmem_store.get_slice(threadIdx.x);
+                auto src = store_thr.partition_S(smem_tensor);
+                auto dst = store_thr.partition_D(tmem_tensor);
+                cute::copy(tmem_store, src, dst);
+            }
+            __syncthreads();
+            if (threadIdx.x < 32) {
+                auto load_thr = tmem_load.get_slice(threadIdx.x);
+                auto src = load_thr.partition_S(tmem_tensor);
+                auto dst = load_thr.partition_D(gmem_tensor);
+                cute::copy(tmem_load, src, dst);
+            }
+            __syncthreads();
+        }
+    }
+
+    if (threadIdx.x == 0) {
+        cute::TMEM::Allocator1Sm allocator{};
+        allocator.release_allocation_lock();
+        allocator.free(tmem_base_ptr, cute::TMEM::Allocator1Sm::Sm100TmemCapacityColumns);
     }
 }
 
@@ -182,6 +199,12 @@ void persistent_decode_cuda(torch::Tensor q, torch::Tensor k, torch::Tensor v, t
 
     constexpr int MAX_HEAD_DIM = 128;
     constexpr int MAX_SEQ_LEN = 48;
+    if (seq_len % TILE_M != 0 || head_dim != TILE_N) {
+        throw std::runtime_error("seq_len must be a multiple of 32 and head_dim must equal 64 for TMEM path");
+    }
+    if (!kTmemAvailable) {
+        throw std::runtime_error("TMEM required but not available on this build/device");
+    }
     const size_t smem_bytes = (4 * MAX_HEAD_DIM + threads + MAX_SEQ_LEN * MAX_HEAD_DIM) * sizeof(float);
 
     c10::cuda::CUDAGuard guard(q.get_device());
@@ -190,8 +213,8 @@ void persistent_decode_cuda(torch::Tensor q, torch::Tensor k, torch::Tensor v, t
     if (err != cudaSuccess) {
         throw std::runtime_error("cudaGetDeviceProperties failed");
     }
-    if (prop.major < 8) {
-        throw std::runtime_error("persistent_decode requires SM80+");
+    if (prop.major < 10) {
+        throw std::runtime_error("persistent_decode TMEM path requires SM100+");
     }
 
     cudaStream_t stream = at::cuda::getDefaultCUDAStream();

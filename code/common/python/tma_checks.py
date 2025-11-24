@@ -35,7 +35,9 @@ def require_tma_instructions(binary: Path) -> None:
         )
 
     haystack = proc.stdout
-    if "cp.async.bulk.tensor" not in haystack and "CP.ASYNC.BULK.TENSOR" not in haystack:
+    has_cp_async = "cp.async.bulk.tensor" in haystack or "CP.ASYNC.BULK.TENSOR" in haystack
+    has_utma = "UTMALDG" in haystack or "UTMASTG" in haystack
+    if not (has_cp_async or has_utma):
         raise RuntimeError(
             "SKIPPED: TMA validation failed (cp.async.bulk.tensor not found in SASS)"
         )

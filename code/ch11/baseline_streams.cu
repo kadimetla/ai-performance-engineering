@@ -34,7 +34,60 @@ __global__ void scale_kernel(float* data, int n, float scale) {
   }
 }
 
-// Vectorized version using float4 for better memory throughput
+// CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
+struct alignas(32) Float8 {
+    float elems[8];
+};
+static_assert(sizeof(Float8) == 32, "Float8 must be 32 bytes");
+static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
+
+// Blackwell-optimized version using Float8 for 256-bit loads
+// Launch bounds removed to let compiler auto-tune for different architectures (B200 vs GB10)
+__global__ void scale_kernel_vectorized_float8(float* data, int n, float scale) {
+  int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 8;
+  
+  if (idx + 7 < n) {
+    // Load 8 floats at once (256-bit transaction on Blackwell)
+    Float8 vec = *reinterpret_cast<Float8*>(&data[idx]);
+    
+    // Process all 8 elements
+#pragma unroll 4
+    for (int iter = 0; iter < WORK_ITERS; ++iter) {
+      vec.elems[0] = vec.elems[0] * scale + BIAS_ADD;
+      vec.elems[1] = vec.elems[1] * scale + BIAS_ADD;
+      vec.elems[2] = vec.elems[2] * scale + BIAS_ADD;
+      vec.elems[3] = vec.elems[3] * scale + BIAS_ADD;
+      vec.elems[4] = vec.elems[4] * scale + BIAS_ADD;
+      vec.elems[5] = vec.elems[5] * scale + BIAS_ADD;
+      vec.elems[6] = vec.elems[6] * scale + BIAS_ADD;
+      vec.elems[7] = vec.elems[7] * scale + BIAS_ADD;
+      vec.elems[0] = vec.elems[0] * DECAY - BIAS_SUB;
+      vec.elems[1] = vec.elems[1] * DECAY - BIAS_SUB;
+      vec.elems[2] = vec.elems[2] * DECAY - BIAS_SUB;
+      vec.elems[3] = vec.elems[3] * DECAY - BIAS_SUB;
+      vec.elems[4] = vec.elems[4] * DECAY - BIAS_SUB;
+      vec.elems[5] = vec.elems[5] * DECAY - BIAS_SUB;
+      vec.elems[6] = vec.elems[6] * DECAY - BIAS_SUB;
+      vec.elems[7] = vec.elems[7] * DECAY - BIAS_SUB;
+    }
+    
+    // Store 8 floats at once (256-bit store on Blackwell)
+    *reinterpret_cast<Float8*>(&data[idx]) = vec;
+  } else {
+    // Handle remaining elements
+    for (int i = idx; i < n; i++) {
+      float val = data[i];
+#pragma unroll 4
+      for (int iter = 0; iter < WORK_ITERS; ++iter) {
+        val = val * scale + BIAS_ADD;
+        val = val * DECAY - BIAS_SUB;
+      }
+      data[i] = val;
+    }
+  }
+}
+
+// Vectorized version using float4 for better memory throughput (pre-Blackwell)
 // Launch bounds removed to let compiler auto-tune for different architectures (B200 vs GB10)
 __global__ void scale_kernel_vectorized(float* data, int n, float scale) {
   int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
@@ -165,16 +218,35 @@ int main() {
   float ms_original = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&ms_original, start, stop));
   
-  // Vectorized kernel (adjust grid size for float4)
-  dim3 grid_vec((N / 4 + block.x - 1) / block.x);
+  // Detect GPU architecture for optimal kernel selection
+  cudaDeviceProp prop;
+  CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+  bool is_blackwell = (prop.major >= 10);
+  
+  // Vectorized kernel (adjust grid size for vector width)
+  dim3 grid_vec_float8((N / 8 + block.x - 1) / block.x);  // Float8: 8 floats per thread
+  dim3 grid_vec_float4((N / 4 + block.x - 1) / block.x);  // float4: 4 floats per thread
+  dim3 grid_vec = is_blackwell ? grid_vec_float8 : grid_vec_float4;
+  
+  printf("GPU: %s (Compute Capability %d.%d)\n", prop.name, prop.major, prop.minor);
+  printf("Using %s kernel for vectorization\n\n", is_blackwell ? "Float8 (256-bit)" : "float4 (128-bit)");
+  
   for (int i = 0; i < WARMUP; ++i) {
-    scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
+    if (is_blackwell) {
+      scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
+    } else {
+      scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
+    }
   }
   CUDA_CHECK(cudaStreamSynchronize(stream1));
   
   CUDA_CHECK(cudaEventRecord(start, stream1));
   for (int i = 0; i < ITERS; ++i) {
-    scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
+    if (is_blackwell) {
+      scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
+    } else {
+      scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
+    }
   }
   CUDA_CHECK(cudaEventRecord(stop, stream1));
   CUDA_CHECK(cudaEventSynchronize(stop));
@@ -182,7 +254,7 @@ int main() {
   float ms_vectorized = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&ms_vectorized, start, stop));
   
-  // Async kernel
+  // Async kernel (uses shared memory, architecture-agnostic)
   for (int i = 0; i < WARMUP; ++i) {
     scale_kernel_async<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
   }
@@ -199,8 +271,13 @@ int main() {
   CUDA_CHECK(cudaEventElapsedTime(&ms_async, start, stop));
   
   // Test with dual streams
-  scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
-  scale_kernel_vectorized<<<grid_vec, block, 0, stream2>>>(d_b, N, 0.9f);
+  if (is_blackwell) {
+    scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
+    scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream2>>>(d_b, N, 0.9f);
+  } else {
+    scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.1f);
+    scale_kernel_vectorized<<<grid_vec, block, 0, stream2>>>(d_b, N, 0.9f);
+  }
   CUDA_CHECK(cudaGetLastError());
 
   CUDA_CHECK(cudaMemcpyAsync(h_a, d_a, BYTES, cudaMemcpyDeviceToHost, stream1));
@@ -222,12 +299,20 @@ int main() {
       // Naive sequential pipeline on a single stream with blocking transfers.
       for (int i = 0; i < BATCHES; ++i) {
         CUDA_CHECK(cudaMemcpy(d_a, h_a, BYTES, cudaMemcpyHostToDevice));
-        scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.05f);
+        if (is_blackwell) {
+          scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.05f);
+        } else {
+          scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.05f);
+        }
         CUDA_CHECK(cudaStreamSynchronize(stream1));
         CUDA_CHECK(cudaMemcpy(h_a, d_a, BYTES, cudaMemcpyDeviceToHost));
 
         CUDA_CHECK(cudaMemcpy(d_b, h_b, BYTES, cudaMemcpyHostToDevice));
-        scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_b, N, 0.95f);
+        if (is_blackwell) {
+          scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream1>>>(d_b, N, 0.95f);
+        } else {
+          scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_b, N, 0.95f);
+        }
         CUDA_CHECK(cudaStreamSynchronize(stream1));
         CUDA_CHECK(cudaMemcpy(h_b, d_b, BYTES, cudaMemcpyDeviceToHost));
       }
@@ -256,7 +341,11 @@ int main() {
         CUDA_CHECK(cudaEventRecord(h2d_done[buf], stream1));
 
         CUDA_CHECK(cudaStreamWaitEvent(stream2, h2d_done[buf], 0));
-        scale_kernel_vectorized<<<grid_vec, block, 0, stream2>>>(d_buf, N, scale);
+        if (is_blackwell) {
+          scale_kernel_vectorized_float8<<<grid_vec, block, 0, stream2>>>(d_buf, N, scale);
+        } else {
+          scale_kernel_vectorized<<<grid_vec, block, 0, stream2>>>(d_buf, N, scale);
+        }
         CUDA_CHECK(cudaEventRecord(compute_done[buf], stream2));
 
         CUDA_CHECK(cudaStreamWaitEvent(d2h_stream, compute_done[buf], 0));

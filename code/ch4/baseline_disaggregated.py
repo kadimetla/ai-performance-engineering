@@ -45,7 +45,7 @@ class BaselineDisaggregatedBenchmark(BaseBenchmark):
         self.batch_size = 2
         self.prefill_len = 512
         self.hidden_dim = 256
-        tokens = self.batch_size * self.prefill_len
+        tokens = self.batch_size * (self.prefill_len + 1)  # include decode token
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),

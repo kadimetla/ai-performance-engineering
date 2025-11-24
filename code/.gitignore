@@ -14,6 +14,7 @@ benchmark_status_table.txt
 benchmark_results/
 checkpoints/
 .torch_inductor/
+review_issues.json
 tmp_bench/
 results_all/
 results_ch1/

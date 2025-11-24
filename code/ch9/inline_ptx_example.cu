@@ -3,6 +3,8 @@
 // inline_ptx_example.cu
 // Example demonstrating inline PTX for micro-optimizations
 
+#include <algorithm>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <cuda/barrier>
 #include <cuda/pipeline>
@@ -281,7 +283,7 @@ __global__ void tma_example_kernel(const __grid_constant__ CUtensorMap in_desc,
                                      ? 0
                                      : (total_tiles - base_tile + stride_tiles - 1) / stride_tiles;
 
-    const int preload = min(tiles_this_block, 2);
+    const int preload = (tiles_this_block < 2) ? tiles_this_block : 2;
     for (int t = 0; t < preload; ++t) {
         issue_tile(base_tile + t * stride_tiles, t);
     }
@@ -378,8 +380,8 @@ static void run_tma_example() {
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    const int max_blocks = max(1, prop.multiProcessorCount * 16);
-    const int blocks = min(total_tiles, max_blocks);
+    const int max_blocks = std::max(1, prop.multiProcessorCount * 16);
+    const int blocks = std::min(total_tiles, max_blocks);
 
     tma_example_kernel<TILE><<<blocks, THREADS>>>(in_desc, out_desc, total_tiles);
     cudaDeviceSynchronize();
@@ -387,7 +389,7 @@ static void run_tma_example() {
     constexpr int kIters = 10;
     cudaEventRecord(start);
     for (int i = 0; i < kIters; ++i) {
-        tma_example_kernel<TILE><<<1, THREADS>>>(in_desc, out_desc, total_tiles);
+        tma_example_kernel<TILE><<<blocks, THREADS>>>(in_desc, out_desc, total_tiles);
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);

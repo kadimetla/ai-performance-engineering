@@ -29,8 +29,6 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         self.batch, self.seq_len, self.head_dim = resolve_shapes()
         self.prefill_chunks = 8
         self.prefill_chunk_elems = 128 * 128
-        # torch.cuda._sleep argument is in clock cycles; ~50_000 ~= tens of microseconds.
-        self.tma_sleep_cycles = 50_000
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
 
     def setup(self) -> None:
@@ -43,9 +41,11 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         self._synchronize()
 
     def _prefill_sequential(self) -> None:
-        """Simulate bulk copy + compute without any pipelining."""
+        """Sequential copy + compute without any pipelining."""
         for idx in range(self.prefill_chunks):
-            torch.cuda._sleep(self.tma_sleep_cycles)
+            # Real copy operation - no artificial delays
+            self.prefill_dst[idx].copy_(self.prefill_src[idx])
+            # Add computation to simulate processing
             self.prefill_dst[idx].add_(self.prefill_src[idx])
 
     def _decode_host_loop(self) -> None:

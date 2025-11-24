@@ -1,4 +1,5 @@
-// optimized_lookup.cu -- precomputed scatter sums and vectorized loads.
+// optimized_lookup.cu -- precomputed scatter sums with Float8 vectorization.
+// CUDA 13 + Blackwell: Uses Float8 (32-byte aligned) for 256-bit loads
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -6,25 +7,27 @@
 
 #include "../common/headers/cuda_helpers.cuh"
 
+// CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
+struct alignas(32) Float8 {
+    float elems[8];
+};
+static_assert(sizeof(Float8) == 32, "Float8 must be 32 bytes");
+static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
+
 constexpr int N = 1 << 20;
 constexpr int ITERATIONS = 200;
 constexpr int RANDOM_STEPS = 64;
 
-__device__ __forceinline__ float lane_value(const float4& vec, int lane) {
-  const float* ptr = reinterpret_cast<const float*>(&vec);
-  return ptr[lane];
-}
-
+// Optimized lookup using Float8 (256-bit loads)
 __global__ void lookupOptimized(const float* __restrict__ precomputed,
                                 float* __restrict__ out,
                                 int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= n) {
-    return;
-  }
-  const float4* table4 = reinterpret_cast<const float4*>(precomputed);
-  const float4 vec = table4[idx >> 2];
-  out[idx] = lane_value(vec, idx & 3);
+  if (idx >= n) return;
+  
+  const Float8* table = reinterpret_cast<const Float8*>(precomputed);
+  Float8 vec = table[idx >> 3];  // 256-bit load
+  out[idx] = vec.elems[idx & 7];
 }
 
 __host__ int advance_lcg(int idx) {
@@ -79,8 +82,8 @@ int main() {
   float avg_ms = elapsed_ms / ITERATIONS;
 
   CUDA_CHECK(cudaMemcpy(h_out, d_out, N * sizeof(float), cudaMemcpyDeviceToHost));
+  printf("Lookup (Float8, 256-bit): %.4f ms\n", avg_ms);
   printf("out[0]=%.1f\n", h_out[0]);
-  printf("TIME_MS: %.4f\n", avg_ms);
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));

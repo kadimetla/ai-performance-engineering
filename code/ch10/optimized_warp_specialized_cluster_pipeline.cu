@@ -43,8 +43,14 @@ __global__ void optimized_cluster_kernel(const float* __restrict__ A_global,
     float* B_tile_local = A_tile_local + TILE_ELEMS;
     float* C_tile_local = B_tile_local + TILE_ELEMS;
 
-    __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 1> pipe_state;
-    auto pipe = cuda::make_pipeline(cta, &pipe_state);
+    using pipeline_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, 1>;
+    __shared__ alignas(pipeline_state_t) unsigned char pipe_state_bytes[sizeof(pipeline_state_t)];
+    auto* pipe_state = reinterpret_cast<pipeline_state_t*>(pipe_state_bytes);
+    if (threadIdx.x == 0) {
+        new (pipe_state) pipeline_state_t();
+    }
+    __syncthreads();
+    auto pipe = cuda::make_pipeline(cta, pipe_state);
 
     const int warp_id = threadIdx.x / warpSize;
     const int lane_id = threadIdx.x % warpSize;

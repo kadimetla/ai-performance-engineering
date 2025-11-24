@@ -54,16 +54,19 @@ def demonstrate_custom_allocator():
     def test_allocation_pattern(name, allocator_config=None):
         print(f"\nTesting {name}:")
 
-        prev_cuda_conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
-        prev_legacy_conf = os.environ.get("PYTORCH_ALLOC_CONF")
+        prev_alloc_conf = os.environ.get("PYTORCH_ALLOC_CONF")
+        # Migrate deprecated PYTORCH_CUDA_ALLOC_CONF if present
+        prev_deprecated_conf = os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
 
         try:
-            if allocator_config and "PYTORCH_CUDA_ALLOC_CONF" in allocator_config:
-                # Prefer CUDA-scoped allocator variable on PyTorch 2.10+
-                os.environ.pop("PYTORCH_ALLOC_CONF", None)
-                os.environ["PYTORCH_CUDA_ALLOC_CONF"] = allocator_config["PYTORCH_CUDA_ALLOC_CONF"]
+            if allocator_config and "PYTORCH_ALLOC_CONF" in allocator_config:
+                # Use PyTorch 2.10+ unified allocator configuration
+                os.environ["PYTORCH_ALLOC_CONF"] = allocator_config["PYTORCH_ALLOC_CONF"]
+            elif prev_deprecated_conf:
+                # Migrate deprecated variable to new API
+                os.environ["PYTORCH_ALLOC_CONF"] = prev_deprecated_conf
             else:
-                os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+                os.environ.pop("PYTORCH_ALLOC_CONF", None)
 
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
@@ -91,21 +94,17 @@ def demonstrate_custom_allocator():
             return allocated, reserved
         finally:
             # Restore prior allocator configuration
-            if prev_cuda_conf is not None:
-                os.environ["PYTORCH_CUDA_ALLOC_CONF"] = prev_cuda_conf
-            else:
-                os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
-            if prev_legacy_conf is not None:
-                os.environ["PYTORCH_ALLOC_CONF"] = prev_legacy_conf
+            if prev_alloc_conf is not None:
+                os.environ["PYTORCH_ALLOC_CONF"] = prev_alloc_conf
             else:
                 os.environ.pop("PYTORCH_ALLOC_CONF", None)
     
     # Test default allocator
     default_alloc, default_reserved = test_allocation_pattern("Default Allocator")
     
-    # Test with custom configuration
+    # Test with custom configuration (PyTorch 2.10+ unified API)
     custom_config = {
-        "PYTORCH_CUDA_ALLOC_CONF": "backend:cudaMallocAsync,max_split_size_mb:256,garbage_collection_threshold:0.6"
+        "PYTORCH_ALLOC_CONF": "backend:cudaMallocAsync,max_split_size_mb:256,garbage_collection_threshold:0.6"
     }
     custom_alloc, custom_reserved = test_allocation_pattern(
         "Custom Configuration", custom_config

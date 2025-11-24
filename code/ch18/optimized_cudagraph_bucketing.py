@@ -110,7 +110,7 @@ class OptimizedCUDAGraphBucketing(BaselineCUDAGraphBucketing):
             return gm.forward
 
         def decode_step(x: torch.Tensor) -> torch.Tensor:
-            # Light fake decode math to keep compile fast.
+            # Lightweight decode-style math to keep compile fast while exercising shapes.
             return torch.relu(x).sum(dim=-1)
 
         compiled = torch.compile(

@@ -9,13 +9,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from labs.fast_nanochat.nanochat_common import NanoChatBenchmark, NanoChatConfig  # noqa: E402
+from labs.fast_nanochat.nanochat_common import NanoChatBenchmark, NanoChatConfig, attach_benchmark_metadata  # noqa: E402
 import os
 
 
 def get_benchmark() -> NanoChatBenchmark:
     os.environ.setdefault(
-        "PYTORCH_CUDA_ALLOC_CONF", "backend:cudaMallocAsync,expandable_segments:True,max_split_size_mb:512"
+        "PYTORCH_ALLOC_CONF", "backend:cudaMallocAsync,expandable_segments:True,max_split_size_mb:512"
     )
     mem_cap = os.getenv("NANOCHAT_FP4_MEM_CAP", "0")
     if mem_cap == "2":
@@ -38,7 +38,7 @@ def get_benchmark() -> NanoChatBenchmark:
         graph_full_iteration=False,
         label="optimized_fast_nanochat_fp4",
     )
-    return NanoChatBenchmark(cfg)
+    return attach_benchmark_metadata(NanoChatBenchmark(cfg), __file__)
 
 
 if __name__ == "__main__":

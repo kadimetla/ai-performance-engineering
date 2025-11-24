@@ -21,7 +21,7 @@ from common.python.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
-from common.python.moe_inference import MoeInferenceConfig, SimpleMoEGPT  # noqa: E402
+from common.python.moe_inference import MoeInferenceConfig, SimpleMoEGPT, allocate_kv_cache  # noqa: E402
 
 
 def compute_gini(counts: torch.Tensor) -> float:
@@ -113,7 +113,7 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
         self._records: List[Dict[str, float]] = []
         self._workload_metadata = WorkloadMetadata(
             requests_per_iteration=float(self.config.batch_size),
-            tokens_per_iteration=float(self.config.batch_size * self.config.context_window),
+            tokens_per_iteration=float(self.config.tokens_per_iteration),
         )
 
     def apply_target_overrides(self, argv: list[str]) -> None:
@@ -129,6 +129,7 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
         parser.add_argument("--moe-frequency", type=int)
         parser.add_argument("--batch-size", type=int)
         parser.add_argument("--context-window", type=int)
+        parser.add_argument("--decode-tokens", type=int)
         parser.add_argument("--router-noise", type=float)
         parser.add_argument("--capacity-factor", type=float)
         parser.add_argument("--k-values", type=str)
@@ -153,7 +154,7 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
             moe_layer_frequency=args.moe_frequency or cfg.moe_layer_frequency,
             batch_size=args.batch_size or cfg.batch_size,
             context_window=args.context_window or cfg.context_window,
-            decode_tokens=0,
+            decode_tokens=args.decode_tokens or cfg.decode_tokens,
             router_noise=args.router_noise if args.router_noise is not None else cfg.router_noise,
             capacity_factor=args.capacity_factor if args.capacity_factor is not None else cfg.capacity_factor,
             dtype=cfg.dtype_obj,
@@ -170,7 +171,7 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
             self.eval_seeds = parsed_seeds
         self._workload_metadata = WorkloadMetadata(
             requests_per_iteration=float(self.config.batch_size),
-            tokens_per_iteration=float(self.config.batch_size * self.config.context_window),
+            tokens_per_iteration=float(self.config.tokens_per_iteration),
         )
 
     def _resolve_device(self) -> torch.device:  # type: ignore[override]
@@ -182,19 +183,19 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
         if self._config_override is not None:
             return self._config_override
         return MoeInferenceConfig(
-            vocab_size=24576,
-            hidden_size=768,
-            ffn_size=3072,
+            vocab_size=32768,
+            hidden_size=1024,
+            ffn_size=4096,
             num_layers=6,
             num_moe_layers=3,
             num_experts=16,
-            top_k=2,
+            top_k=1,
             moe_layer_frequency=2,
             batch_size=2,
-            context_window=384,
-            decode_tokens=0,
-            router_noise=0.05,
-            capacity_factor=1.25,
+            context_window=512,
+            decode_tokens=16,
+            router_noise=0.0,
+            capacity_factor=None,
             dtype=torch.bfloat16,
         )
 
@@ -214,10 +215,11 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
             (cfg.batch_size, cfg.context_window),
             device=self.device,
         )
+        total_tokens = cfg.context_window + cfg.decode_tokens
         labels = torch.randint(
             0,
             cfg.vocab_size,
-            (cfg.batch_size, cfg.context_window),
+            (cfg.batch_size, total_tokens),
             device=self.device,
         )
         return {"prompts": prompts, "labels": labels}
@@ -233,27 +235,63 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
             raise RuntimeError("Model not initialized")
         _set_router_config(self.model, top_k=top_k, capacity_factor=capacity_factor)
         moe_logger = MoEStatsLogger(num_experts=self.config.num_experts)
+        cfg = self.config
+        total_tokens = cfg.context_window + cfg.decode_tokens
+        kv_cache = allocate_kv_cache(
+            cfg.batch_size,
+            total_tokens,
+            cfg.hidden_size,
+            cfg.dtype_obj,
+            self.device,
+        )
 
         with torch.no_grad():
             start = time.perf_counter()
-            hidden, router_stats = self.model.forward_tokens(
-                prompts, collect_router_stats=True
-            )  # type: ignore[misc]
-            logits = self.model.lm_head(hidden)
-            loss = F.cross_entropy(logits.reshape(-1, self.config.vocab_size), labels.reshape(-1))
+            hidden, logits, router_stats = self.model.prefill(
+                prompts,
+                kv_cache=kv_cache,
+                cache_start=0,
+                output_router_stats=True,
+            )
+            token_loss = F.cross_entropy(
+                logits.reshape(-1, cfg.vocab_size),
+                labels[:, : cfg.context_window].reshape(-1),
+            )
             for stats in router_stats:
                 moe_logger.update(stats)
+            seed_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+            decode_losses: List[torch.Tensor] = []
+            for step in range(cfg.decode_tokens):
+                _, decode_logits, decode_stats = self.model.decode(
+                    seed_tokens,
+                    kv_cache=kv_cache,
+                    position=cfg.context_window + step,
+                    output_router_stats=True,
+                )
+                step_loss = F.cross_entropy(
+                    decode_logits.reshape(-1, cfg.vocab_size),
+                    labels[:, cfg.context_window + step].reshape(-1),
+                )
+                decode_losses.append(step_loss)
+                for stats in decode_stats:
+                    moe_logger.update(stats)
+                seed_tokens = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
             if torch.cuda.is_available():
                 torch.cuda.synchronize(self.device)
             elapsed_s = max(time.perf_counter() - start, 1e-6)
 
         summary = moe_logger.summarize()
-        tokens = float(prompts.numel())
+        avg_decode_loss = (
+            sum(loss.item() for loss in decode_losses) / max(len(decode_losses), 1)
+            if decode_losses
+            else 0.0
+        )
+        avg_loss = float(token_loss.item() + avg_decode_loss)
         record = {
             "top_k": float(top_k),
             "capacity_factor": float(capacity_factor),
-            "loss": float(loss.item()),
-            "tokens_per_sec": tokens / elapsed_s,
+            "loss": avg_loss,
+            "tokens_per_sec": float(cfg.tokens_per_iteration) / elapsed_s,
             "overflow_rate": summary["overflow_rate"],
             "gini": summary["gini"],
             "router_entropy": summary["router_entropy"],
@@ -309,18 +347,19 @@ if __name__ == "__main__":
         return [cast(item.strip()) for item in raw.split(",") if item.strip()]
 
     parser = argparse.ArgumentParser(description="Optimized MoE validation sweeps.")
-    parser.add_argument("--vocab-size", type=int, default=24576)
-    parser.add_argument("--hidden-size", type=int, default=768)
-    parser.add_argument("--ffn-size", type=int, default=3072)
+    parser.add_argument("--vocab-size", type=int, default=32768)
+    parser.add_argument("--hidden-size", type=int, default=1024)
+    parser.add_argument("--ffn-size", type=int, default=4096)
     parser.add_argument("--layers", type=int, default=6)
     parser.add_argument("--moe-layers", type=int, default=3)
     parser.add_argument("--experts", type=int, default=16)
-    parser.add_argument("--top-k", type=int, default=2)
+    parser.add_argument("--top-k", type=int, default=1)
     parser.add_argument("--moe-frequency", type=int, default=2, help="Every N layers is MoE.")
     parser.add_argument("--batch-size", type=int, default=2)
-    parser.add_argument("--context-window", type=int, default=384)
-    parser.add_argument("--router-noise", type=float, default=0.05)
-    parser.add_argument("--capacity-factor", type=float, default=1.25)
+    parser.add_argument("--context-window", type=int, default=512)
+    parser.add_argument("--decode-tokens", type=int, default=16)
+    parser.add_argument("--router-noise", type=float, default=0.0)
+    parser.add_argument("--capacity-factor", type=float, default=0.0)
     parser.add_argument("--k-values", type=str, default="1,2", help="Comma-separated list.")
     parser.add_argument("--capacity-factors", type=str, default="1.0,1.25,1.5", help="Comma-separated list.")
     parser.add_argument("--seeds", type=str, default="3,13", help="Comma-separated list.")
@@ -337,9 +376,9 @@ if __name__ == "__main__":
         moe_layer_frequency=args.moe_frequency,
         batch_size=args.batch_size,
         context_window=args.context_window,
-        decode_tokens=0,
+        decode_tokens=args.decode_tokens,
         router_noise=args.router_noise,
-        capacity_factor=args.capacity_factor,
+        capacity_factor=None if args.capacity_factor == 0.0 else args.capacity_factor,
         dtype=torch.bfloat16,
     )
     k_vals = _parse_csv(args.k_values, int)

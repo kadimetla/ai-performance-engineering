@@ -100,6 +100,7 @@ void tma_copy(torch::Tensor src, torch::Tensor dst) {
             "-gencode=arch=compute_120,code=sm_120",
             "-gencode=arch=compute_121,code=sm_121",
         ],
+        extra_include_paths=torch.utils.cpp_extension.include_paths(),
         verbose=False,
     )
 

@@ -27,53 +27,49 @@ except Exception:
     TRITON_AVAILABLE = False
 
 
-def triton_matmul(a: torch.Tensor, b: torch.Tensor, out: torch.Tensor, **_: int) -> None:
+def baseline_elementwise(input_tensor: torch.Tensor, output: torch.Tensor, **_: int) -> None:
     """
-    Fallback baseline matmul. If Triton is unavailable, use torch.matmul to keep
-    the harness green; optimized path lives in the matching optimized_* file.
+    Baseline element-wise operation using standard PyTorch.
+    This is compared against Triton's optimized kernel in the optimized version.
     """
-    torch.matmul(a, b, out=out)
+    # Standard PyTorch operation: output = input * 2.0 + 1.0
+    output.copy_(input_tensor * 2.0 + 1.0)
 
 
 class BaselineTritonBenchmark(BaseBenchmark):
-    """Baseline Triton matmul benchmark."""
+    """Baseline element-wise operation using standard PyTorch (compared to Triton kernel)."""
 
     def __init__(self):
         super().__init__()
-        self.A: Optional[torch.Tensor] = None
-        self.B: Optional[torch.Tensor] = None
+        self.input: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
-        self.m = 1024
-        self.n = 1024
-        self.k = 1024
-        tokens = self.m * self.n * self.k
+        self.N = 1_000_000
+        tokens = self.N
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
 
     def setup(self) -> None:
-        torch.manual_seed(0)
-        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
-        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
-        self.output = torch.empty(self.m, self.n, device=self.device, dtype=torch.float16)
+        torch.manual_seed(42)
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("baseline_triton", enable=enable_nvtx):
-            triton_matmul(self.A, self.B, self.output, BLOCK_M=128, BLOCK_N=128, BLOCK_K=32)
+            baseline_elementwise(self.input, self.output)
             torch.cuda.synchronize(self.device)
 
     def teardown(self) -> None:
-        self.A = None
-        self.B = None
+        self.input = None
         self.output = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=2)
+        return BenchmarkConfig(iterations=100, warmup=10)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
@@ -94,4 +90,4 @@ if __name__ == "__main__":
         config=BaselineTritonBenchmark().get_config(),
     )
     result = harness.benchmark(get_benchmark())
-    print(f"Baseline Triton matmul: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+    print(f"Baseline (PyTorch elementwise): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

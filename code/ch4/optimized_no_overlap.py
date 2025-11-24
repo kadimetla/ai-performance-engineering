@@ -1,7 +1,8 @@
 """optimized_no_overlap.py - DDP with communication overlap (optimized).
 
-DDP implementation with gradient_as_bucket_view for communication overlap.
-Implements BaseBenchmark for harness integration.
+Optimized DDP implementation that enables gradient_as_bucket_view and static_graph
+to overlap gradient all-reduce communication with backward computation.
+This reduces training step latency by pipelining communication and computation.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
@@ -87,40 +89,73 @@ class OptimizedOverlapDdpBenchmark(BaseBenchmark):
         self.rank = 0
         self.world_size = 1
         self.initialized = False
+        self.batch_size = 128
+        self.hidden_size = 1024
+        tokens = self.batch_size * self.hidden_size
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
-        """Setup: smoke-fast single process, no torch.compile/DDP."""
+        """Setup: DDP with gradient_as_bucket_view for communication overlap."""
         skip_if_insufficient_gpus()
-        self.rank = 0
-        self.world_size = 1
-        self.device = torch.device("cuda:0")
-        torch.cuda.set_device(self.device)
-        torch.manual_seed(42)
-        model = MultiLayerNet(1024).to(self.device)
-        self.model = model
+        
+        # Initialize distributed if environment variables are set
+        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            if not dist.is_initialized():
+                dist.init_process_group(backend="nccl")
+                self.initialized = True
+            self.rank = dist.get_rank()
+            self.world_size = dist.get_world_size()
+            local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+            self.device = torch.device(f"cuda:{local_rank}")
+            torch.cuda.set_device(self.device)
+        else:
+            # Single process mode for testing
+            self.rank = 0
+            self.world_size = 1
+            self.device = torch.device("cuda:0")
+            torch.cuda.set_device(self.device)
+        
+        torch.manual_seed(42 + self.rank)
+        model = MultiLayerNet(self.hidden_size).to(self.device)
+        
+        # Enable DDP with gradient_as_bucket_view for overlap
+        if self.world_size > 1:
+            from torch.nn.parallel import DistributedDataParallel as DDP
+            self.model = DDP(
+                model,
+                device_ids=[self.device.index],
+                gradient_as_bucket_view=True,  # Key optimization for overlap
+                broadcast_buffers=False,
+                static_graph=True,  # Additional optimization
+            )
+        else:
+            self.model = model
+        
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
 
-        batch_size = 128
-        self.data = torch.randn(batch_size, 1024, device=self.device)
-        self.target = torch.randn(batch_size, 1, device=self.device)
+        self.data = torch.randn(self.batch_size, self.hidden_size, device=self.device)
+        self.target = torch.randn(self.batch_size, 1, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: DDP training step with overlap."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
+        """Benchmark: DDP training step with communication overlap."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("no_overlap", enable=enable_nvtx):
+        with nvtx_range("overlap_ddp", enable=enable_nvtx):
             output = self.model(self.data)
             loss = nn.functional.mse_loss(output, self.target)
-            loss.backward()  # DDP overlaps gradient all-reduce with computation
+            # DDP automatically overlaps gradient all-reduce with backward computation
+            # when gradient_as_bucket_view=True is enabled
+            loss.backward()
             self.optimizer.step()
             self.optimizer.zero_grad()
+        self._synchronize()
 
     
     def teardown(self) -> None:
@@ -155,11 +190,14 @@ class OptimizedOverlapDdpBenchmark(BaseBenchmark):
         try:
             with torch.no_grad():
                 test_output = self.model(self.data)
-                if test_output.shape[0] != 128:
-                    return f"Output batch size mismatch: expected 128, got {test_output.shape[0]}"
+                if test_output.shape[0] != self.batch_size:
+                    return f"Output batch size mismatch: expected {self.batch_size}, got {test_output.shape[0]}"
         except Exception as e:
             return f"Model forward pass failed: {e}"
         return None
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        return self._workload
 
 
 def get_benchmark() -> BaseBenchmark:

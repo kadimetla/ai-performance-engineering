@@ -58,6 +58,7 @@ pydantic==2.9.0
 pydantic-core==2.23.2  # Required by pydantic 2.9.0
 typer==0.12.0
 typer-slim[standard]==0.12.0  # Required by typer 0.12.0 and typer-cli 0.12.0
+click==8.1.7  # Pin to Typer-compatible Click to avoid CLI help/runtime errors
 rich==13.7.0
 
 # Model development helpers

@@ -1,8 +1,8 @@
 """Quantization utilities for CUDA-native FP8/FP4 quantization.
 
 Provides proper CUDA-native quantization using FP8/FP4 formats
-that work on GB10/H100+ GPUs. This is the correct way to do
-quantization on CUDA, not CPU-only qint8.
+that work on B200/B300 as well as Grace-Blackwell GB200/GB300 GPUs.
+This is the correct way to do quantization on CUDA, not CPU-only qint8.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ def quantize_to_fp4(tensor: torch.Tensor, return_scale: bool = False) -> Union[t
     """Quantize tensor to FP4 for CUDA (simulated via aggressive FP8).
     
     FP4 provides 2x memory reduction vs FP8, 4x vs FP16
-    For GB10/H100+, we use aggressive FP8 quantization to simulate FP4 benefits
+    For B200/GB200+, we use aggressive FP8 quantization to simulate FP4 benefits
     
     Args:
         tensor: Input tensor

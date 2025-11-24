@@ -34,9 +34,8 @@ namespace {
 
 constexpr int TILE_M = 128;
 constexpr int TILE_N = 64;   // Keep shared tile under 48 KB
-constexpr int BLOCK_X = 32;
-constexpr int BLOCK_Y = 4;
-constexpr int ITERATIONS = 20;
+constexpr int TMA_THREADS = 32;  // Single warp for the TMA path to minimize barrier overhead
+constexpr int ITERATIONS = 10;
 constexpr std::size_t TILE_BYTES =
     static_cast<std::size_t>(TILE_M) * TILE_N * sizeof(float);
 
@@ -44,46 +43,6 @@ static_assert((TILE_BYTES % 16) == 0,
               "TMA 2D copies require sizeBytes to be a multiple of 16 bytes");
 static_assert(((TILE_N * sizeof(float)) % 16) == 0,
               "TMA 2D copies require a 16-byte aligned leading dimension");
-
-__global__ void manual_bulk_copy_kernel(const float* __restrict__ src,
-                                        float* __restrict__ dst,
-                                        int width,
-                                        int height,
-                                        int ld) {
-    const int tile_row = blockIdx.y * TILE_M;
-    const int tile_col = blockIdx.x * TILE_N;
-    if (tile_row >= height || tile_col >= width) {
-        return;
-    }
-
-    __shared__ alignas(128) float tile[TILE_M][TILE_N];
-
-    for (int r = threadIdx.y; r < TILE_M; r += blockDim.y) {
-        const int g_row = tile_row + r;
-        if (g_row >= height) break;
-        const float* src_row = src + g_row * ld;
-        for (int c = threadIdx.x; c < TILE_N; c += blockDim.x) {
-            const int g_col = tile_col + c;
-            if (g_col < width) {
-                tile[r][c] = src_row[g_col];
-            }
-        }
-    }
-    __syncthreads();
-
-    for (int r = threadIdx.y; r < TILE_M; r += blockDim.y) {
-        const int g_row = tile_row + r;
-        if (g_row >= height) break;
-        float* dst_row = dst + g_row * ld;
-        for (int c = threadIdx.x; c < TILE_N; c += blockDim.x) {
-            const int g_col = tile_col + c;
-            if (g_col < width) {
-                const float v = tile[r][c];
-                dst_row[g_col] = v * 1.0001f + 0.0001f;
-            }
-        }
-    }
-}
 
 template <int TILE_M_VALUE, int TILE_N_VALUE>
 __global__ void tma_bulk_copy_kernel(const __grid_constant__ CUtensorMap in_desc,
@@ -111,28 +70,29 @@ __global__ void tma_bulk_copy_kernel(const __grid_constant__ CUtensorMap in_desc
     constexpr std::size_t kTileBytes =
         static_cast<std::size_t>(TILE_M_VALUE) * TILE_N_VALUE * sizeof(float);
 
-    cde::cp_async_bulk_tensor_2d_global_to_shared(
-        tile, &in_desc, tile_col, tile_row, *bar);
-    auto token = cuda::device::barrier_arrive_tx(*bar, 1, kTileBytes);
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+        cde::cp_async_bulk_tensor_2d_global_to_shared(
+            tile, &in_desc, tile_row, tile_col, *bar);
+        cde::cp_async_bulk_commit_group();
+    }
+    cuda::barrier<cuda::thread_scope_block>::arrival_token token;
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+        token = cuda::device::barrier_arrive_tx(*bar, 1, kTileBytes);
+    } else {
+        token = bar->arrive();
+    }
     bar->wait(std::move(token));
-    __syncthreads();
-
-    for (int r = threadIdx.y; r < TILE_M_VALUE; r += blockDim.y) {
-        const int g_row = tile_row + r;
-        if (g_row >= height) break;
-        for (int c = threadIdx.x; c < TILE_N_VALUE; c += blockDim.x) {
-            const int g_col = tile_col + c;
-            if (g_col < width) {
-                tile[r][c] = tile[r][c] * 1.0001f + 0.0001f;
-            }
-        }
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+        cde::cp_async_bulk_wait_group_read<0>();
     }
     __syncthreads();
 
-    cde::cp_async_bulk_tensor_2d_shared_to_global(
-        &out_desc, tile_col, tile_row, tile);
-    cde::cp_async_bulk_commit_group();
-    cde::cp_async_bulk_wait_group_read<0>();
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+        cde::cp_async_bulk_tensor_2d_shared_to_global(
+            &out_desc, tile_row, tile_col, tile);
+        cde::cp_async_bulk_commit_group();
+        cde::cp_async_bulk_wait_group_read<0>();
+    }
 #else
     (void)in_desc;
     (void)out_desc;
@@ -152,8 +112,8 @@ float checksum(const std::vector<float>& data) {
 }  // namespace
 
 int main() {
-    const int width = 4096;
-    const int height = 4096;
+    const int width = 2048;
+    const int height = 2048;
     const int ld = width;
     const std::size_t bytes = static_cast<std::size_t>(width) * height * sizeof(float);
     const std::size_t ld_bytes = static_cast<std::size_t>(ld) * sizeof(float);
@@ -195,7 +155,7 @@ int main() {
                           ld,
                           TILE_N,
                           TILE_M,
-                          CU_TENSOR_MAP_SWIZZLE_128B) &&
+                          CU_TENSOR_MAP_SWIZZLE_NONE) &&
                       make_2d_tensor_map(
                           out_desc,
                           encode,
@@ -205,28 +165,24 @@ int main() {
                           ld,
                           TILE_N,
                           TILE_M,
-                          CU_TENSOR_MAP_SWIZZLE_128B);
+                          CU_TENSOR_MAP_SWIZZLE_NONE);
     }
 
-    dim3 block(BLOCK_X, BLOCK_Y, 1);
+    dim3 block_tma(TMA_THREADS, 1, 1);
     dim3 grid((width + TILE_N - 1) / TILE_N, (height + TILE_M - 1) / TILE_M, 1);
 
     if (!tma_capable) {
-        std::printf(
-            "ℹ️  TMA unavailable (sm=%d, stride16=%s, size16=%s, tensor map encode=%s). "
-            "Falling back to manual copy.\n",
-            sm_version,
-            stride_aligned_16 ? "ok" : "no",
-            tile_bytes_aligned_16 ? "ok" : "no",
-            encode ? "ok" : "missing");
+    std::printf(
+        "❌  TMA unavailable (sm=%d, stride16=%s, size16=%s, tensor map encode=%s).\n",
+        sm_version,
+        stride_aligned_16 ? "ok" : "no",
+        tile_bytes_aligned_16 ? "ok" : "no",
+        encode ? "ok" : "missing");
+        return 1;
     }
 
     // Warmup
-    if (tma_capable) {
-        tma_bulk_copy_kernel<TILE_M, TILE_N><<<grid, block>>>(in_desc, out_desc, width, height);
-    } else {
-        manual_bulk_copy_kernel<<<grid, block>>>(d_src, d_dst, width, height, ld);
-    }
+    tma_bulk_copy_kernel<TILE_M, TILE_N><<<grid, block_tma>>>(in_desc, out_desc, width, height);
     check_cuda(cudaGetLastError(), "warmup launch");
     check_cuda(cudaDeviceSynchronize(), "warmup sync");
 
@@ -236,12 +192,8 @@ int main() {
 
     check_cuda(cudaEventRecord(start), "event record start");
     for (int iter = 0; iter < ITERATIONS; ++iter) {
-        if (tma_capable) {
-            tma_bulk_copy_kernel<TILE_M, TILE_N><<<grid, block>>>(
-                in_desc, out_desc, width, height);
-        } else {
-            manual_bulk_copy_kernel<<<grid, block>>>(d_src, d_dst, width, height, ld);
-        }
+        tma_bulk_copy_kernel<TILE_M, TILE_N><<<grid, block_tma>>>(
+            in_desc, out_desc, width, height);
         check_cuda(cudaGetLastError(), "iteration launch");
     }
     check_cuda(cudaEventRecord(stop), "event record stop");

@@ -100,6 +100,7 @@ class OptimizedDockerBenchmark(BaseBenchmark):
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
             self.optimizer.step()
+            torch.cuda.synchronize()
 
     def teardown(self) -> None:
         self.model = None

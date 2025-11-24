@@ -88,7 +88,7 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
         batch_size = 4
         seq_len = 10
         self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
-        # Create dummy memory tensor for TransformerDecoder (encoder output)
+        # Create placeholder memory tensor for TransformerDecoder (encoder output)
         self.memory = torch.randn(batch_size, seq_len, hidden_dim, device=self.device)
         self._synchronize()
         self.register_workload_metadata(

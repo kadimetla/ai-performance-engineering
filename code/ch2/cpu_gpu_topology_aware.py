@@ -4,7 +4,8 @@ CPU-GPU Topology-Aware Tensor Placement
 
 Demonstrates NUMA-aware tensor placement and CPU-GPU affinity for
 various CPU-GPU architectures including:
-- GB200/GB300 (Grace + Blackwell sm_90)
+- GB200/B200 (Grace + Blackwell sm_100)
+- GB300/B300 (Grace + Blackwell Ultra sm_103)
 - GB10 (Grace + Blackwell Ultra sm_121)
 - Any x86_64/ARM + NVIDIA GPU combinations
 
@@ -14,8 +15,9 @@ CPU Architectures Supported:
 - Generic ARM aarch64
 
 GPU Architectures Supported:
-- Blackwell (sm_90): GB200/GB300
-- Blackwell Ultra (sm_121): GB10
+- Blackwell (sm_100): B200
+- Blackwell Ultra (sm_103): B300/GB300
+- Grace-Blackwell Ultra (sm_121): GB10
 - Hopper (sm_90): H100/H200
 - Ada Lovelace (sm_89): RTX 40-series
 - Ampere (sm_80, sm_86): A100, RTX 30-series
@@ -57,7 +59,8 @@ from typing import Any, Dict, List, Optional, Tuple
 GPU_ARCH_INFO = {
     # Blackwell family
     (10, 0): {"name": "Blackwell", "family": "Blackwell", "sm": "sm_100"},
-    (12, 1): {"name": "Blackwell Ultra", "family": "Blackwell", "sm": "sm_121"},
+    (10, 3): {"name": "Blackwell Ultra", "family": "Blackwell", "sm": "sm_103"},
+    (12, 1): {"name": "Grace-Blackwell Ultra", "family": "Blackwell", "sm": "sm_121"},
     
     # Hopper family
     (9, 0): {"name": "Hopper", "family": "Hopper", "sm": "sm_90"},

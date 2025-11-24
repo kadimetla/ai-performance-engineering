@@ -6,6 +6,7 @@ import argparse
 import random
 import sys
 from dataclasses import dataclass
+import threading
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
@@ -147,12 +148,12 @@ def export_prom_metrics(
     kv_compactions.labels(variant=label, backend=backend).inc(metrics.compactions)
 
     if duration_s > 0:
-        import time
-
         print(f"[metrics] exporting on :{port} for {duration_s}s")
-        time.sleep(duration_s)
-    else:
-        print(f"[metrics] exported once on :{port} (process will exit)")
+        threading.Event().wait(timeout=duration_s)
+        print(f"[metrics] Prometheus window elapsed on :{port}")
+        return
+
+    print(f"[metrics] exported once on :{port} (process will exit)")
 
 
 def parse_args() -> argparse.Namespace:

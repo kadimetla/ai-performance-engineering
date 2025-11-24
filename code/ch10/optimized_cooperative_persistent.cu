@@ -44,8 +44,13 @@ __global__ void persistent_pipeline(float* data, int elements, float scale, floa
   }
 
   using pipeline_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>;
-  __shared__ pipeline_state_t pipe_state;
-  auto pipe = cuda::make_pipeline(block, &pipe_state);
+  __shared__ alignas(pipeline_state_t) unsigned char pipe_state_bytes[sizeof(pipeline_state_t)];
+  auto* pipe_state = reinterpret_cast<pipeline_state_t*>(pipe_state_bytes);
+  if (threadIdx.x == 0 && threadIdx.y == 0) {
+    new (pipe_state) pipeline_state_t();
+  }
+  block.sync();
+  auto pipe = cuda::make_pipeline(block, pipe_state);
 
   const int total_tiles = (elements + TILE_ELEMS - 1) / TILE_ELEMS;
 

@@ -1,5 +1,6 @@
 // warp_specialized_pipeline_enhanced.cu -- Enhanced warp specialization with TMA and deep pipelining
 // Optimized for both B200 (sm_100) and GB10 (sm_121)
+// CUDA 13 Update: Float8 available for Blackwell 256-bit loads
 
 #include <cuda/pipeline>
 #include <cooperative_groups.h>
@@ -22,6 +23,15 @@ namespace cg = cooperative_groups;
       std::exit(EXIT_FAILURE);                                               \
     }                                                                        \
   } while (0)
+
+// CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
+// Note: This pipeline uses float4 for optimal shared memory patterns,
+// but Float8 is available for future optimizations
+struct alignas(32) Float8 {
+    float elems[8];
+};
+static_assert(sizeof(Float8) == 32, "Float8 must be 32 bytes");
+static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
 
 constexpr int TILE = 128;
 constexpr int TILE_ELEMS = TILE * TILE;

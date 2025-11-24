@@ -45,11 +45,14 @@ class OptimizedPagedAttentionBenchmark(BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.device = resolve_device()
-        self.model = None
-        self.kv_cache = None
-        self.inputs = None
-        self.batch_size = 1
-        self.sequence_length = 1
+        self.model: Optional[nn.MultiheadAttention] = None
+        self.cache_config: Optional[PagedAttentionConfig] = None
+        self.kv_cache: Optional[PagedKVCache] = None
+        self.prefill_inputs: Optional[torch.Tensor] = None
+        self.decode_inputs: Optional[torch.Tensor] = None
+        self.batch_size = 2
+        self.prefill_len = 2048
+        self.decode_steps = 512
         self.hidden_dim = 512
         self.num_heads = 8
         self.head_dim = self.hidden_dim // self.num_heads
@@ -62,10 +65,6 @@ class OptimizedPagedAttentionBenchmark(BaseBenchmark):
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Optimization: Paged attention - non-contiguous page-based storage
-        # Paged attention uses pages for efficient memory management
-        
-        # Simple attention model
         self.model = nn.MultiheadAttention(
             embed_dim=self.hidden_dim,
             num_heads=self.num_heads,
@@ -75,7 +74,7 @@ class OptimizedPagedAttentionBenchmark(BaseBenchmark):
             self.model = self.model.half()
         self.model.eval()
         
-        cache_config = PagedAttentionConfig(
+        self.cache_config = PagedAttentionConfig(
             batch_size=self.batch_size,
             page_size=32,
             num_heads=self.num_heads,
@@ -83,23 +82,29 @@ class OptimizedPagedAttentionBenchmark(BaseBenchmark):
             device=self.device,
             dtype=self.model.in_proj_weight.dtype,
         )
-        self.kv_cache = PagedKVCache(cache_config)
-        
-        # Simulate autoregressive generation - FAIL FAST if model has no parameters
-        params = list(self.model.parameters())
-        if not params:
-            raise RuntimeError("Model has no parameters - cannot determine dtype")
-        input_dtype = params[0].dtype
-        self.inputs = [
-            torch.randn(
-                self.batch_size,
-                self.sequence_length,
-                self.hidden_dim,
-                device=self.device,
-                dtype=input_dtype,
-            )
-            for _ in range(64)
-        ]
+        self.kv_cache = PagedKVCache(self.cache_config)
+
+        model_dtype = self.model.in_proj_weight.dtype
+        self.prefill_inputs = torch.randn(
+            self.batch_size,
+            self.prefill_len,
+            self.hidden_dim,
+            device=self.device,
+            dtype=model_dtype,
+        )
+        self.decode_inputs = torch.randn(
+            self.batch_size,
+            self.decode_steps,
+            self.hidden_dim,
+            device=self.device,
+            dtype=model_dtype,
+        )
+        total_tokens = self.batch_size * (self.prefill_len + self.decode_steps)
+        self._synchronize()
+        self.register_workload_metadata(
+            tokens_per_iteration=float(total_tokens),
+            requests_per_iteration=float(self.batch_size),
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -115,54 +120,55 @@ class OptimizedPagedAttentionBenchmark(BaseBenchmark):
 
         with nvtx_range("optimized_paged_attention", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Paged attention
-                # Uses non-contiguous pages for efficient memory management
-                # Reduces fragmentation and improves memory utilization
-                
-                # Get model dtype - FAIL FAST if model has no parameters
-                params = list(self.model.parameters())
-                if not params:
-                    raise RuntimeError("Model has no parameters - cannot determine dtype")
-                model_dtype = params[0].dtype
-                
-                for step, query in enumerate(self.inputs):
-                    query = query.to(device=self.device, dtype=model_dtype)
-                    
-                    # Use model's forward to get q, k, v properly
-                    # MultiheadAttention returns (attn_output, attn_weights) or just attn_output
-                    # We need to extract q, k, v from the internal computation
-                    # For paged attention, we compute qkv manually
-                    batch_size, seq_len = query.shape[:2]
-                    
-                    # Get qkv projection weights - FAIL FAST if not available
-                    if not hasattr(self.model, 'in_proj_weight') or self.model.in_proj_weight is None:
-                        raise RuntimeError("MultiheadAttention.in_proj_weight is required for paged attention benchmark")
-                    if not hasattr(self.model, 'in_proj_bias'):
-                        raise RuntimeError("MultiheadAttention.in_proj_bias is required for paged attention benchmark")
-                    qkv = F.linear(query, self.model.in_proj_weight, self.model.in_proj_bias)
-                    qkv = qkv.reshape(batch_size, seq_len, 3, self.num_heads, self.head_dim)
-                    q, k, v = qkv.unbind(dim=2)  # Each: (batch, seq, num_heads, head_dim)
-                    
+                if any(
+                    item is None
+                    for item in (
+                        self.model,
+                        self.prefill_inputs,
+                        self.decode_inputs,
+                        self.cache_config,
+                    )
+                ):
+                    raise RuntimeError("Paged attention benchmark not initialized correctly")
+
+                # Reset cache state for this run
+                self.kv_cache = PagedKVCache(self.cache_config)  # type: ignore[arg-type]
+                sequence = torch.cat(
+                    [self.prefill_inputs, self.decode_inputs],
+                    dim=1,
+                )
+                total_tokens = sequence.size(1)
+
+                for pos in range(total_tokens):
+                    token = sequence[:, pos : pos + 1, :]
+                    qkv = F.linear(token, self.model.in_proj_weight, self.model.in_proj_bias)  # type: ignore[arg-type]
+                    qkv = qkv.reshape(self.batch_size, 1, 3, self.num_heads, self.head_dim)
+                    q, k, v = qkv.unbind(dim=2)
+
                     q_heads = q.permute(0, 2, 1, 3).contiguous()
-                    self.kv_cache.write(step, k.contiguous(), v.contiguous())
-                    
-                    k_all, v_all = self.kv_cache.get_kv(step + 1)
-                    if k_all.numel() == 0:
-                        continue
+                    self.kv_cache.write(pos, k.contiguous(), v.contiguous())  # type: ignore[arg-type]
+
+                    k_all, v_all = self.kv_cache.get_kv(pos + 1)
                     k_heads = k_all.permute(0, 2, 1, 3).contiguous()
                     v_heads = v_all.permute(0, 2, 1, 3).contiguous()
-                    
+
                     attn_output = torch.nn.functional.scaled_dot_product_attention(
-                        q_heads, k_heads, v_heads, is_causal=False
+                        q_heads,
+                        k_heads,
+                        v_heads,
+                        is_causal=False,
                     )
                     _ = attn_output.sum()
+        self._synchronize()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
         self.kv_cache = None
-        self.inputs = None
+        self.cache_config = None
+        self.prefill_inputs = None
+        self.decode_inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -176,8 +182,8 @@ class OptimizedPagedAttentionBenchmark(BaseBenchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.kv_cache is None:
-            return "KV cache not initialized"
+        if self.prefill_inputs is None or self.decode_inputs is None:
+            return "Inputs not initialized"
         return None
 
 def get_benchmark() -> BaseBenchmark:

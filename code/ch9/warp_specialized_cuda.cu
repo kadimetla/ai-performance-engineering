@@ -1,6 +1,7 @@
 // Warp-specialized kernel for Chapter 9: Kernel Efficiency / Arithmetic Intensity
 // Based on Chapter 10's warp_specialized_pipeline_enhanced.cu
 // Demonstrates producer/consumer warp specialization pattern
+// CUDA 13 Update: Float8 available for Blackwell 256-bit loads
 
 #include <torch/extension.h>
 #include <cuda.h>
@@ -17,6 +18,13 @@ namespace cg = cooperative_groups;
             exit(1); \
         } \
     } while(0)
+
+// CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
+struct alignas(32) Float8 {
+    float elems[8];
+};
+static_assert(sizeof(Float8) == 32, "Float8 must be 32 bytes");
+static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
 
 constexpr int WARP_SIZE = 32;
 constexpr int TILE_SIZE = 256;
@@ -62,6 +70,8 @@ __global__ void warp_specialized_ch9_kernel(
         int tile_start = tile * TILE_SIZE;
         
         // Producer stage: load tile into shared memory
+        // On Blackwell, could use Float8 for 256-bit loads, but float4 is sufficient
+        // for this pipeline pattern (shared memory staging)
         if (is_producer) {
             for (int idx = lane; idx < TILE_SIZE / 4; idx += WARP_SIZE) {
                 int global_idx = tile_start + idx * 4;

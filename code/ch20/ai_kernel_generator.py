@@ -37,9 +37,9 @@ def _using_cuda() -> bool:
 
 def _ensure_environment(device_name: str) -> None:
     version = tuple(int(part) for part in torch.__version__.split("+")[0].split(".")[:2])
-    if version < (2, 9):
+    if version < (2, 10):
         raise RuntimeError(
-            f"PyTorch >= 2.9 required (FlexAttention), found {torch.__version__}"
+            f"PyTorch >= 2.10 required (FlexAttention), found {torch.__version__}"
         )
     try:
         import triton  # noqa: F401  # pylint: disable=unused-import

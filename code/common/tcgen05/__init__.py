@@ -17,22 +17,25 @@ except ImportError:  # pragma: no cover - optional bootstrap
     arch_config = None  # type: ignore[assignment]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CUTLASS_INCLUDE = _REPO_ROOT / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
-if not _CUTLASS_INCLUDE.exists():
-    _CUTLASS_INCLUDE = _REPO_ROOT / "third_party" / "cutlass" / "include"
-if not _CUTLASS_INCLUDE.exists():
-    _CUTLASS_INCLUDE = _REPO_ROOT / "third_party" / "cutlass_latest" / "cutlass-main" / "include"
-_LEGACY_CUTLASS_INCLUDE = _CUTLASS_INCLUDE
+_CUTLASS_INCLUDES: list[Path] = []
+# Prefer the TransformerEngine-bundled CUTLASS (includes SM100 tcgen05/TMEM), then fall back to local checkouts.
+for _cand in (
+    _REPO_ROOT / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include",
+    _REPO_ROOT / "third_party" / "cutlass" / "include",
+    _REPO_ROOT / "third_party" / "cutlass_latest" / "cutlass-main" / "include",
+):
+    if _cand.exists():
+        _CUTLASS_INCLUDES = [_cand]
+        break
 _CLANG_HOST = _REPO_ROOT / "third_party" / "llvm" / "bin" / "clang++"
 
 
 def _tcgen05_cuda_flags() -> list[str]:
     flags = [
         "-std=c++20",
-        "-lineinfo",
-        f"-I{_CUTLASS_INCLUDE}",
-        f"-I{_LEGACY_CUTLASS_INCLUDE}",
     ]
+    for inc in _CUTLASS_INCLUDES:
+        flags.append(f"-I{inc}")
     caps: list[tuple[int, int]] = [(10, 0)]
     try:
         major, minor = torch.cuda.get_device_capability()
@@ -48,8 +51,6 @@ def _tcgen05_cuda_flags() -> list[str]:
             continue
         seen.add((maj, minr))
         flags.append(f"-gencode=arch=compute_{maj}{minr},code=sm_{maj}{minr}")
-        # Keep a PTX fallback for forward compatibility.
-        flags.append(f"-gencode=arch=compute_{maj}{minr},code=compute_{maj}{minr}")
     if _CLANG_HOST.exists():
         flags.append(f"-ccbin={_CLANG_HOST}")
     return flags

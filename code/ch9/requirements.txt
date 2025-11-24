@@ -1,4 +1,1 @@
-torch
-matplotlib
-numpy
-
+-r ../requirements_latest.txt

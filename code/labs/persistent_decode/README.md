@@ -46,3 +46,4 @@ python tools/cli/benchmark_cli.py run --targets labs/persistent_decode --profile
 - Set `TORCH_COMPILE_MODE` or `TMA_TILE_SIZE` via env vars before invoking the harness to sweep tile sizes.
 - Right-sized decode flags (`--tier`, `--quantization`, `--block-k`, `--num-programs`, `--quick`) replace the old env-var driven knobs; pass them via `--target-extra-arg` when using the harness.
 - `tma_extension.py` caches builds under `~/.cache/torch_extensions`; clean the cache when switching CUDA versions.
+- FlashAttention-3 ≥ 3.1.0 and Transformer Engine ≥ 2.8.0 are required for the FP8/TMA fast paths; the harness aborts on missing dependencies instead of silently degrading.

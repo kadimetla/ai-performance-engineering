@@ -20,7 +20,7 @@ bool ensure_blackwell(int& exit_code) {
     }
 
     if (err == cudaSuccess && props.major > 0) {
-        std::cerr << "SKIPPED: threshold_tma requires SM 12.x (Blackwell), found SM "
+        std::cerr << "SKIPPED: threshold_tma requires SM 10.x+ (Blackwell/GB), found SM "
                   << props.major << "." << props.minor << "\n";
     } else {
         std::cerr << "SKIPPED: threshold_tma requires Blackwell/GB GPUs ("

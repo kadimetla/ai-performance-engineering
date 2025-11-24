@@ -28,7 +28,7 @@ class OptimizedMemoryBoundBenchmark(BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.data = None
-        self.N = 4_000_000  # Same size as baseline
+        self.N = 16_777_216  # Same size as baseline (~64 MB)
         self.step_fn = None
         self._compiled = False
         self._workload = WorkloadMetadata(

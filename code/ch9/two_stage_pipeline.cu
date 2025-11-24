@@ -8,7 +8,15 @@
 
 namespace cg = cooperative_groups;
 
-constexpr int TILE_ELEMS = 128 * 32;  // matches float4 alignment requirement
+// CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
+// Note: This pipeline uses CUDA async copy API which handles alignment automatically
+struct alignas(32) Float8 {
+    float elems[8];
+};
+static_assert(sizeof(Float8) == 32, "Float8 must be 32 bytes");
+static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
+
+constexpr int TILE_ELEMS = 128 * 32;  // matches float4 alignment requirement (can use Float8 on Blackwell)
 constexpr int THREADS = 256;
 
 extern "C" __global__

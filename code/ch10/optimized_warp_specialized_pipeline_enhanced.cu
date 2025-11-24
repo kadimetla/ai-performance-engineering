@@ -28,7 +28,6 @@ namespace cg = cooperative_groups;
 template <int TILE>
 __device__ void compute_tile(const float* a, const float* b, float* c, int lane) {
   constexpr int TILE_ELEMS = TILE * TILE;
-  constexpr size_t TILE_BYTES = static_cast<size_t>(TILE_ELEMS) * sizeof(float);
   for (int idx = lane; idx < TILE_ELEMS; idx += warpSize) {
     float x = a[idx];
     float y = b[idx];
@@ -52,9 +51,13 @@ __global__ void warp_specialized_kernel(const float* __restrict__ A,
   float* stage_b_base = stage_a_base + PIPELINE_STAGES * TILE_ELEMS;
   float* stage_c_base = stage_b_base + PIPELINE_STAGES * TILE_ELEMS;
 
-  using pipe_state = cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>;
-  __shared__ alignas(pipe_state) unsigned char state_storage[sizeof(pipe_state)];
-  auto* state = reinterpret_cast<pipe_state*>(state_storage);
+  using pipeline_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>;
+  __shared__ alignas(pipeline_state_t) unsigned char state_bytes[sizeof(pipeline_state_t)];
+  auto* state = reinterpret_cast<pipeline_state_t*>(state_bytes);
+  if (threadIdx.x == 0) {
+    new (state) pipeline_state_t();
+  }
+  __syncthreads();
   auto pipe = cuda::make_pipeline(block, state);
 
   int warp_id = threadIdx.x / warpSize;

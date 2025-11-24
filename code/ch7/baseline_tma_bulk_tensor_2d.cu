@@ -22,11 +22,14 @@
 
 namespace {
 
-constexpr int TILE_M = 128;
-constexpr int TILE_N = 64;   // Keep shared tile under 48 KB
-constexpr int BLOCK_X = 32;
-constexpr int BLOCK_Y = 4;
-constexpr int ITERATIONS = 20;
+// Keep the baseline conservative: smaller tiles increase block count and expose
+// the overheads that TMA helps hide.
+constexpr int TILE_M = 64;
+// Use a narrower tile to keep static shared under 48 KB on SM100.
+constexpr int TILE_N = 32;
+constexpr int BLOCK_X = 16;
+constexpr int BLOCK_Y = 2;   // Two warps to highlight overhead vs. TMA
+constexpr int ITERATIONS = 10;
 
 __global__ void baseline_bulk_copy_kernel(const float* __restrict__ src,
                                           float* __restrict__ dst,
@@ -72,8 +75,8 @@ __global__ void baseline_bulk_copy_kernel(const float* __restrict__ src,
 }  // namespace
 
 int main() {
-    const int width = 4096;
-    const int height = 4096;
+    const int width = 2048;
+    const int height = 2048;
     const int ld = width;
     const std::size_t bytes = static_cast<std::size_t>(width) * height * sizeof(float);
 

@@ -41,8 +41,14 @@ __global__ void optimized_warp_specialized_kernel(const float* __restrict__ A_gl
     float* B_tile = A_tile + TILE_ELEMS;
     float* C_tile = B_tile + TILE_ELEMS;
 
-    __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 1> pipe_state;
-    auto pipe = cuda::make_pipeline(cta, &pipe_state);
+    using pipeline_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, 1>;
+    __shared__ alignas(pipeline_state_t) unsigned char pipe_state_bytes[sizeof(pipeline_state_t)];
+    auto* pipe_state = reinterpret_cast<pipeline_state_t*>(pipe_state_bytes);
+    if (threadIdx.x == 0) {
+        new (pipe_state) pipeline_state_t();
+    }
+    __syncthreads();
+    auto pipe = cuda::make_pipeline(cta, pipe_state);
 
     const int warp_id = threadIdx.x / warpSize;
     const int lane_id = threadIdx.x % warpSize;

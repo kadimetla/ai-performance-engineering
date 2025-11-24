@@ -25,18 +25,23 @@ def load_tcgen05_module():
         raise RuntimeError(f"tcgen05 inline extension unavailable: {_BUILD_ERROR}")
 
     repo_root = Path(__file__).resolve().parents[2]
-    cutlass_include = repo_root / "third_party" / "cutlass" / "include"
+    te_cutlass_include = repo_root / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
+    upstream_cutlass_include = repo_root / "third_party" / "cutlass" / "include"
     clang_host = repo_root / "third_party" / "llvm" / "bin" / "clang++"
     ccbin_flag = f"-ccbin={clang_host}" if clang_host.exists() else None
     src = repo_root / "labs" / "fullstack_cluster" / "capstone_kernels_tcgen05.cu"
+
+    include_flags = []
+    if te_cutlass_include.exists():
+        include_flags.append(f"-I{te_cutlass_include}")
+    include_flags.append(f"-I{upstream_cutlass_include}")
 
     extra_cuda_cflags = [
         "-std=c++20",
         "-gencode=arch=compute_100,code=sm_100",
         "-lineinfo",
-        f"-I{cutlass_include}",
         "-DCUTE_PREFETCH_COPY_ATOM_DISABLED",
-    ]
+    ] + include_flags
     if ccbin_flag:
         extra_cuda_cflags.append(ccbin_flag)
     extra_cflags = ["-std=c++20"]

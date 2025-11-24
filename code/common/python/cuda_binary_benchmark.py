@@ -102,6 +102,7 @@ class CudaBinaryBenchmark(BaseBenchmark):
         self.time_pattern = re.compile(time_regex) if time_regex is not None else None
         self.requires_pipeline_api = requires_pipeline_api
         self.require_tma_instructions = require_tma_instructions
+        self.use_reported_time = True
         
         self.arch: Optional[str] = None
         self.exec_path: Optional[Path] = None
@@ -198,7 +199,7 @@ class CudaBinaryBenchmark(BaseBenchmark):
             iterations=self.iterations,
             warmup=self.warmup,
             timeout_seconds=self.timeout_seconds,
-            device=torch.device("cpu"),
+            device=torch.device("cuda"),
             enable_memory_tracking=False,
             enable_profiling=False,
         )

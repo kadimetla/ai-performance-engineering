@@ -506,17 +506,17 @@ class RunManifest(BaseModel):
         }
         json_schema_extra = {
             "example": {
-                "hardware": {
-                    "gpu_model": "NVIDIA A100-SXM4-40GB",
-                    "cuda_version": "12.1",
-                    "driver_version": "535.54.03",
-                    "compute_capability": "8.0",
+            "hardware": {
+                    "gpu_model": "NVIDIA B200-SXM5-192GB",
+                    "cuda_version": "13.0",
+                    "driver_version": "580.105.08",
+                    "compute_capability": "10.0",
                     "schemaVersion": "1.0"
                 },
                 "software": {
-                    "pytorch_version": "2.9.0+cu130",
+                    "pytorch_version": "2.10.0+cu130",
                     "triton_version": "3.5.0",
-                    "python_version": "3.11.0",
+                    "python_version": "3.12.0",
                     "os": "linux",
                     "schemaVersion": "1.0"
                 },

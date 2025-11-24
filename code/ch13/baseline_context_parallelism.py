@@ -1,113 +1,255 @@
-"""baseline_context_parallelism.py - Baseline sequential processing without context parallelism.
+#!/usr/bin/env python3
+"""Baseline: Context Parallelism without sequence sharding.
 
-Demonstrates sequential processing of long sequences without context parallelism.
-Context parallelism: This baseline processes the entire sequence on a single GPU sequentially.
-Implements BaseBenchmark for harness integration.
+Demonstrates standard attention without Context Parallelism (CP).
+All attention is computed on a single GPU, which limits maximum sequence length
+to what fits in a single GPU's memory.
 """
-
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
 
 import torch
 import torch.nn as nn
+from typing import Dict, Any, Optional
+import sys
+from pathlib import Path
+import math
 
-from typing import Optional
+# Add common to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from common.python.benchmark_harness import (
-    BaseBenchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-    WorkloadMetadata,
-)
+from common.python.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from common.python.logger import get_logger
+
+logger = get_logger(__name__)
 
 
-class BaselineContextParallelismBenchmark(BaseBenchmark):
-    """Baseline: Sequential processing without context parallelism (single GPU)."""
+class StandardAttention(nn.Module):
+    """Standard multi-head attention without Context Parallelism."""
     
-    def __init__(self):
+    def __init__(self, hidden_size: int, num_heads: int):
         super().__init__()
-        self.model = None
-        self.input_sequence = None
-        self.sequence_length = 8192  # Long sequence for training
-        tokens = self.sequence_length
-        self._workload = WorkloadMetadata(
-            requests_per_iteration=1.0,
-            tokens_per_iteration=float(tokens),
-        )
-    
-    def setup(self) -> None:
-        """Setup: Initialize model and long input sequence."""
-        torch.manual_seed(42)
-        # Baseline: Sequential processing on single GPU
-        # Context parallelism splits long sequences across multiple GPUs
-        # This baseline processes the entire sequence sequentially on one GPU
-        self.model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-        ).to(self.device).eval()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.head_dim = hidden_size // num_heads
         
-        # Long sequence that would benefit from context parallelism
-        # Context parallelism splits sequences across GPUs for parallel processing
-        self.input_sequence = torch.randn(self.sequence_length, 256, device=self.device)
-        self._synchronize()
-        self.register_workload_metadata(
-            requests_per_iteration=self._workload.requests_per_iteration,
-            tokens_per_iteration=self._workload.tokens_per_iteration,
+        assert self.head_dim * num_heads == hidden_size, \
+            f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
+        
+        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.k_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.v_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.o_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        
+        self.scale = 1.0 / math.sqrt(self.head_dim)
+    
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Args:
+            x: [batch_size, seq_len, hidden_size]
+            mask: Optional causal mask [seq_len, seq_len]
+        
+        Returns:
+            output: [batch_size, seq_len, hidden_size]
+        """
+        batch_size, seq_len, _ = x.shape
+        
+        # Project to Q, K, V
+        q = self.q_proj(x)  # [batch_size, seq_len, hidden_size]
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+        
+        # Reshape to [batch_size, num_heads, seq_len, head_dim]
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # Compute attention scores
+        # [batch_size, num_heads, seq_len, seq_len]
+        scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        
+        if mask is not None:
+            scores = scores + mask
+        
+        attn_weights = torch.softmax(scores, dim=-1)
+        
+        # Apply attention to values
+        # [batch_size, num_heads, seq_len, head_dim]
+        attn_output = torch.matmul(attn_weights, v)
+        
+        # Reshape back to [batch_size, seq_len, hidden_size]
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(batch_size, seq_len, self.hidden_size)
+        
+        # Output projection
+        output = self.o_proj(attn_output)
+        
+        return output
+
+
+class BaselineContextParallelism:
+    """Baseline: No Context Parallelism, single-GPU attention."""
+    
+    def __init__(
+        self,
+        batch_size: int = 1,
+        seq_length: int = 2048,
+        hidden_size: int = 4096,
+        num_heads: int = 32,
+        num_layers: int = 1,
+    ):
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required for baseline context parallelism on Blackwell GPUs.")
+        self.batch_size = batch_size
+        self.seq_length = seq_length
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Check memory requirements
+        self._check_memory()
+    
+    def _check_memory(self):
+        """Estimate memory requirements and warn if tight."""
+        # Rough estimate: attention matrix is seq_len x seq_len per head
+        attn_memory_gb = (
+            self.batch_size * self.num_heads * self.seq_length * self.seq_length * 4
+        ) / (1024**3)  # FP32
+        
+        total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        
+        logger.info(f"Estimated attention memory: {attn_memory_gb:.2f} GB")
+        logger.info(f"Total GPU memory: {total_memory_gb:.2f} GB")
+        
+        if attn_memory_gb > total_memory_gb * 0.5:
+            logger.warning(
+                f"Attention may consume {attn_memory_gb:.2f} GB "
+                f"(>{50}% of {total_memory_gb:.2f} GB). "
+                "Consider using Context Parallelism for longer sequences."
+            )
+    
+    def setup(self):
+        """Initialize model and data."""
+        # Create attention layers
+        self.layers = nn.ModuleList([
+            StandardAttention(self.hidden_size, self.num_heads)
+            for _ in range(self.num_layers)
+        ]).to(self.device)
+        
+        # Create input tensor
+        self.input = torch.randn(
+            self.batch_size,
+            self.seq_length,
+            self.hidden_size,
+            device=self.device,
+            dtype=torch.float32
+        )
+        
+        # Create causal mask
+        self.mask = torch.triu(
+            torch.full((self.seq_length, self.seq_length), float('-inf')),
+            diagonal=1
+        ).to(self.device)
+        
+        logger.info(
+            f"Setup complete: batch={self.batch_size}, seq={self.seq_length}, "
+            f"hidden={self.hidden_size}, heads={self.num_heads}, layers={self.num_layers}"
         )
     
-    def benchmark_fn(self) -> None:
-        """Benchmark: Sequential processing of long sequence."""
-        # Baseline: Process entire sequence sequentially on single GPU
-        # No context parallelism - all tokens processed on one device
-        with self._nvtx_range("baseline_context_parallelism"):
-            with torch.no_grad():
-                output = self.model(self.input_sequence)
-        self._synchronize()
+    def run(self) -> float:
+        """Execute baseline attention without Context Parallelism."""
+        torch.cuda.synchronize()
+        
+        # Forward pass through all layers
+        x = self.input
+        for layer in self.layers:
+            x = layer(x, self.mask)
+        
+        torch.cuda.synchronize()
+        
+        # Return peak memory usage
+        peak_memory_gb = torch.cuda.max_memory_allocated() / (1024**3)
+        logger.info(f"Peak memory: {peak_memory_gb:.2f} GB")
+        
+        return peak_memory_gb
     
-    def teardown(self) -> None:
-        """Cleanup: Clear CUDA cache."""
-        super().teardown()
-    
-    def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=10,
-            warmup=3,
-            measurement_timeout_seconds=120,
-            multi_gpu_required=True,
-        )
-    
-    def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input_sequence is None:
-            return "Input sequence not initialized"
-        return None
+    def cleanup(self):
+        """Clean up resources."""
+        del self.layers
+        del self.input
+        del self.mask
+        torch.cuda.empty_cache()
 
 
-def get_benchmark() -> BaseBenchmark:
-    """Factory function for benchmark discovery."""
-    return BaselineContextParallelismBenchmark()
-
-
-if __name__ == '__main__':
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+def run_benchmark(
+    batch_size: int = 1,
+    seq_length: int = 2048,
+    hidden_size: int = 4096,
+    num_heads: int = 32,
+    num_layers: int = 1,
+    profile: str = "none",
+    **kwargs
+) -> Dict[str, Any]:
+    """Run baseline context parallelism benchmark."""
     
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
+    benchmark = BaselineContextParallelism(
+        batch_size=batch_size,
+        seq_length=seq_length,
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        num_layers=num_layers,
     )
-    result = harness.benchmark(benchmark)
-    print(result)
+    benchmark.setup()
+    torch.cuda.synchronize()
+    t0 = torch.cuda.Event(enable_timing=True)
+    t1 = torch.cuda.Event(enable_timing=True)
+    t0.record()
+    peak_memory = benchmark.run()
+    t1.record()
+    torch.cuda.synchronize()
+    elapsed_ms = t0.elapsed_time(t1)
+    benchmark.cleanup()
+    
+    return {
+        "mean_time_ms": float(elapsed_ms),
+        "peak_memory_gb": peak_memory,
+        "seq_length": seq_length,
+        "num_gpus": 1,
+        "parallelism": "none",
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Baseline Context Parallelism")
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--seq-length", type=int, default=2048, 
+                       help="Sequence length (limited by single GPU memory)")
+    parser.add_argument("--hidden-size", type=int, default=4096)
+    parser.add_argument("--num-heads", type=int, default=32)
+    parser.add_argument("--num-layers", type=int, default=1)
+    parser.add_argument("--profile", type=str, default="none")
+    
+    args = parser.parse_args()
+    
+    result = run_benchmark(
+        batch_size=args.batch_size,
+        seq_length=args.seq_length,
+        hidden_size=args.hidden_size,
+        num_heads=args.num_heads,
+        num_layers=args.num_layers,
+        profile=args.profile,
+    )
+    
+    print(f"\n{'='*60}")
+    print(f"Baseline Context Parallelism Results")
+    print(f"{'='*60}")
+    print(f"Sequence length: {result['seq_length']}")
+    print(f"GPUs used: {result['num_gpus']}")
+    print(f"Parallelism: {result['parallelism']}")
+    print(f"Mean time: {result['mean_time_ms']:.2f} ms")
+    print(f"Peak memory: {result['peak_memory_gb']:.2f} GB")
+    print(f"{'='*60}\n")
+    print(f"NOTE: For sequences >16K tokens, consider using Context Parallelism")
+    print(f"      to shard attention across multiple GPUs.")

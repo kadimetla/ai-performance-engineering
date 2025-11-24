@@ -75,11 +75,11 @@ def resolve_shapes() -> Tuple[int, int, int]:
     - quick: tiny shapes for smoke tests
     """
     if _OPTIONS.quick:
-        return 2, 8, 64
+        return 2, 32, 64
     if _OPTIONS.tier == "small":
-        return 4, 16, 64
+        return 4, 32, 64
     if _OPTIONS.tier == "large":
-        return 12, 48, 64
+        return 12, 64, 64
     return 8, 32, 64
 
 

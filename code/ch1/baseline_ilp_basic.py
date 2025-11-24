@@ -51,7 +51,7 @@ class BaselineIlpBasicBenchmark(BaseBenchmark):
         # Scale down for smaller GPUs to ensure it fits
         if torch.cuda.is_available():
             total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            if total_memory_gb >= 16:  # Large GPU (A100, H100, etc.)
+            if total_memory_gb >= 16:  # Large GPU (B200/B300, GB200, etc.)
                 self.N = 100_000_000  # 100M elements
             elif total_memory_gb >= 8:  # Medium GPU (RTX 3090, etc.)
                 self.N = 50_000_000  # 50M elements
@@ -107,6 +107,7 @@ class BaselineIlpBasicBenchmark(BaseBenchmark):
             # Baseline: Low ILP issues
             # Sequential dependencies prevent parallel execution
             # Cannot hide instruction latency
+        torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:

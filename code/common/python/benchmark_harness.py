@@ -247,6 +247,8 @@ class BenchmarkMode(Enum):
     TRITON = "triton"  # Use triton.testing.do_bench
     PYTORCH = "pytorch"  # Use torch.utils.benchmark.Timer
     CUSTOM = "custom"  # Use CUDA Events / time.perf_counter
+    TRAINING = "training"  # Alias for CUSTOM; kept for backward compatibility
+    INFERENCE = "inference"  # Alias for CUSTOM; kept for backward compatibility
 
 
 class ExecutionMode(str, Enum):
@@ -314,6 +316,7 @@ class BenchmarkConfig:
     enable_ncu: bool = field(default_factory=lambda: _get_default_value("enable_ncu", False))
     enable_proton: bool = field(default_factory=lambda: _get_default_value("enable_proton", False))
     profiling_output_dir: Optional[str] = field(default_factory=lambda: _get_default_value("profiling_output_dir", None))
+    profile_mode: Optional[str] = field(default_factory=lambda: _get_default_value("profile_mode", "none"))
     profile_type: str = field(default_factory=lambda: _get_default_value("profile_type", "minimal"))
     nsys_nvtx_include: Optional[List[str]] = field(default_factory=lambda: _get_default_value("nsys_nvtx_include", None))
     enable_nvtx: Optional[bool] = field(default_factory=lambda: _get_default_value("enable_nvtx", None))
@@ -1137,29 +1140,49 @@ class BenchmarkHarness:
             # memory_reserved may not be available in all PyTorch versions
             result.reserved_mb = None
     
-    def benchmark(self, benchmark: BaseBenchmark) -> PydanticBenchmarkResult:
+    def benchmark(
+        self,
+        benchmark: Union[BaseBenchmark, Callable[[], Any]],
+        name: Optional[str] = None
+    ) -> PydanticBenchmarkResult:
         """Run benchmark and return statistical results.
         
         Uses subprocess isolation (if enabled) or threading timeout to prevent hangs.
         Default timeout is 15 seconds.
         """
+        callable_wrapped = False
+        # Support callable benchmarks by wrapping in a minimal BaseBenchmark
+        if not isinstance(benchmark, BaseBenchmark):
+            fn = benchmark
+            callable_wrapped = True
+            
+            class _CallableBenchmark(BaseBenchmark):  # type: ignore[misc]
+                def __init__(self, wrapped_fn: Callable[[], Any], bench_name: Optional[str]):
+                    super().__init__()
+                    self._fn = wrapped_fn
+                    self.name = bench_name or "callable_benchmark"
+                
+                def setup(self) -> None:
+                    # No-op setup by default for raw callables
+                    pass
+                
+                def benchmark_fn(self) -> None:
+                    self._fn()
+            
+            benchmark = _CallableBenchmark(fn, name)
+        elif name and getattr(benchmark, "name", None) is None:
+            # Preserve provided name if the benchmark did not set one
+            benchmark.name = name
+        
         print("[harness] benchmark() start", flush=True)
         # Clone config to avoid mutating shared instance; deepcopy prevents
         # dataclasses.replace from re-running __post_init__ (which re-applies multipliers)
         config = copy.deepcopy(self.config)
         print(f"[harness] initial launch_via={config.launch_via} execution_mode={config.execution_mode}", flush=True)
-        # Force safest path to avoid harness-induced hangs
-        config.use_subprocess = False
-        config.enable_gpu_memory_logging = False
-        config.enable_profiling = False
-        config.enable_nsys = False
-        config.enable_ncu = False
-        # Force safest path while debugging hangs: no subprocess, no profiling/memory logging.
-        config.use_subprocess = False
-        config.enable_gpu_memory_logging = False
-        config.enable_profiling = False
-        config.enable_nsys = False
-        config.enable_ncu = False
+        if callable_wrapped:
+            # Callable benchmarks run in-process to avoid JSON parsing of custom stdout
+            config.use_subprocess = False
+            config.execution_mode = ExecutionMode.THREAD
         bench_config = benchmark.get_config()
         if bench_config and _is_chapter_or_labs_benchmark(benchmark):
             try:
@@ -1199,7 +1222,6 @@ class BenchmarkHarness:
                     setattr(config, key, value)
         config._sync_execution_mode()
         config._sync_launch_via()
-        print(f"[harness] execution_mode={config.execution_mode} launch_via={config.launch_via}", flush=True)
         print(f"[harness] execution_mode={config.execution_mode} launch_via={config.launch_via}", flush=True)
         
         previous_config = getattr(benchmark, "_config", None)
@@ -1326,8 +1348,10 @@ class BenchmarkHarness:
         inference_timing_data: Optional[Dict[str, List[float]]] = None
         
         # Get benchmark name and module info for error messages
+        module_override = getattr(benchmark, "_module_file_override", None)
+        class_override = getattr(benchmark, "_factory_name_override", None)
         benchmark_module = inspect.getmodule(benchmark)
-        benchmark_class = benchmark.__class__.__name__
+        benchmark_class = class_override or benchmark.__class__.__name__
         benchmark_name = getattr(benchmark, '__name__', None) or getattr(benchmark, 'name', None) or benchmark_class
         
         if benchmark_module is None:
@@ -1337,7 +1361,7 @@ class BenchmarkHarness:
             # Fallback to threading if we can't determine module
             return self._benchmark_with_threading(benchmark, config)
         
-        module_file = getattr(benchmark_module, "__file__", None)
+        module_file = module_override or getattr(benchmark_module, "__file__", None)
         if module_file is None:
             spec = getattr(benchmark_module, "__spec__", None)
             if spec is not None:
@@ -1383,12 +1407,32 @@ class BenchmarkHarness:
         if 'percentiles' not in config_dict:
             config_dict['percentiles'] = [25, 50, 75, 99]
         
+        def _is_simple(value: Any) -> bool:
+            """Return True for JSON-serializable scalar/collection values."""
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                return True
+            if isinstance(value, (list, tuple)):
+                return all(_is_simple(v) for v in value)
+            if isinstance(value, dict):
+                return all(
+                    isinstance(k, (str, int, float, bool)) and _is_simple(v)
+                    for k, v in value.items()
+                )
+            return False
+
+        initial_state = {
+            key: value
+            for key, value in getattr(benchmark, "__dict__", {}).items()
+            if not str(key).startswith("_") and _is_simple(value)
+        }
+
         # Prepare input JSON
         input_data = {
             "benchmark_module_path": str(module_path),
             "benchmark_class_name": benchmark_class,
             "config_dict": config_dict,
             "device": str(self.device) if self.device else None,
+            "initial_state": initial_state or None,
         }
         
         # Spawn subprocess using isolated runner
@@ -2171,7 +2215,13 @@ class BenchmarkHarness:
         
         # Compute statistics
         result = self._compute_stats(times_ms, config)
-        
+
+        # Attach benchmark-specific metrics and throughput (parity with subprocess path)
+        custom_metrics = self._resolve_custom_metrics(benchmark)
+        if custom_metrics:
+            result.custom_metrics = custom_metrics
+        self._attach_throughput_metrics(result, benchmark)
+
         # Add inference timing if available
         if inference_timing_data and inference_timing_data.get("ttft_times_ms") and inference_timing_data.get("tpot_times_ms"):
             inference_timing = self._capture_inference_timing(
@@ -2433,6 +2483,10 @@ class BenchmarkHarness:
         inference_timing_data: Optional[Dict[str, List[float]]] = None
         ttft_times_ms: List[float] = []
         tpot_times_ms: List[float] = []
+
+        # Some benchmarks (e.g., external CUDA binaries) report their own timing.
+        benchmark_obj = getattr(fn, "__self__", None)
+        use_reported_time = bool(getattr(benchmark_obj, "use_reported_time", False))
         
         is_cuda = self.device.type == "cuda"
         
@@ -2457,7 +2511,12 @@ class BenchmarkHarness:
                 # Synchronize only the end event (not device-wide) for accurate timing
                 # This avoids blocking other CUDA streams and reduces overhead
                 end_event.synchronize()
-                times_ms.append(start_event.elapsed_time(end_event))
+                elapsed_ms = start_event.elapsed_time(end_event)
+                if use_reported_time:
+                    reported = getattr(benchmark_obj, "last_time_ms", None)
+                    if reported is not None:
+                        elapsed_ms = reported
+                times_ms.append(elapsed_ms)
                 
                 # Check if function returned inference timing data
                 if isinstance(result, dict):
@@ -2471,7 +2530,12 @@ class BenchmarkHarness:
                 start_time = time.perf_counter()
                 result = fn()
                 end_time = time.perf_counter()
-                times_ms.append((end_time - start_time) * 1000)
+                elapsed_ms = (end_time - start_time) * 1000
+                if use_reported_time:
+                    reported = getattr(benchmark_obj, "last_time_ms", None)
+                    if reported is not None:
+                        elapsed_ms = reported
+                times_ms.append(elapsed_ms)
                 
                 # Check if function returned inference timing data
                 if isinstance(result, dict):
@@ -2694,7 +2758,14 @@ class BenchmarkHarness:
             try:
                 metrics = getter()
                 if isinstance(metrics, dict) and metrics:
-                    return metrics
+                    numeric_metrics: Dict[str, float] = {}
+                    for key, value in metrics.items():
+                        if isinstance(value, bool):
+                            numeric_metrics[key] = float(value)
+                        elif isinstance(value, (int, float)):
+                            numeric_metrics[key] = float(value)
+                    if numeric_metrics:
+                        return numeric_metrics
             except Exception as exc:  # pragma: no cover - defensive
                 if LOGGER_AVAILABLE:
                     logger.debug(f"get_custom_metrics() raised: {exc}")

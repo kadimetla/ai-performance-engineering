@@ -16,7 +16,7 @@ from ch17.baseline_dynamic_routing import (  # noqa: E402
 
 class OptimizedDynamicRoutingBenchmark(_DynamicRoutingBenchmark):
     def __init__(self) -> None:
-        super().__init__(batch_size=256, vectorized=True)
+        super().__init__(batch_size=64, vectorized=True)
 
 
 def get_benchmark():

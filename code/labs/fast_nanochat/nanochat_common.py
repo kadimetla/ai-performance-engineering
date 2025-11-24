@@ -43,6 +43,13 @@ except Exception:  # pragma: no cover - safe fallback
     TE_AVAILABLE = False
 
 
+def attach_benchmark_metadata(bench: BaseBenchmark, module_file: str):
+    """Annotate a benchmark so subprocess runner can re-import via get_benchmark."""
+    bench._module_file_override = module_file
+    bench._factory_name_override = "get_benchmark"
+    return bench
+
+
 def _te_version_at_least(major: int, minor: int = 0) -> bool:
     if not TE_AVAILABLE or not hasattr(te, "__version__"):
         return False

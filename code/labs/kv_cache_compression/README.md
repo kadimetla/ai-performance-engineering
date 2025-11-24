@@ -1,6 +1,6 @@
 # KV-Cache Compression Lab (FP8 → NVFP4)
 
-Benchmarks a KV-cache heavy attention block using Transformer Engine 2.9 recipes. The baseline runs MXFP8 block scaling; the optimized variant calibrates in FP8 and then switches to NVFP4 block scaling when FP4 tensor cores are available.
+Benchmarks a KV-cache heavy attention block using Transformer Engine 2.10 (CUDA 13) recipes. The baseline runs MXFP8 block scaling; the optimized variant calibrates in FP8 and then switches to NVFP4 block scaling when FP4 tensor cores are available on Blackwell.
 
 ## Targets
 - `labs/kv_cache_compression:kv_cache` – Baseline MXFP8 path

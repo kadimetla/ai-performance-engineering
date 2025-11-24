@@ -37,8 +37,10 @@ class BenchmarkDefaults:
     enable_ncu: bool = True
     enable_proton: bool = False
     enable_nvtx: Optional[bool] = None  # Auto-enabled if profiling enabled
-    enable_cleanup: bool = False
-    use_subprocess: bool = False
+    # Free allocator state between benchmarks by default.
+    enable_cleanup: bool = True
+    # Prefer subprocess isolation by default; fall back to thread mode when explicitly requested.
+    use_subprocess: bool = True
     execution_mode: Optional[str] = None
     launch_via: str = "python"  # python | torchrun
     nproc_per_node: Optional[int] = None
@@ -57,9 +59,10 @@ class BenchmarkDefaults:
     seed: Optional[int] = 1337
     
     # Timeout defaults (in seconds)
-    setup_timeout_seconds: Optional[int] = 60
+    setup_timeout_seconds: Optional[int] = 120
     warmup_timeout_seconds: Optional[int] = None  # Defaults to measurement_timeout
-    measurement_timeout_seconds: int = 180
+    # Allow slow first-time compilations in subprocess isolation.
+    measurement_timeout_seconds: int = 1200
     profiling_timeout_seconds: Optional[int] = None  # Defaults to max(nsys, ncu)
     nsys_timeout_seconds: int = 120
     ncu_timeout_seconds: int = 180
@@ -68,7 +71,7 @@ class BenchmarkDefaults:
     ncu_sampling_interval: int = 75000
     
     # Legacy timeout (deprecated)
-    timeout_seconds: int = 180
+    timeout_seconds: int = 900
     
     # Output defaults
     profiling_output_dir: Optional[str] = None

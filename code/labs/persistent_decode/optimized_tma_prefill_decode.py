@@ -57,11 +57,9 @@ class GraphMode(Enum):
 class TmaBurstConfig:
     """Simple config holder for burst shaping knobs."""
 
-    def __init__(self, chunk_k: int = 128, max_in_flight: int = 2, tma_sleep_cycles: int = 50_000) -> None:
+    def __init__(self, chunk_k: int = 128, max_in_flight: int = 2) -> None:
         self.chunk_k = chunk_k  # tile size (elements) for each cp.async bulk transfer
         self.max_in_flight = max_in_flight
-        # torch.cuda._sleep argument is in cycles; keep high enough to visualize overlap.
-        self.tma_sleep_cycles = tma_sleep_cycles
 
 
 _TMA_CP_ASYNC_EXT: object | None = None

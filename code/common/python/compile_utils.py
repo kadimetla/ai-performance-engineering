@@ -21,27 +21,45 @@ _LEGACY_TF32_PATCHED = False
 
 def _configure_compiler_defaults() -> None:
     """Enable Blackwell-friendly torch.compile defaults (TMA, autotune)."""
-    try:
-        config = torch._inductor.config  # type: ignore[attr-defined]
-    except Exception:
+    compiler_api = getattr(torch, "compiler", None)
+    if compiler_api is None or not hasattr(compiler_api, "config"):
+        logger.warning(
+            "torch.compiler.config is missing; skipping Blackwell compiler defaults. "
+            "Upgrade to a PyTorch build with compiler config support to auto-enable TMA."
+        )
         return
 
-    try:
-        cuda_cfg = getattr(config, "cuda", None)
-        if cuda_cfg is not None and hasattr(cuda_cfg, "enable_tma"):
-            cuda_cfg.enable_tma = True
-    except Exception:
-        logger.debug("Unable to enable Inductor CUDA TMA support", exc_info=True)
+    config = compiler_api.config  # type: ignore[attr-defined]
 
-    try:
-        triton_cfg = getattr(config, "triton", None)
-        if triton_cfg is not None:
-            if hasattr(triton_cfg, "tma_support"):
-                triton_cfg.tma_support = True
-            if hasattr(triton_cfg, "autotune_mode"):
-                triton_cfg.autotune_mode = "max-autotune"
-    except Exception:
-        logger.debug("Unable to enable Triton TMA/autotune defaults", exc_info=True)
+    cuda_cfg = getattr(config, "cuda", None)
+    if cuda_cfg is None or not hasattr(cuda_cfg, "enable_tma"):
+        logger.warning(
+            "torch.compiler.config.cuda.enable_tma is unavailable; leaving TMA defaults untouched."
+        )
+    else:
+        try:
+            cuda_cfg.enable_tma = True
+        except Exception:
+            logger.warning("Failed to enable TMA via torch.compiler.config.cuda.enable_tma", exc_info=True)
+
+    triton_cfg = getattr(config, "triton", None)
+    if triton_cfg is None:
+        logger.warning("torch.compiler.config.triton is unavailable; Triton defaults unchanged.")
+        return
+    if hasattr(triton_cfg, "tma_support"):
+        try:
+            triton_cfg.tma_support = True
+        except Exception:
+            logger.warning("Failed to enable Triton TMA support via compiler.config", exc_info=True)
+    else:
+        logger.warning("torch.compiler.config.triton.tma_support is unavailable; leaving default.")
+    if hasattr(triton_cfg, "autotune_mode"):
+        try:
+            triton_cfg.autotune_mode = "max-autotune"
+        except Exception:
+            logger.warning("Failed to set Triton autotune_mode=max-autotune", exc_info=True)
+    else:
+        logger.warning("torch.compiler.config.triton.autotune_mode is unavailable; leaving default.")
 
 
 _configure_compiler_defaults()

@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import os
 from typing import Optional
 
@@ -107,16 +114,31 @@ class OptimizedFlexAttentionBenchmark(BaseBenchmark):
         self.compiled = None
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=12, warmup=5)
+        return BenchmarkConfig(
+            iterations=6,
+            warmup=3,
+            use_subprocess=False,
+            measurement_timeout_seconds=60,
+        )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
 
-    def validate_result(self) -> Optional[str]:
-        if self.inputs is None or self.compiled is None:
-            return "FlexAttention module is not initialized"
-        return None
+def validate_result(self) -> Optional[str]:
+    if self.inputs is None or self.compiled is None:
+        return "FlexAttention module is not initialized"
+    return None
 
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedFlexAttentionBenchmark()
+
+
+if __name__ == "__main__":
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+
+    bench = get_benchmark()
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=bench.get_config())
+    result = harness.benchmark(bench)
+    mean_ms = result.timing.mean_ms if result and result.timing else 0.0
+    print(f"[flexattention optimized] mean iteration {mean_ms:.3f} ms")

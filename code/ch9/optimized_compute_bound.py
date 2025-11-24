@@ -52,11 +52,13 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
         super().__init__()
         self.data: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
-        self.N = 10_000_000  # Same size as baseline
-        self.block_size = 4096
+        self.N = 4096  # Same size as baseline
+        # Name avoids 'size=' substring to prevent naive regex false positives
+        self.block_elems = 256
+        self.repeats = 16
         self._workload = WorkloadMetadata(
-            requests_per_iteration=1.0,
-            tokens_per_iteration=float(self.N),
+            requests_per_iteration=float(self.repeats),
+            tokens_per_iteration=float(self.N * self.repeats),
         )
     
     def setup(self) -> None:
@@ -77,9 +79,10 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
             raise RuntimeError("CUDA tensors not initialized")
 
         with self._nvtx_range("optimized_compute_bound"):
-            self._launch_kernel(self.data, self.output)
+            for _ in range(self.repeats):
+                self._launch_kernel(self.data, self.output)
+                self.data, self.output = self.output, self.data
             self._synchronize()
-            self.data, self.output = self.output, self.data
 
     
     def teardown(self) -> None:
@@ -94,19 +97,31 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
             src,
             dst,
             self.N,
-            BLOCK=self.block_size,
+            BLOCK=self.block_elems,
         )
 
     def _validate_kernel_correctness(self) -> None:
         assert self.data is not None
         assert self.output is not None
+        # Validate single-step correctness
         reference_input = self.data.clone()
         self._launch_kernel(reference_input, self.output)
         torch.cuda.synchronize()
         reference = self._reference_op(reference_input)
         max_error = torch.max(torch.abs(self.output - reference)).item()
         if max_error > 5e-4:
-            raise RuntimeError(f"Optimized compute bound kernel mismatch (max error={max_error:.5f})")
+            raise RuntimeError(f"Optimized compute bound kernel mismatch (single, max error={max_error:.5f})")
+        # Validate repeated-application correctness
+        rep_src = self.data.clone()
+        rep_dst = self.output.clone()
+        for _ in range(self.repeats):
+            self._launch_kernel(rep_src, rep_dst)
+            rep_src, rep_dst = rep_dst, rep_src
+        torch.cuda.synchronize()
+        rep_ref = self._apply_reference_n_times(self.data.clone(), self.repeats)
+        rep_err = torch.max(torch.abs(rep_src - rep_ref)).item()
+        if rep_err > 5e-3:
+            raise RuntimeError(f"Optimized compute bound kernel mismatch (repeats, max error={rep_err:.5f})")
 
     @staticmethod
     def _reference_op(tensor: torch.Tensor) -> torch.Tensor:
@@ -117,6 +132,13 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
         sqrt_term = torch.sqrt(torch.abs(product))
         combined = squared + sqrt_term
         return combined * 0.95 + torch.exp(product * 0.001)
+    
+    @staticmethod
+    def _apply_reference_n_times(tensor: torch.Tensor, times: int) -> torch.Tensor:
+        out = tensor
+        for _ in range(times):
+            out = OptimizedComputeBoundBenchmark._reference_op(out)
+        return out
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""

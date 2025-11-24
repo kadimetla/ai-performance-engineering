@@ -415,7 +415,7 @@ class ManagedMemoryAllocator:
         
         print(f"Switching allocator backend to: {self.current_backend.value}")
         
-        # Note: In practice, you'd set PYTORCH_CUDA_ALLOC_CONF environment variable
+        # Note: In practice, you'd set PYTORCH_ALLOC_CONF environment variable (PyTorch 2.10+)
         # and restart the process or use subprocess as in the original implementation
     
     def free(self, tensor: torch.Tensor):

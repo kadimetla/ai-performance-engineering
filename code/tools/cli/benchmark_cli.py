@@ -82,7 +82,9 @@ from common.python.discovery import chapter_slug, discover_all_chapters
 apply_env_defaults()
 
 
-def _validate_output_format(fmt: str) -> str:
+def _validate_output_format(fmt: str | None) -> str:
+    if fmt is None:
+        return "both"
     normalized = fmt.strip().lower()
     valid = {"json", "markdown", "both"}
     if normalized not in valid:
@@ -109,7 +111,9 @@ def _validate_ncu_metric_set(metric_set: str) -> str:
     return normalized
 
 
-def _validate_profile_type(profile: str) -> str:
+def _validate_profile_type(profile: str | None) -> str:
+    if profile is None:
+        return "none"
     normalized = profile.strip().lower()
     valid = {"none", "minimal", "deep_dive", "roofline"}
     if normalized not in valid:
@@ -298,8 +302,9 @@ def _execute_benchmarks(
 
 if TYPER_AVAILABLE:
 
-    @app.command()
+    @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
     def run(
+        ctx: typer.Context,
         targets: Optional[List[str]] = Option(None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to run. Repeat the flag for multiple targets. Omit or use 'all' for every chapter."),
         output_format: str = Option("both", "--format", "-f", help="Output format: 'json', 'markdown', or 'both'", callback=_validate_output_format),
         profile_type: str = Option("none", "--profile", "-p", help="Profiling preset: none (default), minimal, deep_dive, or roofline. Non-'none' enables nsys/ncu/PyTorch profiling.", callback=_validate_profile_type),
@@ -325,8 +330,24 @@ if TYPER_AVAILABLE:
         target_extra_args: Optional[List[str]] = Option(None, "--target-extra-arg", help='Per-target extra args, format: target="--flag value". Repeatable.'),
     ):
         """Run benchmarks - discover, run, and summarize results."""
+        combined_targets: List[str] = []
+        for arg in (list(targets) if targets else []):
+            if arg:
+                combined_targets.append(arg)
+        for extra in ctx.args or []:
+            if not extra:
+                continue
+            # Drop stray values that belong to other options when Click defers parsing.
+            if extra.lower() in {"none", "minimal", "deep_dive", "roofline", "json", "markdown", "both"}:
+                continue
+            combined_targets.append(extra)
+        # Final cleanup: drop any falsy or duplicate entries
+        combined_targets = [t for t in combined_targets if t]
+        # Deduplicate to avoid running the same target multiple times when
+        # Click/Typer shuffles positional args.
+        combined_targets = list(dict.fromkeys(combined_targets))
         _execute_benchmarks(
-            targets=list(targets) if targets else None,
+            targets=combined_targets or None,
             output_format=output_format,
             profile_type=profile_type,
             suite_timeout=suite_timeout,

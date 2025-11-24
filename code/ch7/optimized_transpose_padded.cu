@@ -1,4 +1,6 @@
 // optimized_transpose_padded.cu -- tiled transpose with shared-memory padding.
+// CUDA 13 Update: Note on vector types - transpose operations benefit from float4
+// Float8 could be used but requires careful alignment handling for transpose patterns
 
 #include <cuda_runtime.h>
 
@@ -7,9 +9,17 @@
 
 #include "../common/headers/cuda_helpers.cuh"
 
+// CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads (available but not used in transpose)
+// Transpose operations use float4 for optimal shared memory bank conflict avoidance
+struct alignas(32) Float8 {
+    float elems[8];
+};
+static_assert(sizeof(Float8) == 32, "Float8 must be 32 bytes");
+static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
+
 constexpr int WIDTH = 4096;
 constexpr int TILE_DIM = 64;
-constexpr int ELEMENTS_PER_THREAD = 4;
+constexpr int ELEMENTS_PER_THREAD = 4;  // Using float4 for optimal transpose pattern
 constexpr int BLOCK_ROWS = 16;
 constexpr int BLOCK_COLS = TILE_DIM / ELEMENTS_PER_THREAD;
 

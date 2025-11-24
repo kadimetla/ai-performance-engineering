@@ -8,12 +8,12 @@
 # Exposes:
 #   ARCH                - Selected GPU architecture (default: sm_100)
 #   ARCH_NAME           - Human-readable architecture label
-#   ARCH_SUFFIX         - Suffix (_sm100, _sm103, or _sm121) for architecture-specific binaries
+#   ARCH_SUFFIX         - Suffix (_sm100, _sm103, _sm120, _sm121, _sm122, _sm123) for architecture-specific binaries
 #   TARGET_SUFFIX       - Suffix applied when USE_ARCH_SUFFIX is 1
 #   CUDA_NVCC_ARCH_FLAGS- Baseline nvcc flags for the selected architecture
-#   ARCH_LIST           - Ordered list of supported architectures (sm_100, sm_103, sm_121)
+#   ARCH_LIST           - Ordered list of supported architectures (sm_100, sm_103, sm_120, sm_121, sm_122, sm_123)
 
-CUDA_VERSION ?= 13.0
+CUDA_VERSION ?= 13.1
 NVCC ?= nvcc
 PYTHON ?= python3
 
@@ -30,6 +30,11 @@ ifeq ($(origin ARCH), undefined)
 endif
 
 ifeq ($(strip $(DETECTED_ARCH)),)
+  ifeq ($(AUTO_ARCH_DETECTION),1)
+    ifeq ($(origin ARCH), undefined)
+      $(error [cuda_arch] Unable to auto-detect GPU architecture. Set ARCH=<sm_100|sm_103|sm_120|sm_121|sm_122|sm_123> explicitly.)
+    endif
+  endif
   ARCH ?= $(DEFAULT_ARCH)
   ARCH_SOURCE := default
 else
@@ -45,33 +50,46 @@ ifeq ($(origin ARCH), environment)
 endif
 
 ifeq ($(ARCH_SOURCE),auto)
-$(info [cuda_arch] Auto-detected GPU architecture $(ARCH) (override with ARCH=<sm_100|sm_103|sm_121>))
+$(info [cuda_arch] Auto-detected GPU architecture $(ARCH) (override with ARCH=<sm_100|sm_103|sm_120|sm_121|sm_122|sm_123>))
 endif
 NVTX_STUB_DIR := $(abspath $(CUDA_COMMON_DIR)/nvtx_stub)
 NVTX_STUB_LIB := $(NVTX_STUB_DIR)/libnvToolsExt.a
 NVTX_STUB_SCRIPT := $(abspath $(CUDA_COMMON_DIR)/python/nvtx_stub.py)
 
-ARCH_LIST := sm_100 sm_103 sm_121
+ARCH_LIST := sm_100 sm_103 sm_120 sm_121 sm_122 sm_123
 
 ifeq ($(ARCH),sm_121)
 ARCH_NAME := Grace-Blackwell GB10 (CC 12.1)
 ARCH_SUFFIX := _sm121
-# CUDA 13.0's ptxas does not yet accept sm_121, so clamp to sm_120 targets.
-# This keeps GB10 builds working until CUDA 13.1 introduces native support.
-CUDA_ARCH_GENCODE := -gencode arch=compute_120,code=[sm_120,compute_120]
+CUDA_ARCH_GENCODE := -gencode arch=compute_121,code=[sm_121,compute_121]
+HOST_ARCH_FLAGS := -Xcompiler -mcpu=native
+else ifeq ($(ARCH),sm_122)
+ARCH_NAME := Grace-Blackwell (CC 12.2)
+ARCH_SUFFIX := _sm122
+CUDA_ARCH_GENCODE := -gencode arch=compute_122,code=[sm_122,compute_122]
+HOST_ARCH_FLAGS := -Xcompiler -mcpu=native
+else ifeq ($(ARCH),sm_123)
+ARCH_NAME := Grace-Blackwell (CC 12.3)
+ARCH_SUFFIX := _sm123
+CUDA_ARCH_GENCODE := -gencode arch=compute_123,code=[sm_123,compute_123]
 HOST_ARCH_FLAGS := -Xcompiler -mcpu=native
 else ifeq ($(ARCH),sm_100)
 ARCH_NAME := Blackwell B200/B300 (CC 10.0)
 ARCH_SUFFIX := _sm100
 CUDA_ARCH_GENCODE := -gencode arch=compute_100,code=[sm_100,compute_100]
 HOST_ARCH_FLAGS :=
+else ifeq ($(ARCH),sm_120)
+ARCH_NAME := Grace-Blackwell GB200 (CC 12.0)
+ARCH_SUFFIX := _sm120
+CUDA_ARCH_GENCODE := -gencode arch=compute_120,code=[sm_120,compute_120]
+HOST_ARCH_FLAGS := -Xcompiler -mcpu=native
 else ifeq ($(ARCH),sm_103)
 ARCH_NAME := Blackwell Ultra B300 (CC 10.3)
 ARCH_SUFFIX := _sm103
 CUDA_ARCH_GENCODE := -gencode arch=compute_103,code=[sm_103,compute_103]
 HOST_ARCH_FLAGS :=
 else
-$(error Unsupported ARCH=$(ARCH). Supported values: sm_100, sm_103, sm_121)
+$(error Unsupported ARCH=$(ARCH). Supported values: sm_100, sm_103, sm_120, sm_121, sm_122, sm_123)
 endif
 
 # Base nvcc flags shared across the project. Chapters may append additional flags as needed.

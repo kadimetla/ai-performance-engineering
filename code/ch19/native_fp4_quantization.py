@@ -27,6 +27,25 @@ Requirements:
 - Blackwell GPU (B200/B300)
 - torch._scaled_mm support
 
+TODO (PyTorch 2.10+): Check for native FP4 support
+===================================================
+Current implementation uses MANUAL quantization with per-block scaling.
+PyTorch 2.10+ may provide native FP4 tensor operations:
+
+Potential APIs to check:
+  - torch.float4 dtype (new quantized dtype)
+  - torch._scaled_mm(..., input_dtype=torch.float4)
+  - torch.nn.functional.scaled_dot_product_attention with FP4 weights
+  - aten::_convert_weight_to_fp4_packed (internal op)
+
+CUDA Backend Integration:
+  - cuBLAS 13.x block-scaled FP4 GEMM
+  - Potential 4-10x throughput improvement vs manual quantization
+  - Expected: 8,000-10,000 TFLOPS on B200 (vs 2,500 current)
+
+Research plan: See patches/003_fp4_intrinsics_research.md
+Last checked: November 2025 (PyTorch 2.10-dev, CUDA 13.0.3)
+
 """
 import pathlib
 import sys

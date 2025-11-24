@@ -6,6 +6,10 @@
 #include <cmath>
 #include "profiling_helpers.cuh"
 
+#ifndef cudaGraphInstantiateFlagAutoFreeOnLaunch
+#define cudaGraphInstantiateFlagAutoFreeOnLaunch 0
+#endif
+
 struct GraphCache {
     cudaGraphExec_t exec = nullptr;
     cudaStream_t stream = nullptr;
@@ -109,7 +113,15 @@ void graph_replay(torch::Tensor data, int iterations) {
             kernel_c_kernel<<<num_blocks, threads_per_block, 0, g_graph_cache.stream>>>(data.data_ptr<float>(), n);
             CHECK_CUDA(cudaGetLastError());
             CHECK_CUDA(cudaStreamEndCapture(g_graph_cache.stream, &graph));
+#if CUDART_VERSION >= 12000
+            CHECK_CUDA(cudaGraphInstantiateWithFlags(
+                &g_graph_cache.exec,
+                graph,
+                cudaGraphInstantiateFlagAutoFreeOnLaunch));
+#else
             CHECK_CUDA(cudaGraphInstantiate(&g_graph_cache.exec, graph, nullptr, nullptr, 0));
+#endif
+            CHECK_CUDA(cudaGraphUpload(g_graph_cache.exec, g_graph_cache.stream));
             CHECK_CUDA(cudaGraphDestroy(graph));
             g_graph_cache.device = device_id;
             g_graph_cache.num_elements = n;

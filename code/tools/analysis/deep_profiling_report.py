@@ -70,6 +70,16 @@ except Exception:  # pragma: no cover - graceful fallback when the module is mis
                         peak_tf32_tflops=450.0,
                         memory_bandwidth_gbs=7800.0,
                     )
+                if props.major == 10:
+                    bw = 8800.0 if props.minor >= 3 else 7800.0
+                    return _ArchSpecs(
+                        name="Blackwell B30x" if props.minor >= 3 else "Blackwell B200",
+                        peak_fp32_tflops=250.0,
+                        peak_fp16_tflops=5040.0,
+                        peak_fp8_tflops=10080.0,
+                        peak_tf32_tflops=2520.0,
+                        memory_bandwidth_gbs=bw,
+                    )
                 if props.major == 9:
                     return _ArchSpecs(
                         name="Hopper H100",

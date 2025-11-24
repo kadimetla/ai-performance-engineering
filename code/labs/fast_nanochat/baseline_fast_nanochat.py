@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from labs.fast_nanochat.nanochat_common import NanoChatBenchmark, NanoChatConfig  # noqa: E402
+from labs.fast_nanochat.nanochat_common import NanoChatBenchmark, NanoChatConfig, attach_benchmark_metadata  # noqa: E402
 
 
 def get_benchmark() -> NanoChatBenchmark:
@@ -25,7 +25,7 @@ def get_benchmark() -> NanoChatBenchmark:
         use_torch_compile=False,
         label="baseline_fast_nanochat",
     )
-    return NanoChatBenchmark(cfg)
+    return attach_benchmark_metadata(NanoChatBenchmark(cfg), __file__)
 
 
 if __name__ == "__main__":

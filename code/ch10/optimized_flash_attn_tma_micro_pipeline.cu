@@ -104,14 +104,14 @@ __global__ void flash_attn_tma_microkernel(
             cde::cp_async_bulk_tensor_2d_global_to_shared(
                 smem_k[stage],
                 &k_desc,
-                /*coord_x=*/0,
-                /*coord_y=*/row_base,
+                /*coord_row=*/row_base,
+                /*coord_col=*/0,
                 *bar_ptr);
             cde::cp_async_bulk_tensor_2d_global_to_shared(
                 smem_v[stage],
                 &v_desc,
-                /*coord_x=*/0,
-                /*coord_y=*/row_base,
+                /*coord_row=*/row_base,
+                /*coord_col=*/0,
                 *bar_ptr);
             stage_tokens[stage] = cuda::device::barrier_arrive_tx(*bar_ptr, 1, bytes * 2);
         } else {

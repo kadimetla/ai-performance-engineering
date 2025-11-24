@@ -50,12 +50,12 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
         self.is_distributed = False
         self.rank = 0
         self.world_size = 1
-        self.batch_size = 4
+        self.batch_size = 2
         self.prefill_len = 512
         self.hidden_dim = 256
-        tokens = self.batch_size * (self.prefill_len + 1)  # prefill + decode token
+        tokens = self.batch_size * self.prefill_len
         self._workload = WorkloadMetadata(
-            requests_per_iteration=1.0,
+            requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
     

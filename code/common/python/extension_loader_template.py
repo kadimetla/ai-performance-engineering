@@ -69,11 +69,10 @@ def load_cuda_extension(
         # Clean stale locks before building to prevent hangs
         ensure_clean_build_directory(build_dir)
         
-        # Default include directories
-        if include_dirs is None:
-            include_dirs = []
-        
-        # Add common headers if available
+        # Normalize include directories
+        include_dirs = list(include_dirs) if include_dirs is not None else []
+
+        # Collect include paths with TE CUTLASS first, then upstream CUTLASS, then everything else.
         repo_root = source_path
         while repo_root.parent != repo_root:
             repo_root = repo_root.parent
@@ -82,11 +81,17 @@ def load_cuda_extension(
                 include_dirs.append(common_headers)
                 break
         te_cutlass = repo_root / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
-        if te_cutlass.exists():
-            include_dirs.append(te_cutlass)
         cutlass_headers = repo_root / "third_party" / "cutlass" / "include"
-        if cutlass_headers.exists():
-            include_dirs.append(cutlass_headers)
+        ordered_includes: list[Path] = []
+
+        def _add(path: Path) -> None:
+            if path.exists() and path not in ordered_includes:
+                ordered_includes.append(path)
+
+        _add(te_cutlass)
+        _add(cutlass_headers)
+        for inc in include_dirs:
+            _add(Path(inc))
         
         # Default CUDA flags
         if extra_cuda_cflags is None:
@@ -94,7 +99,7 @@ def load_cuda_extension(
         
         # Add include directories to flags
         cuda_flags = extra_cuda_cflags.copy()
-        for include_dir in include_dirs:
+        for include_dir in ordered_includes:
             cuda_flags.append(f"-I{include_dir}")
         
         load_kwargs = {

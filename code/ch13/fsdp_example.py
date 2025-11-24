@@ -255,9 +255,11 @@ def create_fsdp_model_pytorch29():
         print("FSDP PyTorch 2.10 Configuration")
         print("=" * 80)
         print(f"Sharding strategy: {fsdp_kwargs['sharding_strategy']}")
+        if fsdp_kwargs["sharding_strategy"] == getattr(ShardingStrategy, "HYBRID_SHARD", fsdp_kwargs["sharding_strategy"]):
+            print("Hybrid shard defaults to Zero2-style overlap on Blackwell.")
         print(f"Backward prefetch: {fsdp_kwargs['backward_prefetch']}")
         if forward_prefetch_available:
-            print(f"Forward prefetch:  Enabled (NEW in 2.9)")
+            print(f"Forward prefetch:  Enabled (NEW in 2.10)")
             print(f"Limit all gathers:  Enabled")
         else:
             print(f"Forward prefetch:  Not available (requires PyTorch 2.10+)")

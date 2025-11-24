@@ -99,12 +99,14 @@ inline bool make_2d_tensor_map(
     int box_width,
     int box_height,
     CUtensorMapSwizzle swizzle_mode) {
+    // Tensor map layout is {rows, cols}. We accept width/height inputs in the
+    // usual (cols, rows) order and flip them to match the driver API contract.
     constexpr uint32_t rank = 2;
-    std::uint64_t dims[rank] = {static_cast<std::uint64_t>(width),
-                                static_cast<std::uint64_t>(height)};
+    std::uint64_t dims[rank] = {static_cast<std::uint64_t>(height),
+                                static_cast<std::uint64_t>(width)};
     std::uint64_t stride[rank - 1] = {static_cast<std::uint64_t>(ld * sizeof(float))};
-    std::uint32_t box[rank] = {static_cast<uint32_t>(box_width),
-                               static_cast<uint32_t>(box_height)};
+    std::uint32_t box[rank] = {static_cast<uint32_t>(box_height),
+                               static_cast<uint32_t>(box_width)};
     std::uint32_t elem_stride[rank] = {1, 1};
 
     constexpr auto interleave = CU_TENSOR_MAP_INTERLEAVE_NONE;
@@ -273,4 +275,3 @@ inline bool make_1d_tensor_map(
 }
 
 }  // namespace cuda_tma
-

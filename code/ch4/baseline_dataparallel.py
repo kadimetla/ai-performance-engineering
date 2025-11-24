@@ -73,14 +73,13 @@ class BaselineDataParallelBenchmark(BaseBenchmark):
     def benchmark_fn(self) -> None:
         """Benchmark: DataParallel training step."""
         with self._nvtx_range("dataparallel"):
-            for _ in range(2):
-                gpu_data = self.data.to(self.device, non_blocking=False)
-                gpu_target = self.target.to(self.device, non_blocking=False)
-                output = self.model(gpu_data)
-                loss = nn.functional.mse_loss(output, gpu_target)
-                loss.backward()
-                self.optimizer.step()
-                self.optimizer.zero_grad()
+            gpu_data = self.data.to(self.device, non_blocking=False)
+            gpu_target = self.target.to(self.device, non_blocking=False)
+            output = self.model(gpu_data)
+            loss = nn.functional.mse_loss(output, gpu_target)
+            loss.backward()
+            self.optimizer.step()
+            self.optimizer.zero_grad()
         self._synchronize()
 
     

@@ -19,8 +19,8 @@ def load_tmem_cache_module():
     try:
         repo_root = src.resolve().parents[2]
         include_dirs = [
-            repo_root / "common" / "headers",
             repo_root / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include",
+            repo_root / "common" / "headers",
             repo_root / "third_party" / "cutlass" / "include",
         ]
         return load(

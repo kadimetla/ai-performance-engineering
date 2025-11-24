@@ -7,7 +7,7 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 
 from pathlib import Path
 
-# Environment (Oct-2025): CUDA 13.x r580+, torch 2.9.0+cu130, triton 3.5.0, optional TE 2.8+
+# Environment (Nov-2025): CUDA 13.x r580+, torch 2.10.0+cu130, triton 3.5.0, optional TE 2.9+
 """
 Optimized FlexAttention for Blackwell B200
 

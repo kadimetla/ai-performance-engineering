@@ -12,7 +12,7 @@
     cudaError_t status = (call);                                             \
     if (status != cudaSuccess) {                                             \
       std::fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__,     \
-                    cudaGetErrorString(status));                            \
+                    cudaGetErrorString(status));                             \
       std::exit(EXIT_FAILURE);                                               \
     }                                                                        \
   } while (0)
@@ -20,12 +20,50 @@
 #define CUBLAS_CHECK(call)                                                   \
   do {                                                                       \
     cublasStatus_t status = (call);                                          \
-    if (status != CUBLAS_STATUS_SUCCESS) {                                  \
+    if (status != CUBLAS_STATUS_SUCCESS) {                                   \
       std::fprintf(stderr, "cuBLAS error %s:%d: %d\n", __FILE__, __LINE__,   \
                     status);                                                 \
       std::exit(EXIT_FAILURE);                                               \
     }                                                                        \
   } while (0)
+
+struct alignas(32) Float8 {
+    float v[8];
+};
+static_assert(sizeof(Float8) == 32, "Float8 must pack eight floats");
+static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
+
+__global__ void fill_matrix_kernel(float* data, int elements, float value) {
+    const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+    const int stride = blockDim.x * gridDim.x;
+    const int vec_elems = elements / 8;
+    Float8 vec_value;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        vec_value.v[i] = value;
+    }
+    Float8* vec_ptr = reinterpret_cast<Float8*>(data);
+    for (int idx = thread_id; idx < vec_elems; idx += stride) {
+        vec_ptr[idx] = vec_value;
+    }
+    const int tail_start = vec_elems * 8;
+    for (int idx = tail_start + thread_id; idx < elements; idx += stride) {
+        data[idx] = value;
+    }
+}
+
+void fill_matrix(float* data, int elements, float value) {
+    if (elements <= 0) {
+        return;
+    }
+    const int threads = 256;
+    int blocks = (elements + threads * 8 - 1) / (threads * 8);
+    if (blocks <= 0) {
+        blocks = 1;
+    }
+    fill_matrix_kernel<<<blocks, threads>>>(data, elements, value);
+    CUDA_CHECK(cudaGetLastError());
+}
 
 // Benchmark individual GEMM calls (simulating original PyTorch behavior)
 int main() {
@@ -48,9 +86,10 @@ int main() {
         CUDA_CHECK(cudaMalloc(&d_C[i], m * n * sizeof(float)));
         
         // Initialize with dummy data
-        CUDA_CHECK(cudaMemset(d_A[i], 1, m * k * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_B[i], 1, k * n * sizeof(float)));
+        fill_matrix(d_A[i], m * k, 1.0f);
+        fill_matrix(d_B[i], k * n, 1.0f);
     }
+    CUDA_CHECK(cudaDeviceSynchronize());
     
     // Warmup
     const float alpha = 1.0f, beta = 0.0f;

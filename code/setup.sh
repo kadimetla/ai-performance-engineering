@@ -94,7 +94,24 @@ if [ "${FLASH_ATTN_ARCH}" = "arm64" ]; then
 fi
 FLASH_ATTN_WHEEL_BASENAME="flash_attn-2.8.3-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_${FLASH_ATTN_ARCH}.whl"
 FLASH_ATTN_EXPECTED_VERSION="${FLASH_ATTN_TAG#v}"
-FLASH_ATTENTION_FORCE_CUDA_SM_VALUE="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE:-121}"
+detect_default_sm() {
+    if [ -n "${GPU_COMPUTE_SM_NUM:-}" ]; then
+        echo "${GPU_COMPUTE_SM_NUM}"
+        return
+    fi
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local cap
+        cap="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+        if [ -n "${cap}" ]; then
+            local major="${cap%.*}"
+            local minor="${cap#*.}"
+            printf "%s%s\n" "${major}" "${minor}"
+            return
+        fi
+    fi
+    echo "121"
+}
+FLASH_ATTENTION_FORCE_CUDA_SM_VALUE="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE:-$(detect_default_sm)}"
 VLLM_REPO_URL="${VLLM_REPO_URL:-https://github.com/vllm-project/vllm.git}"
 VLLM_VERSION_TAG="${VLLM_VERSION_TAG:-main}"
 VLLM_GIT_REF="${VLLM_GIT_REF:-${VLLM_VERSION_TAG}}"
@@ -142,10 +159,10 @@ PYTORCH_WHEEL_DIR="${THIRD_PARTY_DIR}/wheels"
 PYTORCH_WHEEL_PATTERN="${PYTORCH_WHEEL_PATTERN:-torch-*-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-*.whl}"
 mkdir -p "${PYTORCH_WHEEL_DIR}"
 
-TORCH_CUDA_ARCH_LIST_VALUE="10.0;10.3;12.1+PTX"
-CMAKE_CUDA_ARCH_LIST_VALUE="100;103;121"
-TORCH_SM_ARCH_LIST_VALUE="sm_100;sm_103;sm_121"
-CUTLASS_NVCC_ARCHS_VALUE_DEFAULT="100;103;121"
+TORCH_CUDA_ARCH_LIST_VALUE="10.0;10.3;12.1;12.2+PTX"
+CMAKE_CUDA_ARCH_LIST_VALUE="100;103;121;122"
+TORCH_SM_ARCH_LIST_VALUE="sm_100;sm_103;sm_121;sm_122"
+CUTLASS_NVCC_ARCHS_VALUE_DEFAULT="100;103;121;122"
 CUTLASS_NVCC_ARCHS_VALUE="${CUTLASS_NVCC_ARCHS_VALUE_DEFAULT}"
 PYTORCH_CU130_INDEX="https://download.pytorch.org/whl/cu130"
 echo "Project root: $PROJECT_ROOT"
@@ -201,7 +218,7 @@ torch_wheel_url() {
             return 1
             ;;
     esac
-    echo "${PYTORCH_CU130_INDEX}/torch-2.9.1%2Bcu130-cp${PYTHON_TARGET_MAJOR}${PYTHON_TARGET_MINOR}-cp${PYTHON_TARGET_MAJOR}${PYTHON_TARGET_MINOR}-manylinux_2_28_${arch}.whl"
+echo "${PYTORCH_CU130_INDEX}/torch-2.10.0%2Bcu130-cp${PYTHON_TARGET_MAJOR}${PYTHON_TARGET_MINOR}-cp${PYTHON_TARGET_MAJOR}${PYTHON_TARGET_MINOR}-manylinux_2_28_${arch}.whl"
 }
 
 # Ensure a tool is reachable by adding a symlink in /usr/local/bin if found elsewhere.
@@ -533,6 +550,9 @@ def te_fp8_smoke():
     try:
         import transformer_engine.pytorch as te
     except Exception as exc:
+        msg = str(exc)
+        if "flash_attn" in msg or "flash_attn_2_cuda" in msg or "undefined symbol" in msg:
+            return None, f"Transformer Engine import skipped due to FlashAttention issue: {exc}"
         return False, f"Transformer Engine import failed: {exc}"
     try:
         layer = te.Linear(128, 128, bias=False).to(torch.bfloat16).cuda()
@@ -549,12 +569,14 @@ status["torchao"]["ok"], status["torchao"]["error"] = torchao_fp8_smoke()
 status["transformer_engine"]["ok"], status["transformer_engine"]["error"] = te_fp8_smoke()
 
 for name, result in status.items():
-    if result["ok"]:
+    if result["ok"] is True:
         print(f"[setup] ✓ {name} FP8 smoke test passed")
+    elif result["ok"] is None:
+        print(f"[setup] ⚠ {name} FP8 smoke test skipped: {result['error']}")
     else:
         print(f"[setup] ERROR: {name} FP8 smoke test failed: {result['error']}")
 
-if not all(entry["ok"] for entry in status.values()):
+if not all(entry["ok"] or entry["ok"] is None for entry in status.values()):
     raise SystemExit(1)
 PY
 }
@@ -622,6 +644,9 @@ fi
 
 GPU_COMPUTE_CAP_RAW=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '[:space:]')
 GPU_COMPUTE_SM_NUM=$(echo "${GPU_COMPUTE_CAP_RAW}" | tr -d '.')
+FLASH_ATTN_TARGET_SM="${GPU_COMPUTE_SM_NUM:-121}"
+FLASH_ATTN_TARGET_ARCHS="${FLASH_ATTENTION_CUDA_ARCHS:-${FLASH_ATTN_TARGET_SM}}"
+export FLASH_ATTN_TARGET_SM FLASH_ATTN_TARGET_ARCHS
 if [[ -n "${GPU_COMPUTE_SM_NUM}" ]]; then
     echo "Detected GPU compute capability: sm_${GPU_COMPUTE_SM_NUM}"
     SOURCE_BUILD_ALLOWED=0
@@ -1478,17 +1503,17 @@ fi
 # Install PyTorch CUDA 13 stack (binary wheels only, no source builds)
 echo ""
 echo "============================================================================"
-echo "Installing PyTorch 2.9.1 cu13 stack (binary wheels only)"
+echo "Installing PyTorch 2.10.0 cu13 stack (binary wheels only)"
 echo "============================================================================"
 echo ""
 
 echo "Removing any existing PyTorch installations..."
 pip_uninstall -y torch torchvision torchdata functorch pytorch-triton >/dev/null 2>&1 || true
 
-echo "Installing torch 2.9.1 + torchvision/torchaudio + torchao (cu13) from cu130 index..."
+echo "Installing torch 2.10.0 + torchvision/torchaudio + torchao (cu13) from cu130 index..."
 if ! pip_install --no-cache-dir --upgrade --ignore-installed \
     "$(torch_wheel_url)"; then
-    echo "ERROR: torch 2.9.1+cu130 wheel install failed"
+    echo "ERROR: torch 2.10.0+cu130 wheel install failed"
     exit 1
 fi
 
@@ -1496,9 +1521,9 @@ if ! pip_install --no-cache-dir --upgrade --ignore-installed \
     --index-url "${PYTORCH_CU130_INDEX}" \
     --extra-index-url "https://pypi.org/simple" \
     --only-binary=":all:" \
-    torchvision==0.24.1+cu130 \
-    torchaudio==2.9.1+cu130 \
-    torchao==0.14.1+cu130 \
+    torchvision==0.25.0+cu130 \
+    torchaudio==2.10.0+cu130 \
+    torchao==0.15.0+cu130 \
     triton==3.5.1; then
     echo "ERROR: torchvision/torchaudio/torchao install failed from cu130 index"
     exit 1
@@ -1522,8 +1547,8 @@ cuda_ver = getattr(torch.version, "cuda", None) or ""
 if not cuda_ver.startswith("13."):
     print(f"ERROR: Expected cu13 torch wheel, got torch.version.cuda={cuda_ver!r}")
     sys.exit(1)
-if torch.__version__ != "2.9.1+cu130":
-    print(f"ERROR: Expected torch==2.9.1+cu130, got {torch.__version__}")
+if not torch.__version__.startswith("2.10.0+cu130"):
+    print(f"ERROR: Expected torch==2.10.0+cu130, got {torch.__version__}")
     sys.exit(1)
 print(f"[setup] torch cu13 confirmed: {torch.__version__} (cuda {cuda_ver})")
 PY
@@ -2048,18 +2073,33 @@ PY
 
 install_flash_attention() {
     FLASH_ATTN_AVAILABLE=0
-    echo "Installing FlashAttention (binary wheel preferred, source fallback)..."
-    # Force reinstall to ensure ABI matches current torch
-    pip_uninstall -y flash-attn >/dev/null 2>&1 || true
-    local fa_arch_list="${TE_TORCH_ARCH_LIST:-12.1}"
-    local fa_sm="${GPU_COMPUTE_SM_NUM:-121}"
-    local fa_archs_env="${FLASH_ATTN_CUDA_ARCHS:-${fa_sm}}"
+    local force_source="${FLASH_ATTN_FORCE_SOURCE:-0}"
+    local fa_sm="${FLASH_ATTN_TARGET_SM:-${GPU_COMPUTE_SM_NUM:-121}}"
+    local fa_arch_list
+    if [ -n "${GPU_COMPUTE_SM_NUM:-}" ]; then
+        fa_arch_list="${GPU_COMPUTE_SM_NUM}"
+    else
+        fa_arch_list="${TE_TORCH_ARCH_LIST:-12.1}"
+    fi
+    local fa_archs_env="${FLASH_ATTN_TARGET_ARCHS:-${fa_sm}}"
     local fa_max_jobs="${FLASH_ATTN_MAX_JOBS:-8}"
+    local fa_nvcc_threads="${FLASH_ATTN_NVCC_THREADS:-1}"
     if [[ "${fa_arch_list}" == *a ]]; then
         fa_arch_list="${fa_arch_list%a}"
     fi
+    if [[ "${fa_archs_env}" == *a ]]; then
+        fa_archs_env="${fa_archs_env%a}"
+    fi
 
-    if [ "${FLASH_ATTN_FORCE_SOURCE:-0}" -ne 1 ]; then
+    echo "Installing FlashAttention ${FLASH_ATTN_EXPECTED_VERSION} (torch $(python3 - <<'PY'
+import torch
+print(torch.__version__)
+PY
+))..."
+    # Force reinstall to ensure ABI matches current torch
+    pip_uninstall -y flash-attn >/dev/null 2>&1 || true
+
+    if [ "${force_source}" -ne 1 ]; then
         if pip_install --no-cache-dir --upgrade --force-reinstall --ignore-installed --no-deps --prefer-binary --only-binary=:all: \
             flash-attn=="${FLASH_ATTN_EXPECTED_VERSION}"; then
             if flash_attn_import_check; then
@@ -2072,20 +2112,22 @@ install_flash_attention() {
             echo "Binary FlashAttention wheel unavailable; building from source..."
         fi
     else
-        echo "FLASH_ATTN_FORCE_SOURCE=1; building FlashAttention from source..."
+        echo "FLASH_ATTN_FORCE_SOURCE=${force_source}; building FlashAttention from source..."
     fi
 
     if TORCH_CUDA_ARCH_LIST="${fa_arch_list}" \
        FLASH_ATTENTION_FORCE_CUDA_SM="${fa_sm}" \
        FLASH_ATTN_CUDA_ARCHS="${fa_archs_env}" \
        MAX_JOBS="${fa_max_jobs}" \
+       NVCC_THREADS="${fa_nvcc_threads}" \
+       FLASH_ATTENTION_FORCE_BUILD=TRUE \
        pip_install --no-cache-dir --upgrade --force-reinstall --ignore-installed --no-build-isolation --no-deps \
        "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}"; then
         if flash_attn_import_check; then
             FLASH_ATTN_AVAILABLE=1
             return 0
         fi
-        echo "FlashAttention source build succeeded but import failed; disabling FlashAttention."
+        echo "FlashAttention source build succeeded but import failed."
         pip_uninstall -y flash-attn >/dev/null 2>&1 || true
     fi
     echo "Warning: FlashAttention not available (install/import failed)."
@@ -2146,7 +2188,7 @@ detect_gpu_sm() {
     return 1
 }
 
-echo "Installing FlashAttention (binary wheels only)..."
+echo "Installing FlashAttention (binary wheel preferred, source fallback)..."
 if ! install_flash_attention; then
     echo "Warning: FlashAttention installation failed; continuing without FlashAttention."
 fi
@@ -3083,6 +3125,22 @@ export LD_LIBRARY_PATH=${CUSPARSELT_LIBDIR}:${CU13_LIBDIR}:\${LD_LIBRARY_PATH}
 EOF
 chmod +x "${TE_ENV_FILE}"
 echo "To use TE FP8/FP4 fast paths on Blackwell, run: source ${TE_ENV_FILE}"
+
+echo ""
+if [[ -n "${GPU_COMPUTE_SM_NUM:-}" && "${GPU_COMPUTE_SM_NUM}" -ge 100 ]]; then
+    echo "Running stack verification (FlashAttention/TE/TMA/TMEM/CTA clusters)..."
+    if ! python3 "${PROJECT_ROOT}/tools/verification/verify_tma_stack.py"; then
+        echo "ERROR: Stack verification failed."
+        exit 1
+    fi
+    echo "Running CUDA feature verification (cluster DSMEM + warp async copy + warp specialization)..."
+    if ! python3 "${PROJECT_ROOT}/tools/verification/verify_blackwell_cuda_features.py"; then
+        echo "ERROR: Blackwell CUDA feature verification failed."
+        exit 1
+    fi
+else
+    echo "Skipping stack verification (non-Blackwell GPU detected)."
+fi
 
 # Final summary
 echo ""

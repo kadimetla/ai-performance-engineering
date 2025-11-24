@@ -29,8 +29,6 @@ __global__ void gemm_double_buffered_kernel(
     int M, int N, int K) {
     const int block_row = blockIdx.y * TILE_M;
     const int block_col = blockIdx.x * TILE_N;
-    const int thread_row = threadIdx.y;
-    const int thread_col = threadIdx.x;
     cg::thread_block block = cg::this_thread_block();
 
     extern __shared__ float shared[];
@@ -47,8 +45,13 @@ __global__ void gemm_double_buffered_kernel(
     const int valid_cols = min(TILE_N, max(0, N - block_col));
 
     using pipeline_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, 2>;
-    __shared__ pipeline_state_t pipe_state;
-    auto pipe = cuda::make_pipeline(block, &pipe_state);
+    __shared__ alignas(pipeline_state_t) unsigned char pipe_state_bytes[sizeof(pipeline_state_t)];
+    auto* pipe_state = reinterpret_cast<pipeline_state_t*>(pipe_state_bytes);
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+        new (pipe_state) pipeline_state_t();
+    }
+    block.sync();
+    auto pipe = cuda::make_pipeline(block, pipe_state);
 
     auto zero_stage = [&](int stage) {
         const int threads = blockDim.x * blockDim.y;

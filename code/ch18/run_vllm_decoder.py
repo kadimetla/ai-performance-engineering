@@ -128,11 +128,11 @@ class SpeculatorConfig:
 
 
 def _assert_vllm_baseline_torch() -> None:
-    """Ensure we are on the PyTorch stack aligned with vLLM v0.11.x (>=2.9)."""
+    """Ensure we are on the PyTorch stack aligned with vLLM v0.12.x (>=2.10)."""
     parsed = version.parse(torch.__version__)
-    minimum = version.parse("2.9.0")
+    minimum = version.parse("2.10.0")
     if parsed < minimum:
-        raise RuntimeError(f"PyTorch >= 2.9.0 required for V1 graph baseline; found {torch.__version__}")
+        raise RuntimeError(f"PyTorch >= 2.10.0 required for V1 graph baseline; found {torch.__version__}")
 
 
 class PagedKVCache:

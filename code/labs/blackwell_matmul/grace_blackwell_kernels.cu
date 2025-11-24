@@ -378,9 +378,9 @@ __global__ void tma_prefetch_kernel(const __grid_constant__ CUtensorMap A_desc,
                                 sizeof(half);
       if (threadIdx.x == 0) {
         cuda::device::experimental::cp_async_bulk_tensor_2d_global_to_shared(
-            &A_stage[stage], &A_desc, global_k, block_row, *bar);
+            &A_stage[stage], &A_desc, block_row, global_k, *bar);
         cuda::device::experimental::cp_async_bulk_tensor_2d_global_to_shared(
-            &B_stage[stage], &B_desc, block_col, global_k, *bar);
+            &B_stage[stage], &B_desc, global_k, block_col, *bar);
         return cuda::device::barrier_arrive_tx(*bar, 1, bytes);
       }
       return bar->arrive();

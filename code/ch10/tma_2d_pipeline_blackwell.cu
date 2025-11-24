@@ -163,8 +163,8 @@ __global__ void tma_2d_pipeline_kernel(
             cde::cp_async_bulk_tensor_2d_global_to_shared(
                 &stage_buffers[stage],
                 &in_desc,
-                g_col0,
                 row_base,
+                g_col0,
                 bar);
             stage_tokens[stage] = cuda::device::barrier_arrive_tx(bar, 1, BYTES_PER_CHUNK);
         } else {
@@ -201,8 +201,8 @@ __global__ void tma_2d_pipeline_kernel(
             if (threadIdx.x == 0 && threadIdx.y == 0) {
                 cde::cp_async_bulk_tensor_2d_shared_to_global(
                     &out_desc,
-                    g_col0,
                     row_base,
+                    g_col0,
                     &stage_buffers[stage]);
                 cde::cp_async_bulk_commit_group();
                 cde::cp_async_bulk_wait_group_read<0>();

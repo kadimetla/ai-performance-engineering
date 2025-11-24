@@ -47,8 +47,6 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
         self.graph: Optional[torch.cuda.CUDAGraph] = None
         self.x_capture: Optional[torch.Tensor] = None
         # Default to fast settings to keep CI/subprocess runs short; can be overridden by users.
-        if "AIPERF_FAST_BENCH" not in os.environ:
-            os.environ["AIPERF_FAST_BENCH"] = "1"
         self._fast_test = bool(os.environ.get("PYTEST_CURRENT_TEST")) or os.environ.get("AIPERF_FAST_BENCH", "0") == "1"
         if self._fast_test:
             # Override get_config at the instance level to keep subprocess runs short.
