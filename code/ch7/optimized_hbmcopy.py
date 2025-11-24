@@ -42,3 +42,4 @@ if __name__ == "__main__":
     result = harness.benchmark(benchmark)
     print(f"\nOptimized HBM Copy: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
 
+

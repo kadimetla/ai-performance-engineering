@@ -285,3 +285,4 @@ if __name__ == "__main__":
     print(f"  - FP8: 2× throughput on Blackwell")
     print(f"  - Memory: ~40% reduction with FP8 all-gather")
     print(f"Launch with: torchrun --nproc_per_node=2 {__file__}")
+

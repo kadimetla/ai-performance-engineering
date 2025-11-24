@@ -18,7 +18,7 @@ Shared headers, CUDA build flags, and Python utilities that keep every chapter a
 | `python/compile_utils.py`, `python/env_defaults.py`, `python/build_utils.py` | torch.compile/precision utilities, environment defaults, and extension build helpers. |
 | `python/nvtx_helper.py`, `python/profiling_runner.py`, `python/profiler_wrapper.py` | NVTX helpers and unified Nsight/Proton profiling hooks wired into the harness. |
 
-## Usage
+## Running / Usage
 - **Build system**: include `../common/cuda_arch.mk` from chapter Makefiles to pick up architecture flags and helper rules.
 - **Environment**: `from common.python.env_defaults import apply_env_defaults; apply_env_defaults()` before running benchmarks to set CUDA paths, allocator knobs, and cache locations.
 - **Harness**: standard pattern inside chapter scripts:

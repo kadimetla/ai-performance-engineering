@@ -230,3 +230,4 @@ if __name__ == "__main__":
     print(f"  - {result['locality_pct']:.0f}% local expert access (reduces NVLink traffic)")
     print(f"  - Better load balancing vs baseline")
 
+

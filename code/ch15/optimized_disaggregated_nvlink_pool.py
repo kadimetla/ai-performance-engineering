@@ -238,3 +238,4 @@ if __name__ == "__main__":
     print(f"  - FP8 compression: 2× less bandwidth needed")
     print(f"  - Reduced transfer overhead to <5% of total latency")
 
+

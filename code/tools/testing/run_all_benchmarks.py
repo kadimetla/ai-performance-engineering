@@ -1735,6 +1735,10 @@ def _test_chapter_impl(
                 value = getattr(override, field.name, None)
                 if value is None:
                     continue
+                if field.name == "timeout_multiplier":
+                    # Preserve CLI-provided timeout scaling so per-benchmark defaults
+                    # cannot silently stretch timeouts.
+                    continue
                 if field.name == "launch_via":
                     base_value = getattr(merged, field.name, None)
                     default_value = getattr(defaults_obj, field.name, None) if defaults_obj else None
@@ -1773,6 +1777,29 @@ def _test_chapter_impl(
                 setattr(merged, field.name, copy.deepcopy(value))
         merged._sync_execution_mode()
         merged._sync_launch_via()
+        # Prevent benchmark-specific defaults from widening CLI/base timeouts.
+        timeout_fields = (
+            "setup_timeout_seconds",
+            "warmup_timeout_seconds",
+            "measurement_timeout_seconds",
+            "profiling_timeout_seconds",
+            "nsys_timeout_seconds",
+            "ncu_timeout_seconds",
+            "proton_timeout_seconds",
+            "timeout_seconds",
+        )
+        for field_name in timeout_fields:
+            base_value = getattr(base_config, field_name, None)
+            merged_value = getattr(merged, field_name, None)
+            if base_value is None or merged_value is None:
+                continue
+            try:
+                if merged_value > base_value:
+                    setattr(merged, field_name, base_value)
+            except TypeError:
+                # Non-numeric timeout values are unexpected; keep merged value.
+                pass
+        merged.timeout_multiplier = getattr(base_config, "timeout_multiplier", merged.timeout_multiplier)
         return merged
 
     def _run_with_config(benchmark_obj, run_id: str, target_label: Optional[str] = None):

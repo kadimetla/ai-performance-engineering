@@ -389,3 +389,4 @@ if __name__ == "__main__":
     print(f"  - FP8 KV cache: 2× memory savings on Blackwell")
     print(f"  - Page size {args.page_size}: Optimal for Blackwell memory subsystem")
     print(f"  - Pre-allocated pool: Zero allocation overhead")
+

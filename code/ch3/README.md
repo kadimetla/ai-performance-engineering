@@ -31,13 +31,16 @@ python tools/cli/benchmark_cli.py run --targets ch3 --profile minimal
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
 
-### Rack prep quickstart (NIC/GPU/NUMA)
-- Optionally select NIC order with repeated `--nic enp193s0f0np0 --nic enp193s0f1np1` (first found is primary).
-- Run `python baseline_rack_prep.py` to capture the pageable, topology-unaware baseline.
-- Run `python optimized_rack_prep.py` to pin to NIC-local CPUs, use pinned staging buffers, and print the IRQ/RPS/XPS shell snippet to apply on the host (dry-run by default).
-- To enforce and validate affinity on the host, run `sudo python optimized_rack_prep.py --apply --nic <if0> [--nic <if1>]`; it writes smp_affinity/rps_cpus/xps_cpus, then reports PID affinity (`os.sched_getaffinity` + `numactl -s -p`) and queue mappings.
-- Via `benchmark_cli`, pass per-target flags with `--target-extra-arg`:  
-  `python tools/cli/benchmark_cli.py run --targets ch3:rack_prep --target-extra-arg 'ch3:rack_prep=--apply --reserve 2 --nic enp193s0f0np0'`
+## Validation Checklist
+- `python compare.py --examples rack_prep` shows optimized runs pinning NUMA/IRQ/RPS/XPS correctly while beating the baseline on GEMM throughput.
+- `python optimized_rack_prep.py --apply --nic <if0> [--nic <if1>]` writes affinity settings and reports pinned queues/processors without errors.
+- `python optimized_docker.py --validate` emits container/runtime settings that match the host tuning output.
+- GEMM/ILP helpers under `train.py` and `baseline_gemm.py` vs `optimized_gemm.py` produce higher FLOP/s once the host tuning is applied.
+
+## Notes
+- Rack prep quickstart (NIC/GPU/NUMA): select NIC order with repeated `--nic`, run the baseline to capture the pageable, topology-unaware reference, then run `optimized_rack_prep.py` (dry-run by default) to print IRQ/RPS/XPS changes. Use `--apply` for host writes and validate via the printed affinity report.
+- Via `benchmark_cli`, pass per-target flags with `--target-extra-arg` to tune NICs and reserved CPUs: `python tools/cli/benchmark_cli.py run --targets ch3:rack_prep --target-extra-arg 'ch3:rack_prep=--apply --reserve 2 --nic enp193s0f0np0'`.
+- System scripts assume sudo when applying host settings; keep them dry-run on shared/dev hosts.
 
 ## Validation Checklist
 - Run `python baseline_numa_unaware.py --diagnostics` before and after `bind_numa_affinity.py` to ensure cross-socket memory traffic drops to near zero.

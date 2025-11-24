@@ -36,8 +36,10 @@ python tools/cli/benchmark_cli.py run --targets ch16 --profile minimal
 - `python symmetric_memory_inference.py --validate` confirms NVLink-backed KV replicas stay in sync with negligible skew.
 - `python inference_server_load_test.py --duration 120` exercises the scheduler and should report stable TTFT/TPOT metrics after warm-up.
 
-## Little's Law Capacity Planning
-- The load test harness now emits prompt/output token percentiles, observed QPS, and a Little's-Law-based GPU estimate every time it runs. Supply your measured per-phase speeds with `--prefill-tokens-per-s`, `--decode-tokens-per-s`, and optionally override sustained throughput via `--tokens-per-gpu`.
+## Notes
+- Little's Law capacity planning: the load-test harness emits prompt/output token percentiles, observed QPS, and a GPU estimate on every run. Supply per-phase speeds with `--prefill-tokens-per-s` and `--decode-tokens-per-s` (optionally `--tokens-per-gpu`) to size clusters quickly.
+- `requirements.txt` pins Transformer Engine/Flash attention combos validated on CUDA 13; rerun `setup.sh` when upgrading toolchains.
+- Telemetry helpers (`dcgm_prometheus_exporter.py`, `cache_monitoring.py`) are optional and degrade gracefully when DCGM/Prometheus are absent.
 - Example:
   ```bash
   torchrun --nproc_per_node=8 ch16/inference_server_load_test.py \

@@ -177,3 +177,4 @@ if __name__ == "__main__":
     print(f"Mean time: {result['mean_time_ms']:.2f} ms")
     print(f"{'='*60}\n")
     print(f"Launch with: torchrun --nproc_per_node=2 {__file__}")
+

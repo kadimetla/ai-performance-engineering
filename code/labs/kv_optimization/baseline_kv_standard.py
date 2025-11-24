@@ -216,3 +216,4 @@ if __name__ == "__main__":
     print(f"Memory: {result['memory_gb']:.2f} GB")
     print(f"Throughput: {result['tokens_per_sec']:.2f} tokens/sec")
     print(f"{'='*60}\n")
+

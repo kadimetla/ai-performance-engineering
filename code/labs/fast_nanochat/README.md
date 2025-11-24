@@ -1,33 +1,44 @@
-# Fast NanoChat Lab
+# Lab - Fast NanoChat
 
-Baseline vs optimized decode microbenchmark inspired by [karpathy/nanochat](https://github.com/karpathy/nanochat). It measures a lightweight LLM-style decode loop and applies common throughput optimizations:
+## Summary
+Decode-focused microbenchmarks inspired by nanochat that show how common serving optimizations (pinned memory, streams, compile/graphs, FP8/FP4, warp specialization, multi-GPU) change TTFT, TPOT, and throughput.
 
-- Baseline: eager execution, pageable host prompts, default stream only.
-- Pinned: pinned host prompts, default stream.
-- Streams: pinned + copy/compute streams.
-- Compile: streams + `torch.compile` for decode.
-- Graph: compile + decode graph.
-- Graph (full): compile + full prefill+decode graph.
-- FP8: full graph + Transformer Engine FP8.
-- FP4: full graph + Transformer Engine FP4 (when NVFP4 is available).
-- Warp specialized: Triton fused decode MLP with warp specialization/TMA-style block pointers and persistent prefill state.
-- 8xGPU: multi-GPU launch to stress NVLink-C2C on an 8x B200 node.
+## Learning Goals
+- Contrast eager vs pinned/streamed vs compiled/graph decode paths on the same workload.
+- Measure FP8/FP4 tensor-core benefits relative to FP16/BF16 baselines.
+- Validate Triton warp-specialized decode kernels against Python math and harness expectations.
+- Observe NVLink-C2C behavior by scaling the decode loop to 8×B200.
 
-Run via the unified CLI:
+## Directory Layout
+| Path | Description |
+| --- | --- |
+| `baseline_fast_nanochat.py` | Eager decode baseline with pageable prompts on a single stream. |
+| `optimized_fast_nanochat_pinned.py`, `optimized_fast_nanochat_streams.py` | Pinned-host and dual-stream variants that remove host bottlenecks. |
+| `optimized_fast_nanochat_compile.py`, `optimized_fast_nanochat_graph.py`, `optimized_fast_nanochat_graph_full.py` | `torch.compile` and CUDA Graph variants (decode-only and full prefill+decode). |
+| `optimized_fast_nanochat_fp8.py`, `optimized_fast_nanochat_fp4.py` | Transformer Engine FP8/FP4 decode paths (FP4 falls back gracefully when unsupported). |
+| `optimized_fast_nanochat_warp_specialized.py`, `triton_fused_decode.py` | Triton fused decode MLP with warp specialization/TMA-style pointers. |
+| `optimized_fast_nanochat_8xgpu.py` | Multi-GPU launcher to stress NVLink-C2C bandwidth on 8×B200. |
+| `optimized_fast_nanochat_double_buffer_tma_cuda.py` | CUDA double-buffered decode using TMA-style loads. |
+| `nanochat_common.py`, `expectations_8x_b200.json`, `__init__.py` | Shared helpers, regression thresholds, and harness target exports. |
+
+## Running the Benchmarks
+Use the benchmark harness for repeatable runs and artifact capture.
 ```bash
+cd ai-performance-engineering
+python tools/cli/benchmark_cli.py list-targets --chapter labs/fast_nanochat
 python tools/cli/benchmark_cli.py run --targets labs/fast_nanochat --profile none
 ```
+- Target labels: `baseline_fast_nanochat`, `optimized_fast_nanochat_pinned`, `..._streams`, `..._compile`, `..._graph`, `..._graph_full`, `..._fp8`, `..._fp4`, `..._warp_specialized`, `..._8xgpu`.
+- Pass extra flags via `--target-extra-arg labs/fast_nanochat:<target>="--flag value"`.
 
-Or run a specific target:
-- `labs/fast_nanochat:baseline_fast_nanochat`
-- `labs/fast_nanochat:optimized_fast_nanochat_pinned`
-- `labs/fast_nanochat:optimized_fast_nanochat_streams`
-- `labs/fast_nanochat:optimized_fast_nanochat_compile`
-- `labs/fast_nanochat:optimized_fast_nanochat_graph`
-- `labs/fast_nanochat:optimized_fast_nanochat_graph_full`
-- `labs/fast_nanochat:optimized_fast_nanochat_fp8`
-- `labs/fast_nanochat:optimized_fast_nanochat_fp4`
-- `labs/fast_nanochat:optimized_fast_nanochat_warp_specialized`
-- `labs/fast_nanochat:optimized_fast_nanochat_8xgpu` (requires torchrun with 8 GPUs)
+## Validation Checklist
+- Baseline vs pinned/streams shows improved TTFT and TPOT with lower host wait time.
+- Compile/graph variants emit fewer kernels and higher tokens/sec than the baseline in harness output.
+- FP8/FP4 runs fall back cleanly if FP4 kernels are unavailable; expectations remain within tolerance.
+- Warp-specialized Triton kernel matches math outputs and reports higher throughput; expectation file stays green.
+- 8×GPU run exercises NVLink-C2C without graph capture failures when launched via `torchrun`.
 
-All variants now emit TTFT (ms), TPOT mean (ms), decode time, total time, and tokens/sec in `custom_metrics` for easy comparison via the benchmark CLI output.
+## Notes
+- All targets emit TTFT, TPOT mean, decode time, total time, and tokens/sec in `custom_metrics` for easy diffing.
+- FP4 path requires NVFP4 (Blackwell); otherwise it reports the fallback in logs.
+- Multi-GPU target expects eight visible GPUs; reduce `--world-size` if you customize the script for smaller boxes.

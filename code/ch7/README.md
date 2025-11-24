@@ -32,11 +32,15 @@ python tools/cli/benchmark_cli.py run --targets ch7 --profile minimal
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
 
-## TMA bulk tensor checklist
-- `baseline_tma_bulk_tensor_2d*` is the manual global→shared→global path; `optimized_tma_bulk_tensor_2d*` uses CUDA 13 `cp.async.bulk.tensor.2d` with a PyTorch ≥2.10 harness on B200/B300/GB200/GB300.
-- Enforced requirements before enabling the TMA path: SM ≥90, shared tile aligned to 128 bytes, sizeBytes is a multiple of 16 bytes, and leading-dimension stride (in bytes) is a multiple of 16.
-- Completion follows the hardware rules: global→shared uses `mbarrier::complete_tx::bytes` via `barrier_arrive_tx`, then waits; shared→global uses `cp_async_bulk_commit_group()` plus `cp_async_bulk_wait_group_read<0>()`.
-- If any alignment or capability check fails, the harness falls back to the baseline manual copy so comparisons remain runnable on down-level GPUs.
+## Validation Checklist
+- `python compare.py --examples memory_access_pytorch` shows optimized vectorized copies exceeding the scalar baseline bandwidth.
+- `python optimized_tma_bulk_tensor_2d.py --size 4096 --stride 4096` executes the TMA path on SM90+ hardware; the script falls back to the manual copy on unsupported devices.
+- `python optimized_matmul_tiled.cu` (via `make && ./optimized_matmul_tiled_sm121`) reports higher GFLOP/s than the naive matmul when inspected with Nsight Compute.
+- Lookup/transpose demos (`optimized_lookup.py`, `optimized_transpose.py`) match baseline outputs while reducing bank conflicts and cache misses.
+
+## Notes
+- TMA bulk tensor checklist: the optimized path uses CUDA 13 `cp.async.bulk.tensor.2d` (PyTorch ≥2.10) on SM90+; it enforces 128-byte shared alignment, size multiples of 16 bytes, and stride multiples of 16 bytes. Completion uses `mbarrier::complete_tx::bytes` for global→shared and `cp_async_bulk_commit_group()/wait_group` for shared→global. Fallback to manual copies keeps runs valid on older GPUs.
+- `arch_config.py` gates SM-specific builds; binaries skip gracefully on unsupported architectures.
 
 ## Validation Checklist
 - `python baseline_hbm3ecopy.py --bytes 1073741824` reports noticeably lower GB/s than `optimized_hbm3ecopy.py`, proving vectorization plus async copies work.

@@ -1,21 +1,36 @@
-# cuDNN SDPA Bench Lab
+# Lab - cuDNN SDPA Bench
 
-Measure cuDNN fused scaled-dot-product attention versus Flash/math backends with explicit CLI control of the SDPA backend.
+## Summary
+Benchmarks cuDNN fused scaled-dot-product attention against Flash and math backends, using identical workloads with CLI-controlled backend selection.
 
-## What it runs
-- `baseline_flash_sdp.py`, `optimized_flash_sdp.py`: identical attention microbenchmarks; backend is selected via CLI (`--backend {auto,cudnn,flash,math}`) passed through `--target-extra-arg`.
-- `expectations_gb10.json`: current regression thresholds captured on GB10 (Hopper-class expectations will differ).
+## Learning Goals
+- Compare cuDNN SDPA throughput/latency to Flash and math implementations on the same shapes.
+- Exercise the benchmark CLI with per-target backend overrides instead of environment variables.
+- Capture Nsight traces and harness artifacts for regression tracking.
 
-## How to run
-- List targets:  
-  `python tools/cli/benchmark_cli.py list-targets --chapter labs/cudnn_sdpa_bench`
-- Run with cuDNN backend and capture Nsight traces:  
-  `python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend cudnn"`
-- Compare Flash backend:  
-  `python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend flash"`
-- Math backend sanity:  
-  `python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend math"`
+## Directory Layout
+| Path | Description |
+| --- | --- |
+| `baseline_flash_sdp.py`, `optimized_flash_sdp.py` | Attention microbenchmarks; backend is chosen via `--backend {auto,cudnn,flash,math}`. |
+| `expectations_gb10.json` | Regression thresholds captured on GB10. |
+| `__init__.py` | Exports harness targets for the CLI. |
+
+## Running the Benchmarks
+Use the benchmark harness to sweep backends.
+```bash
+cd ai-performance-engineering
+python tools/cli/benchmark_cli.py list-targets --chapter labs/cudnn_sdpa_bench
+python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend cudnn"
+python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend flash"
+python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend math"
+```
+- `--backend` is CLI-only; env vars are ignored by design.
+
+## Validation Checklist
+- Harness runs succeed for `cudnn`, `flash`, and `math` backends without code changes.
+- Nsight traces land under `benchmark_profiles/labs/cudnn_sdpa_bench/<run_id>` and artifacts under `artifacts/<run_id>/...`.
+- Optimized path meets or exceeds expectations in `expectations_gb10.json`; failures flag regressions.
 
 ## Notes
-- Backend selection is CLI-only; environment variables are intentionally ignored.
-- Profiling outputs land under `benchmark_profiles/labs/cudnn_sdpa_bench/<run_id>` and the harness artifacts under `artifacts/<run_id>/...`.
+- Profiles are lightweight; use `--profile none` when you only need correctness checks.
+- Hopper-class expectations differ; refresh `expectations_gb10.json` after validating new hardware.

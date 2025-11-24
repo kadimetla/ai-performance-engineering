@@ -1,163 +1,42 @@
-# Real-World Model Optimizations
-## Production-Ready Optimization Patterns for Llama, GPT-4, DeepSeek
+# Lab - Real-World Model Optimizations
 
-This lab demonstrates end-to-end optimization strategies for real-world large language models on Blackwell/Grace-Blackwell platforms.
+## Summary
+Applies the course-wide optimization patterns to representative models (Llama 3.1 8B, DeepSeek-R1 MoE, GPT-4-style) so you can practice end-to-end tuning on Blackwell and Grace-Blackwell hardware.
 
----
+## Learning Goals
+- Exercise attention, MoE, and memory optimizations on realistic architectures instead of toy kernels.
+- Use the benchmark harness to collect reproducible throughput/latency metrics across models.
+- Track expert balance, routing entropy, and KV-cache pressure while iterating on serving choices.
+- Compare FP8/FP16, torch.compile, and topology-aware placements without changing source code.
 
-## Models Covered
+## Directory Layout
+| Path | Description |
+| --- | --- |
+| `llama_3_1_8b_optimization.py` | Single-node 8B walkthrough with `torch.compile`, FlexAttention, and Flash SDPA toggles. |
+| `deepseek_r1_moe_optimization.py` | 64-expert top-6 routing demo with balance/Gini/entropy metrics and auxiliary loss. |
+| `gpt4_architecture_optimization.py` | GPT-4-style MoE + context-parallel sketch with FP8 support and memory estimation. |
+| `__init__.py` | Exports harness targets for the CLI. |
 
-### 1. Llama 3.1 8B Optimization
-**File:** `llama_3_1_8b_optimization.py`
-
-**Optimizations:**
-- `torch.compile` with max-autotune mode
-- FlexAttention for long contexts
-- Flash SDPA integration
-- BF16 tensor cores
-
-**Usage:**
+## Running the Benchmarks
+Use the benchmark harness for quick comparisons or drive the scripts directly.
 ```bash
-python llama_3_1_8b_optimization.py --seq-length 8192 --use-compile
+cd ai-performance-engineering
+python tools/cli/benchmark_cli.py list-targets --chapter labs/real_world_models
+python tools/cli/benchmark_cli.py run --targets labs/real_world_models --profile minimal
+# Direct runs
+python labs/real_world_models/llama_3_1_8b_optimization.py --seq-length 8192 --use-compile
+python labs/real_world_models/deepseek_r1_moe_optimization.py --num-experts 64 --top-k 6 --batch-size 4
+python labs/real_world_models/gpt4_architecture_optimization.py --seq-length 8192 --context-parallel
 ```
+- Override per-model flags via `--target-extra-arg labs/real_world_models:<target>="--flag value"` when using the harness.
 
-**Expected Performance:**
-- ~20,000 tokens/sec on B200
-- 1.5-2× speedup with torch.compile
-- Memory efficient for 8K+ contexts
-
----
-
-### 2. DeepSeek-R1 MoE Optimization
-**File:** `deepseek_r1_moe_optimization.py`
-
-**Features:**
-- 64 experts with top-6 routing
-- Load-balanced routing with auxiliary loss
-- Gini coefficient tracking
-- Router entropy monitoring
-
-**Usage:**
-```bash
-python deepseek_r1_moe_optimization.py \
-  --num-experts 64 --top-k 6 --batch-size 4
-```
-
-**Metrics:**
-- Balance loss (lower is better)
-- Gini coefficient (fairness metric)
-- Router entropy (diversity metric)
-- Expert load variance
-
----
-
-### 3. GPT-4 Architecture Optimization
-**File:** `gpt4_architecture_optimization.py`
-
-**Optimizations:**
-- MoE layer optimization
-- Context Parallelism support
-- FP8 quantization
-- Disaggregated serving patterns
-
-**Usage:**
-```bash
-python gpt4_architecture_optimization.py \
-  --seq-length 8192 --context-parallel
-```
-
-**Notes:**
-- Full GPT-4 requires 24+ B200 GPUs
-- This demonstrates optimization patterns
-- Memory estimation included
-
----
-
-## Integration with Benchmark Harness
-
-All models integrate with the standard harness:
-
-```bash
-python tools/cli/benchmark_cli.py run \
-  --targets labs/real_world_models:llama_3_1_8b
-
-python tools/cli/benchmark_cli.py run \
-  --targets labs/real_world_models:deepseek_r1_moe
-
-python tools/cli/benchmark_cli.py run \
-  --targets labs/real_world_models:gpt4_architecture
-```
-
----
-
-## Optimization Patterns
-
-### 1. Attention Optimization
-- FlexAttention for custom masks
-- Flash Attention for efficiency
-- Block-sparse patterns for long context
-- Sliding window for bounded attention
-
-### 2. MoE Optimization
-- Load-balanced routing
-- Expert parallelism (EP)
-- Topology-aware placement
-- FP8 expert quantization
-
-### 3. Memory Optimization
-- FP8 KV cache (2× savings)
-- Gradient checkpointing
-- FSDP2 for parameter sharding
-- Paged attention for flexibility
-
-### 4. Distributed Strategies
-- Tensor Parallel for wide models
-- Pipeline Parallel for deep models
-- Context Parallel for long sequences
-- Expert Parallel for MoE
-
----
-
-## Performance Targets
-
-### Llama 3.1 8B on B200
-- **Throughput:** 20,000+ tokens/sec
-- **Latency:** <50ms for 8K context
-- **Memory:** <40GB with optimizations
-
-### DeepSeek-R1 (64 experts) on 8×B200
-- **Throughput:** 15,000+ tokens/sec
-- **Expert balance:** Gini < 0.2
-- **Load variance:** < 10% of mean
-
-### GPT-4 Scale on 24×B200
-- **Throughput:** 10,000+ tokens/sec
-- **Context:** 128K with CP
-- **Memory:** Distributed via FSDP2
-
----
-
-## Running All Benchmarks
-
-```bash
-# Run all real-world model optimizations
-python tools/cli/benchmark_cli.py run \
-  --targets labs/real_world_models --profile minimal
-```
-
-The harness aggregates results across targets; no separate comparison script is required.
-
----
+## Validation Checklist
+- `llama_3_1_8b_optimization.py` sustains ~20K tokens/sec on B200 with `--use-compile` enabled and stays memory-efficient at 8K+ context.
+- `deepseek_r1_moe_optimization.py` reports balanced experts (Gini < 0.2) and stable router entropy across batches.
+- `gpt4_architecture_optimization.py` runs the context-parallel path without OOM on appropriately sized clusters; memory estimates match the printed budget.
+- Harness runs emit comparable baseline/optimized timings for every target without manual wiring.
 
 ## Notes
-
-- All models use simplified architectures for benchmarking
-- Full implementations would require model weights
-- Performance numbers are estimates based on hardware specs
-- Actual results may vary based on workload characteristics
-
----
-
-**Created:** November 24, 2025  
-**Updated:** November 24, 2025  
-**Status:** Production-ready
+- These scripts are intentionally weight-light sketches for benchmarking; swap in real checkpoints to validate production settings.
+- Hardware expectations: B200/GB200 for best results; GPT-4-scale examples assume 24+ GPUs with NVLink/NVL fabrics.
+- Metrics (balance loss, entropy, KV cache) are emitted alongside throughput so you can gate deployments with more than raw speed.

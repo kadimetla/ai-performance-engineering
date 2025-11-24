@@ -16,7 +16,7 @@ Lightweight synthetic corpora used for fast accuracy and perplexity checks witho
 | `repetitive_tokens.txt` | Repeating 100-token pattern for overfitting/regression checks. |
 | `arithmetic.txt` | Simple arithmetic expressions encoded as tokens for reasoning sanity tests. |
 
-## Usage
+## Running / Usage
 - Run perplexity checks: `python ch16/perplexity_eval.py eval_datasets/random_tokens.txt --output-json artifacts/perplexity_random.json`
 - Compare precision/accuracy: `python tools/utilities/compare_precision_accuracy.py --dataset eval_datasets/structured_tokens.txt`
 - Regenerate with custom sizes:
