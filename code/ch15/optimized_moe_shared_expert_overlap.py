@@ -14,6 +14,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -32,7 +33,7 @@ class OverlappedMoE(nn.Module):
         )
         self.combine = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor, dist_group: Optional[dist.ProcessGroup] = None) -> torch.Tensor:
         logits = self.gate(tokens)
         top2_w, top2_idx = torch.topk(F.softmax(logits, dim=-1), k=2, dim=-1)
 
@@ -41,18 +42,77 @@ class OverlappedMoE(nn.Module):
         flat_idx = top2_idx.view(batch * seq, 2)
         flat_w = top2_w.view(batch * seq, 2)
 
+        if dist_group is None or dist.get_world_size(dist_group) == 1:
+            streams = [torch.cuda.Stream(device=tokens.device) for _ in range(2)]
+            partials = []
+            for s_idx, stream in enumerate(streams):
+                expert_ids = flat_idx[:, s_idx]
+                unique_ids = torch.unique(expert_ids)
+                local_out = torch.zeros_like(flat_tokens)
+                with torch.cuda.stream(stream):
+                    for eid in unique_ids.tolist():
+                        mask = expert_ids == eid
+                        if mask.any():
+                            contrib = self.experts[eid](flat_tokens[mask]) * flat_w[mask, s_idx:s_idx + 1]
+                            local_out[mask] += contrib
+                partials.append(local_out)
+            torch.cuda.synchronize(tokens.device)
+            out = sum(partials)
+            return self.combine(out.view(batch, seq, hidden))
+
+        # Distributed path: use all_to_all for top-1 routing of the first expert in top-2.
+        world_size = dist.get_world_size(dist_group)
+        rank = dist.get_rank(dist_group)
+        experts_per_rank = max(1, len(self.experts) // world_size)
+        top1 = flat_idx[:, 0]
+        dest_ranks = top1 // experts_per_rank
+
+        send_tokens: list[torch.Tensor] = []
+        send_indices: list[torch.Tensor] = []
+        for r in range(world_size):
+            mask = dest_ranks == r
+            send_tokens.append(flat_tokens[mask])
+            send_indices.append(torch.nonzero(mask, as_tuple=False).view(-1))
+
+        send_splits = [int(t.size(0)) for t in send_tokens]
+        splits_all: list[list[int]] = [None for _ in range(world_size)]  # type: ignore
+        dist.all_gather_object(splits_all, send_splits, group=dist_group)
+        recv_splits = [splits_all[r][rank] for r in range(world_size)]
+
+        send_buf = torch.cat(send_tokens, dim=0) if send_tokens else torch.empty(0, hidden, device=tokens.device)
+        send_pos = torch.cat(send_indices, dim=0) if send_indices else torch.empty(0, device=tokens.device, dtype=torch.int64)
+
+        total_recv = int(sum(recv_splits))
+        recv_buf = torch.empty(total_recv, hidden, device=tokens.device, dtype=flat_tokens.dtype)
+        recv_pos = torch.empty(total_recv, device=tokens.device, dtype=torch.int64)
+
+        dist.all_to_all_single(recv_buf, send_buf, out_split_sizes=recv_splits, in_split_sizes=send_splits, group=dist_group)
+        dist.all_to_all_single(recv_pos, send_pos, out_split_sizes=recv_splits, in_split_sizes=send_splits, group=dist_group)
+
+        local_out = torch.zeros_like(recv_buf)
+        # Only route first expert to match the top-1 overlap pattern.
+        for eid in torch.unique(top1):
+            eid_int = int(eid.item())
+            if (eid_int // experts_per_rank) != rank:
+                continue
+            mask = top1[send_pos] == eid  # send_pos maps back to local recv order
+            if mask.any():
+                local_out[mask] = self.experts[eid_int](recv_buf[mask])
+
+        send_back_splits = recv_splits
+        recv_back_splits = send_splits
+        send_back_buf = local_out
+        send_back_pos = recv_pos
+
+        total_back = int(sum(recv_back_splits))
+        recv_back_buf = torch.empty(total_back, hidden, device=tokens.device, dtype=flat_tokens.dtype)
+        recv_back_pos = torch.empty(total_back, device=tokens.device, dtype=torch.int64)
+
+        dist.all_to_all_single(recv_back_buf, send_back_buf, out_split_sizes=recv_back_splits, in_split_sizes=send_back_splits, group=dist_group)
+        dist.all_to_all_single(recv_back_pos, send_back_pos, out_split_sizes=recv_back_splits, in_split_sizes=send_back_splits, group=dist_group)
+
         out = torch.zeros_like(flat_tokens)
-        streams = [torch.cuda.Stream(device=tokens.device) for _ in range(2)]
-
-        # Two-way overlap: process the top-2 experts on separate streams.
-        for s_idx, stream in enumerate(streams):
-            with torch.cuda.stream(stream):
-                expert_id = int(flat_idx[0, s_idx].item()) % len(self.experts)
-                expert = self.experts[expert_id]
-                contrib = expert(flat_tokens) * flat_w[:, s_idx:s_idx + 1]
-                out += contrib
-
-        torch.cuda.synchronize(tokens.device)
+        out[recv_back_pos] = recv_back_buf
         return self.combine(out.view(batch, seq, hidden))
 
 
@@ -77,9 +137,10 @@ class OptimizedMoeOverlapBenchmark(BaseBenchmark):
             raise RuntimeError("SKIPPED: overlapped MoE not initialized")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
+        dist_group = dist.group.WORLD if dist.is_initialized() else None
         with nvtx_range("moe_overlap_optimized", enable=enable_nvtx):
             with torch.no_grad():
-                _ = self.model(self.inputs)
+                _ = self.model(self.inputs, dist_group=dist_group)
         torch.cuda.synchronize(self.device)
         return {}
 

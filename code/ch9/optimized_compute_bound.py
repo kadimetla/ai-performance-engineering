@@ -143,8 +143,8 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=10,
+            iterations=5,
+            warmup=1,
             enable_memory_tracking=False,
             enable_profiling=False,
         )

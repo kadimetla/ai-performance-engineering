@@ -174,8 +174,8 @@ class OptimizedPagedAttentionBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
-            warmup=2,
+            iterations=5,
+            warmup=1,
         )
     
     def validate_result(self) -> Optional[str]:

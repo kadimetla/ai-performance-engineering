@@ -24,7 +24,7 @@ from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
 class ToyGatedMoE(nn.Module):
-    """Minimal top-1 MoE for benchmarking."""
+    """Top-1 MoE with real per-expert dispatch on a single GPU."""
 
     def __init__(self, hidden_dim: int = 1024, num_experts: int = 4):
         super().__init__()
@@ -32,7 +32,7 @@ class ToyGatedMoE(nn.Module):
         self.num_experts = num_experts
         self.gate = nn.Linear(hidden_dim, num_experts, bias=False)
         self.experts = nn.ModuleList(
-            [nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU()) for _ in range(num_experts)]
+            [nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim)) for _ in range(num_experts)]
         )
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
@@ -40,12 +40,13 @@ class ToyGatedMoE(nn.Module):
         weights = F.softmax(logits, dim=-1)
         top1 = torch.argmax(weights, dim=-1)
 
+        # Dispatch per expert to avoid mixing routing decisions.
         outputs = torch.zeros_like(tokens)
-        for expert_idx in range(self.num_experts):
+        for expert_idx, expert in enumerate(self.experts):
             mask = top1 == expert_idx
             if mask.any():
                 expert_tokens = tokens[mask]
-                outputs[mask] = self.experts[expert_idx](expert_tokens)
+                outputs[mask] = expert(expert_tokens)
         return outputs
 
 

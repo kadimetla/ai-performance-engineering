@@ -35,14 +35,18 @@ class NVLSCollectivesBenchmark(BaseBenchmark):
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: NVLS collectives require >=2 GPUs")
+        if not dist.is_available():
+            raise RuntimeError("SKIPPED: torch.distributed not available")
+        if not dist.is_initialized():
+            if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+                raise RuntimeError("SKIPPED: launch with torchrun to enable NCCL NVLS demo")
+            dist.init_process_group("nccl")
 
-        # Single-process setup; users can still torchrun for real multi-rank runs.
         os.environ.setdefault("NCCL_NVLS_ENABLE", "1")
-        if dist.is_available() and not dist.is_initialized():
-            dist.init_process_group("nccl", rank=0, world_size=1)
+        os.environ.setdefault("NCCL_ALGO", "Tree,Ring,NVLS")
+        os.environ.setdefault("NCCL_COLLNET_ENABLE", "1")
         self.tensor = torch.ones(1024, device=self.device)
         self._initialized = True
-        torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> Optional[dict]:
         if not self._initialized or self.tensor is None:

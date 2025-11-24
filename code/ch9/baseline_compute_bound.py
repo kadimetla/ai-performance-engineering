@@ -63,7 +63,7 @@ class BaselineComputeBoundBenchmark(BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=12, warmup=3)
+        return BenchmarkConfig(iterations=5, warmup=1)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

@@ -12,7 +12,6 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
