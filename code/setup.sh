@@ -2047,6 +2047,7 @@ PY
 }
 
 install_flash_attention() {
+    FLASH_ATTN_AVAILABLE=0
     echo "Installing FlashAttention (binary wheel preferred, source fallback)..."
     # Force reinstall to ensure ABI matches current torch
     pip_uninstall -y flash-attn >/dev/null 2>&1 || true
@@ -2062,6 +2063,7 @@ install_flash_attention() {
         if pip_install --no-cache-dir --upgrade --force-reinstall --ignore-installed --no-deps --prefer-binary --only-binary=:all: \
             flash-attn=="${FLASH_ATTN_EXPECTED_VERSION}"; then
             if flash_attn_import_check; then
+                FLASH_ATTN_AVAILABLE=1
                 return 0
             fi
             echo "FlashAttention binary wheel installed but import failed; rebuilding from source..."
@@ -2080,11 +2082,13 @@ install_flash_attention() {
        pip_install --no-cache-dir --upgrade --force-reinstall --ignore-installed --no-build-isolation --no-deps \
        "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}"; then
         if flash_attn_import_check; then
+            FLASH_ATTN_AVAILABLE=1
             return 0
         fi
-        echo "FlashAttention source build succeeded but import failed."
+        echo "FlashAttention source build succeeded but import failed; disabling FlashAttention."
+        pip_uninstall -y flash-attn >/dev/null 2>&1 || true
     fi
-    echo "ERROR: Failed to install FlashAttention wheel. Provide a wheel at ${FLASH_ATTN_CACHE_PATH} or ${FLASH_ATTN_SPLIT_PREFIX}*."
+    echo "Warning: FlashAttention not available (install/import failed)."
     return 1
 }
 
@@ -2144,12 +2148,14 @@ detect_gpu_sm() {
 
 echo "Installing FlashAttention (binary wheels only)..."
 if ! install_flash_attention; then
-    echo "ERROR: FlashAttention installation FAILED (binary-only path)."
-    exit 1
+    echo "Warning: FlashAttention installation failed; continuing without FlashAttention."
 fi
-
-# Filter FlashAttention warnings, if present
-flash_attn_filter_warning
+if [ "${FLASH_ATTN_AVAILABLE:-0}" -eq 1 ]; then
+    # Filter FlashAttention warnings, if present
+    flash_attn_filter_warning
+else
+    echo "FlashAttention unavailable; skipping warning filter."
+fi
 
 echo ""
 echo "Verifying PyTorch CUDA after FlashAttention installation..."
