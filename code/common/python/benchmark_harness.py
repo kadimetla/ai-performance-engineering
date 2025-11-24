@@ -1304,6 +1304,10 @@ class BenchmarkHarness:
             # Override with benchmark-specific settings
             for key, value in bench_config.__dict__.items():
                 if value is not None:
+                    # Never allow benchmarks to re-enable subprocess mode when we're already
+                    # running inside an isolated subprocess (prevents recursive launches).
+                    if key in ("use_subprocess", "execution_mode") and self.config.use_subprocess is False:
+                        continue
                     if key == "target_extra_args":
                         if value:
                             config.target_extra_args = {
