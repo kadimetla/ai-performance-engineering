@@ -27,7 +27,7 @@ from labs.moe_parallelism.moe_env_presets import (  # noqa: E402
     estimate_collective,
     render_summary,
 )
-from labs.moe_parallelism.plan import format_report  # noqa: E402
+from core.common.moe_parallelism_plan import format_report  # noqa: E402
 
 
 def _optimized_smoke_test() -> str:

@@ -342,7 +342,7 @@ See [`examples/profiling_examples.py`](../../examples/profiling_examples.py) for
 ## Architecture
 
 ```
-tools/profiling/
+core/profiling/
 ├── __init__.py          # Public API exports
 ├── __main__.py          # CLI entry point
 ├── profiler.py          # UnifiedProfiler, ProfileSession

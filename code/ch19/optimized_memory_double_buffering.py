@@ -98,7 +98,7 @@ class OptimizedMemoryDoubleBufferingBenchmark(BaseBenchmark):
         """Benchmark: Double buffering with overlapping operations."""
         # Use conditional NVTX ranges - only enabled when profiling
 
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
 
@@ -152,7 +152,7 @@ class OptimizedMemoryDoubleBufferingBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_precision_metrics
+        from core.benchmark.metrics import compute_precision_metrics
         return compute_precision_metrics(
             fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
             reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),

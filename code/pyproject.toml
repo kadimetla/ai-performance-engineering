@@ -89,8 +89,7 @@ ignore_missing_imports = true
 cache_dir = "/dev/null"
 exclude = [
     "tests/",
-    "tools/",
-    "scripts/",
+    "core/scripts/",
     "vendor/",
     "book/",
 ]
@@ -105,4 +104,3 @@ module = [
     "datasets.*",
 ]
 ignore_missing_imports = true
-

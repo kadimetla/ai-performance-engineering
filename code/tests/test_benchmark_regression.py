@@ -26,7 +26,7 @@ apply_env_defaults()
 import torch
 from core.utils.chapter_compare_template import discover_benchmarks, load_benchmark
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
-from benchmark.comparison import compare_results, ComparisonResult, format_comparison
+from core.benchmark.comparison import compare_results, ComparisonResult, format_comparison
 
 
 # Skip tests if CUDA is not available (NVIDIA GPU required)
@@ -45,7 +45,7 @@ def harness():
     """Create a benchmark harness for regression testing."""
     config = BenchmarkConfig(
         iterations=5,  # Minimal iterations for lightweight regression checks
-        warmup=1,
+        warmup=5,
         timeout_seconds=10,
         enable_profiling=False,  # Disable profiling for regression tests
         enable_nsys=False,
@@ -85,8 +85,8 @@ def test_quick_baseline_optimized_speedup(request, harness):
     optimized_result = harness.benchmark(optimized)
     
     # Both should complete successfully
-    assert baseline_result.iterations > 0
-    assert optimized_result.iterations > 0
+    assert baseline_result.timing is not None and baseline_result.timing.iterations > 0
+    assert optimized_result.timing is not None and optimized_result.timing.iterations > 0
     
     # Use comparison utility to verify
     comparison = compare_results(baseline_result, optimized_result)
@@ -137,7 +137,7 @@ def test_benchmark_memory_usage(request):
     # Create harness with memory tracking enabled
     config = BenchmarkConfig(
         iterations=3,  # Minimal iterations
-        warmup=1,
+        warmup=5,
         enable_memory_tracking=True,
         enable_profiling=False,
     )
@@ -148,7 +148,7 @@ def test_benchmark_memory_usage(request):
     # Memory tracking should provide metrics if enabled
     # Note: Some benchmarks may not allocate GPU memory, so we just check that
     # the result is valid (memory metrics may be None)
-    assert result.iterations > 0
+    assert result.timing is not None and result.timing.iterations > 0
     # Memory metrics are optional - just ensure result is valid
 
 
@@ -168,7 +168,7 @@ def test_benchmark_timeout_handling(request):
     # Create harness with very short timeout
     config = BenchmarkConfig(
         iterations=1000,  # Many iterations
-        warmup=1,
+        warmup=5,
         timeout_seconds=1,  # Very short timeout
         enable_profiling=False,
     )
@@ -178,7 +178,7 @@ def test_benchmark_timeout_handling(request):
     try:
         result = timeout_harness.benchmark(benchmark)
         # If it completes, that's fine too (benchmark is fast enough)
-        assert result.iterations >= 0
+        assert result.timing is not None and result.timing.iterations >= 0
     except RuntimeError as e:
         # Timeout is acceptable - should raise RuntimeError with timeout message
         assert "timeout" in str(e).lower() or "TIMEOUT" in str(e) or "failed" in str(e).lower()

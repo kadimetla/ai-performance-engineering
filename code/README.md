@@ -23,8 +23,6 @@ python ch7/optimized_memory_access.py
 python -m cli.aisp bench run --targets ch7 --profile minimal
 ```
 
-> Canonical CLI: use `aisp` for everything. No other CLI wrappers are maintained.
-
 ---
 
 ## Directory Layout
@@ -33,10 +31,6 @@ python -m cli.aisp bench run --targets ch7 --profile minimal
 |------|-------------|
 | `ch1` - `ch20` | One directory per chapter with baseline/optimized benchmarks |
 | `labs/` | Deep-dive labs for matmul, MoE, FlexAttention, distributed training, etc. |
-| `benchmark/`, `profiling/`, `core/`, `optimization/`, `analysis/` | Shared harness, metrics, profiling, and optimization utilities |
-| `tools/` | CLI, dashboard, and analysis utilities |
-| `tests/` | pytest tests (28 files) |
-| `scripts/` | Development utilities |
 
 ---
 
@@ -118,7 +112,7 @@ ncu-ui kernel_analysis.ncu-rep
 
 import torch
 from core.harness.benchmark_harness import BaseBenchmark
-from benchmark.metrics import compute_memory_transfer_metrics
+from core.benchmark.metrics import compute_memory_transfer_metrics
 
 class OptimizedMyTechnique(BaseBenchmark):
     def setup(self):
@@ -296,10 +290,10 @@ python cli/aisp.py bench utils --tool probe-hw
 pytest tests/ -v
 
 # Validate benchmark imports
-python scripts/validate_imports.py
+python core/scripts/validate_imports.py
 
 # Check metrics coverage
-python scripts/update_custom_metrics.py --analyze
+python core/scripts/update_custom_metrics.py --analyze
 
 # Full validation suite
 make check
@@ -361,5 +355,5 @@ INFORMATIONAL_BENCHMARKS = {
 ## Notes
 
 - `setup.sh` installs system prerequisites (drivers, CUDA, Nsight)
-- `python tools/testing/run_all_benchmarks.py --targets ch*` for regression suites
+- `python core/harness/run_all_benchmarks.py --targets ch*` for regression suites
 - `artifacts/` holds run outputs; clean via `python cleanup.py`

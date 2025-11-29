@@ -11,7 +11,7 @@
 #include <numeric>
 #include <vector>
 
-#include "../common/headers/arch_detection.cuh"
+#include "../core/common/headers/arch_detection.cuh"
 
 namespace cg = cooperative_groups;
 

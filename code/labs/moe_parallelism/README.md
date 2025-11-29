@@ -13,7 +13,7 @@ Provides scenario planning for mixture-of-experts clusters: memory budgeting, ne
 | Path | Description |
 | --- | --- |
 | `baseline_memory_budget.py`, `optimized_memory_budget.py` | Memory planners that prove how optimized layouts free additional HBM for experts. |
-| `baseline_moe_grouping.py`, `optimized_moe_grouping.py`, `plan.py` | Grouping strategies spanning naive, locality-aware, and latency-balanced heuristics. |
+| `baseline_moe_grouping.py`, `optimized_moe_grouping.py`, `core/common/moe_parallelism_plan.py` | Grouping strategies spanning naive, locality-aware, and latency-balanced heuristics. |
 | `baseline_network_affinity.py`, `optimized_network_affinity.py` | Network-affinity calculators comparing NVLink, NVSwitch, and PCIe hops. |
 | `baseline_moe_vllm_env.py`, `optimized_moe_vllm_env.py` | NCCL/vLLM env presets for MoE inference on NVLink vs NVL72 (LL/LL128, graphs, dual-rail IB) with validation commands. |
 | `baseline_alltoall_tuning.py`, `optimized_alltoall_tuning.py` | Fabric-aware NCCL presets for MoE all-to-all (NVLink vs IB/EFA) with on-box validation commands. |
@@ -59,7 +59,7 @@ initializes, so every scenario automatically shares the same `ClusterSpec`/`Mode
 - From the harness, pass flags via `--target-extra-arg labs/moe_parallelism:moe_vllm_env="--model gpt-oss-20b/original/ --tp 8 --pp 3 --max-seqs 4096"` when running `aisp bench`; the same map hits both baseline_ and optimized_ variants.
 
 ## Notes
-- `plan.py` centralizes scenario definitions so you only update one file when adding a new MoE topology.
+- `core/common/moe_parallelism_plan.py` centralizes scenario definitions so you only update one file when adding a new MoE topology.
 - `benchmarking.py` can emit Markdown tables for documentation by passing `--format markdown`.
 - `custom_gpt_oss_gb200.py` shows how to swap in a GPT‑OSS‑120B model spec and compare an 8×NVL72 GB200 deployment over InfiniBand (`--fabric ib`) versus Ethernet (`--fabric ethernet`). Use it as a template for other clusters.
-- `tools/analysis/compare_benchmark_pairs.py` is a framework-level comparator: it discovers baseline/optimized pairs in any chapter/lab and prints a compact table (step_ms, throughput, ratios). Example: `python tools/analysis/compare_benchmark_pairs.py --chapter labs/moe_parallelism --targets gpt_gb200 deepseek_gb200`.
+- `core/analysis/compare_benchmark_pairs.py` is a framework-level comparator: it discovers baseline/optimized pairs in any chapter/lab and prints a compact table (step_ms, throughput, ratios). Example: `python core/analysis/compare_benchmark_pairs.py --chapter labs/moe_parallelism --targets gpt_gb200 deepseek_gb200`.

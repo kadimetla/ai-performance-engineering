@@ -42,10 +42,16 @@ class TestBenchmarkDiscoveryIntegration:
         
         assert len(chapters) > 0
         for chapter_dir in chapters:
+            relative = chapter_dir.relative_to(repo_root)
             assert chapter_dir.exists()
             assert chapter_dir.is_dir()
+            if relative.parts[0] == "labs":
+                # Labs live under labs/ and may not use ch* naming
+                assert len(relative.parts) >= 2
+                continue
             assert chapter_dir.name.startswith('ch')
-            assert chapter_dir.name[2:].isdigit()
+            if chapter_dir.name.startswith('ch'):
+                assert chapter_dir.name[2:].isdigit()
     
     def test_discover_benchmarks_finds_real_pairs(self):
         """Test that discovery finds real baseline/optimized pairs."""
@@ -171,4 +177,3 @@ class TestDiscoveryEdgeCases:
         
         # Should not find pairs without optimized files
         assert len(pairs) == 0
-

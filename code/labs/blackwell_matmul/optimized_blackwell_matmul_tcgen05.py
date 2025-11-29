@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from benchmark.tcgen05_requirements import ensure_tcgen05_supported
+from core.benchmark.tcgen05_requirements import ensure_tcgen05_supported
 from labs.blackwell_matmul import (
     baseline_blackwell_matmul,
     optimized_blackwell_matmul_tcgen05,

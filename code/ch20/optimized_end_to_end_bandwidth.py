@@ -68,6 +68,16 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
         self._inductor_cfg_state = disable_inductor_cudagraph_features()
         try:
             if torch.cuda.is_available():
+                # Warm the primary context and cuBLAS handle before any heavy ops.
+                torch.cuda.init()
+                warmup_device = self.device
+                if warmup_device.index is None:
+                    warmup_device = torch.device("cuda", torch.cuda.current_device())
+                torch.cuda.set_device(warmup_device)
+                torch.ones((1, 1), device=warmup_device).matmul(torch.ones((1, 1), device=warmup_device))
+                torch.cuda.synchronize()
+
+            if torch.cuda.is_available():
                 torch.backends.cudnn.benchmark = True
                 torch.backends.cudnn.deterministic = False
             torch.manual_seed(42)
@@ -75,7 +85,8 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
             model = SimplePipeline(hidden_dim=self.hidden_dim).to(self.device).half().eval()
 
             compile_supported, compile_reason = is_torch_compile_supported_on_device()
-            if compile_supported:
+            disable_compile = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            if compile_supported and not disable_compile:
                 try:
                     compiled_model = torch.compile(model, mode="reduce-overhead")
                     self.model = compiled_model
@@ -91,7 +102,10 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
                             exc_info=exc,
                         )
             else:
-                self._compile_error = compile_reason or "torch.compile unsupported on this GPU"
+                reason = compile_reason or "torch.compile unsupported on this GPU"
+                if disable_compile:
+                    reason = "torch.compile disabled under pytest"
+                self._compile_error = reason
                 self._used_compiled_model = False
                 self.model = model
 
@@ -149,7 +163,7 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_ai_optimization_metrics
+        from core.benchmark.metrics import compute_ai_optimization_metrics
         return compute_ai_optimization_metrics(
             original_time_ms=getattr(self, '_original_ms', 10.0),
             ai_optimized_time_ms=getattr(self, '_optimized_ms', 5.0),

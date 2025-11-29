@@ -21,7 +21,7 @@ import torch
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from core.utils.chapter_compare_template import discover_benchmarks, load_benchmark
 from core.discovery import discover_all_chapters
-from profiling.profiling_runner import (
+from core.profiling.profiling_runner import (
     check_nsys_available,
     check_ncu_available,
     run_nsys_profiling,
@@ -72,7 +72,7 @@ class TestProfilingWorkflowIntegration:
         
         config = BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_profiling=False,  # Profiling disabled
             enable_nsys=False,
             enable_ncu=False,
@@ -114,7 +114,7 @@ class TestProfilingWorkflowIntegration:
         # Enable profiling even if tools might not be available
         config = BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_profiling=True,
             enable_nsys=True,
             enable_ncu=True,
@@ -157,7 +157,7 @@ class TestProfilingWorkflowIntegration:
         # We're just testing that the workflow doesn't crash
         config = BenchmarkConfig(
             iterations=3,  # Minimal iterations for profiling test
-            warmup=1,
+            warmup=5,
             enable_profiling=True,
             enable_nsys=True,
             profiling_output_dir=str(output_dir),

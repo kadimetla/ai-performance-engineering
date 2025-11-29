@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from benchmark.smoke import is_smoke_mode
+from core.benchmark.smoke import is_smoke_mode
 from typing import Sequence, Tuple
 
 import torch

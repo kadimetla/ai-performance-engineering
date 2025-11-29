@@ -70,7 +70,7 @@ def load_benchmark(module_path: Path, timeout_seconds: int = 120) -> Optional[Ba
         # Add repo root (directory containing the benchmark package) to sys.path
             repo_root = module_path.resolve()
             while repo_root.parent != repo_root:
-                if (repo_root / "common" / "python").exists():
+                if (repo_root / "core" / "common").exists():
                     break
                 repo_root = repo_root.parent
             else:

@@ -32,8 +32,8 @@ from arch_config import prefer_sdpa_backends
 
 from extras.ch14.torch_compile_large_model import create_model
 
-os.environ.setdefault("TORCH_COMPILE_DEMO_QUICK", "1")  # TODO(cfregly): revisit default once long-form demo is separated
-QUICK_MODE = os.environ.get("TORCH_COMPILE_DEMO_QUICK", "0") == "1"
+# Always run full demo by default; quick mode removed to avoid silent behavior changes.
+QUICK_MODE = False
 
 
 def configure_for_blackwell_peak_performance():
@@ -156,8 +156,6 @@ def main():
     # 2. Create model (larger for better compilation benefits)
     print("Creating model...")
     model_size = '5b'
-    if QUICK_MODE:
-        model_size = 'medium'
 
     # Use existing large model infrastructure
     # Larger model highlights torch.compile benefits on compute-bound kernels
@@ -201,8 +199,6 @@ def main():
     print("COMPILED MODE - WARMUP PHASE")
     print("=" * 80)
     warmup_iters = 10
-    if QUICK_MODE:
-        warmup_iters = 3  # Quick mode keeps warmup tiny for automation runs
     print(f"Running {warmup_iters} warmup iteration(s) for torch.compile...")
     with torch.no_grad():
         for i in range(warmup_iters):

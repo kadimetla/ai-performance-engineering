@@ -107,7 +107,7 @@ class BaselineStreamsBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics."""
-        from benchmark.metrics import compute_stream_metrics
+        from core.benchmark.metrics import compute_stream_metrics
         return compute_stream_metrics(
             sequential_time_ms=getattr(self, '_sequential_ms', 10.0),
             overlapped_time_ms=getattr(self, '_overlapped_ms', 5.0),

@@ -11,7 +11,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmark.metrics import (
+from core.benchmark.metrics import (
     # Hardware specs
     HardwareSpecs,
     BLACKWELL_B200,

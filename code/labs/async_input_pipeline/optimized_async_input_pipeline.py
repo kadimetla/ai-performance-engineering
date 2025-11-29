@@ -9,7 +9,7 @@ repo_root = Path(__file__).resolve().parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from labs.async_input_pipeline.pipeline import AsyncInputPipelineBenchmark, PipelineConfig
+from core.common.async_input_pipeline import AsyncInputPipelineBenchmark, PipelineConfig
 
 
 def get_benchmark() -> AsyncInputPipelineBenchmark:

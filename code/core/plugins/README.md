@@ -32,7 +32,7 @@ When installed, `aisp` will auto-attach the plugin’s Typer app under the given
 
 ### Gated capabilities
 
-- `cli.ext` — unlocks extension categories/commands (ai/analyze/optimize/distributed/inference/training/monitor/report/profile/hf/cluster, dashboard/mcp/tui).
+- `cli.ext` — enables extension categories/commands (ai/analyze/optimize/distributed/inference/training/monitor/report/profile/hf/cluster, dashboard/mcp/tui).
 - `bench.llm` — enables LLM analysis/auto-patching flags in `bench`.
 - Additional capabilities are free-form (`dashboard`, `optimization_search`, etc.).
 

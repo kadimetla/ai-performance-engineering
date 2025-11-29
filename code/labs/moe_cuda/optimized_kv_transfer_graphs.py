@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import compile_callable
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
 def _compile_matmul() -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:

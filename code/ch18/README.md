@@ -24,9 +24,9 @@ Collects modern decoder techniques-FlexAttention, FlexDecoding, speculative and 
 | `compare.py`, `expectations_gb10.json`, `test_flex_attention.py` | Harness entry, regression thresholds, and pytest coverage for FlexAttention APIs. |
 
 ### KV cache sizing helper (standalone utility)
-- `tools/utilities/kv_cache_calc.py` — CLI for quick KV-cache sizing from (L, H, T, N, dtype), including overhead and optional GPU budget/reserve. Not a benchmark target; run directly:
+- `core/scripts/utilities/kv_cache_calc.py` — CLI for quick KV-cache sizing from (L, H, T, N, dtype), including overhead and optional GPU budget/reserve. Not a benchmark target; run directly:
   ```bash
-  python tools/utilities/kv_cache_calc.py \
+  python core/scripts/utilities/kv_cache_calc.py \
     --layers 80 --hidden 8192 --tokens 4096 --batch 8 \
     --dtype fp8 --gpu-mem-gb 192 --kv-overhead-frac 0.10 \
     --reserve-activations-gb 40
@@ -37,10 +37,10 @@ Use the benchmark harness for quick comparisons or drive the Typer CLI when you 
 ```bash
 cd ch18
 python compare.py --profile none
-python tools/cli/aisp bench list-targets --chapter ch18
-python tools/cli/aisp bench run --targets ch18 --profile minimal
+python cli/aisp.py bench list-targets --chapter ch18
+python cli/aisp.py bench run --targets ch18 --profile minimal
 # Run the CUDA-graph bucketing simulators via the CLI (per-target flags only):
-python tools/cli/aisp bench run \
+python cli/aisp.py bench run \
   --targets ch18:cudagraph_bucketing,ch18:cudagraph_bucketing_optimized \
   --target-extra-arg ch18:cudagraph_bucketing="--vllm-model gpt-oss-20b" \
   --target-extra-arg ch18:cudagraph_bucketing_optimized="--vllm-model gpt-oss-20b --skip-compile-smoke"
@@ -79,5 +79,5 @@ python ch18/optimized_vllm_monitoring.py --outdir artifacts/vllm_monitoring_opti
 ```
 - Baseline: TTFT p90, prefill/decode split, cache pressure, and a simple queue-drain sanity check.
 - Optimized: per-model TTFT/prefill/decode/e2e, KV cache percent, inter-token latency, queue churn, CUDA graph mode drift, and alert-ready recording rules.
-- Both bundles run under the harness: `python tools/cli/aisp bench run --targets ch18:vllm_monitoring --profile none` emits baseline + optimized side by side.
+- Both bundles run under the harness: `python cli/aisp.py bench run --targets ch18:vllm_monitoring --profile none` emits baseline + optimized side by side.
 - Override metric names and alert thresholds via `--config /path/to/your_metrics.yaml` when calling the scripts directly, or pass to the harness with `--target-extra-arg ch18:vllm_monitoring="--config /path/custom.yaml"`.

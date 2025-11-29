@@ -29,7 +29,7 @@ from labs.persistent_decode.persistent_decode_common import (
     resolve_shapes,
     tokens_per_iteration,
 )
-from benchmark.blackwell_requirements import ensure_blackwell_tma_supported
+from core.benchmark.blackwell_requirements import ensure_blackwell_tma_supported
 
 
 def _enable_blackwell_compiler_defaults() -> None:
@@ -79,7 +79,7 @@ def _load_cp_async_tma_ext() -> object:
         return _TMA_CP_ASYNC_EXT
 
     repo_root = Path(__file__).resolve().parent.parent.parent
-    include_dir = repo_root / "common" / "headers"
+    include_dir = repo_root / "core" / "common" / "headers"
 
     cpp_src = r"""
 #include <torch/extension.h>

@@ -145,7 +145,7 @@ class OptimizedGraphBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return graph metrics using standard helpers."""
-        from benchmark.metrics import compute_graph_metrics
+        from core.benchmark.metrics import compute_graph_metrics
         
         # Estimate launch overhead (typical kernel launch is 5-10us)
         baseline_launch_us = 8.0 * 35  # ~35 ops × 8us each

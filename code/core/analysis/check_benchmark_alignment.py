@@ -24,7 +24,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.discovery import discover_all_chapters, discover_benchmarks
-from profiling.nvtx_helper import canonicalize_nvtx_name
+from core.profiling.nvtx_helper import canonicalize_nvtx_name
 
 ATTR_PATTERNS = {
     "batch_size": re.compile(r"self\.batch_size\s*=\s*([^\n#]+)"),

@@ -1,80 +1,24 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Palette, Check, Moon, Sun, Monitor, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Palette, Check, Moon, Sun, Monitor, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getThemes } from '@/lib/api';
-
-interface Theme {
-  id: string;
-  name: string;
-  description?: string;
-  colors: {
-    primary: string;
-    secondary: string;
-    bg: string;
-    card: string;
-  };
-}
+import { useTheme } from '@/lib/ThemeContext';
+import { useToast } from '@/components/Toast';
 
 export function ThemesTab() {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [themes, setThemes] = useState<Theme[]>([]);
-  const [selectedTheme, setSelectedTheme] = useState('cyberpunk');
-  const [colorMode, setColorMode] = useState<'dark' | 'light' | 'system'>('dark');
+  const { currentTheme, colorMode, themes, setTheme, setColorMode } = useTheme();
+  const { showToast } = useToast();
 
-  async function loadData() {
-    try {
-      setLoading(true);
-      setError(null);
-      const themesData = await getThemes();
-      const themeList = (themesData as any)?.themes || themesData || [];
-      setThemes(themeList);
-      if ((themesData as any)?.current) {
-        setSelectedTheme((themesData as any).current);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load themes');
-    } finally {
-      setLoading(false);
-    }
-  }
+  const handleThemeChange = (themeId: string) => {
+    setTheme(themeId);
+    const theme = themes.find((t) => t.id === themeId);
+    showToast(`Theme changed to ${theme?.name || themeId}`, 'success');
+  };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="card">
-        <div className="card-body flex items-center justify-center py-20">
-          <Loader2 className="w-8 h-8 animate-spin text-accent-secondary" />
-          <span className="ml-3 text-white/50">Loading themes...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="card">
-        <div className="card-body text-center py-16">
-          <AlertTriangle className="w-12 h-12 text-accent-danger mx-auto mb-4" />
-          <p className="text-white/70 mb-4">{error}</p>
-          <button
-            onClick={loadData}
-            className="flex items-center gap-2 px-4 py-2 bg-accent-primary/20 text-accent-primary rounded-lg hover:bg-accent-primary/30 mx-auto"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const currentTheme = themes.find((t) => t.id === selectedTheme);
+  const handleColorModeChange = (mode: 'dark' | 'light' | 'system') => {
+    setColorMode(mode);
+    showToast(`Color mode set to ${mode}`, 'info');
+  };
 
   return (
     <div className="space-y-6">
@@ -85,9 +29,10 @@ export function ThemesTab() {
             <Palette className="w-5 h-5 text-accent-secondary" />
             <h2 className="text-lg font-semibold text-white">Theme Settings</h2>
           </div>
-          <button onClick={loadData} className="p-2 hover:bg-white/5 rounded-lg">
-            <RefreshCw className="w-4 h-4 text-white/50" />
-          </button>
+          <div className="flex items-center gap-2 text-sm text-white/60">
+            <Sparkles className="w-4 h-4" />
+            <span>Changes apply instantly</span>
+          </div>
         </div>
         <div className="card-body">
           {/* Color mode toggle */}
@@ -103,7 +48,7 @@ export function ThemesTab() {
                 return (
                   <button
                     key={mode.id}
-                    onClick={() => setColorMode(mode.id as typeof colorMode)}
+                    onClick={() => handleColorModeChange(mode.id as typeof colorMode)}
                     className={cn(
                       'flex items-center gap-2 px-4 py-2 rounded-lg transition-all',
                       colorMode === mode.id
@@ -118,123 +63,219 @@ export function ThemesTab() {
               })}
             </div>
           </div>
+
+          {/* Current theme indicator */}
+          <div className="p-4 rounded-lg bg-accent-primary/10 border border-accent-primary/30 mb-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-white/60">Current Theme</div>
+                <div className="text-xl font-bold text-white">{currentTheme.name}</div>
+              </div>
+              <div className="flex gap-2">
+                <div
+                  className="w-8 h-8 rounded-lg"
+                  style={{ backgroundColor: currentTheme.colors.primary }}
+                  title="Primary"
+                />
+                <div
+                  className="w-8 h-8 rounded-lg"
+                  style={{ backgroundColor: currentTheme.colors.secondary }}
+                  title="Secondary"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Theme grid */}
-      {themes.length > 0 && (
-        <div className="card">
-          <div className="card-header">
-            <h3 className="font-medium text-white">Color Themes</h3>
-          </div>
-          <div className="card-body">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {themes.map((theme) => (
-                <button
-                  key={theme.id}
-                  onClick={() => setSelectedTheme(theme.id)}
-                  className={cn(
-                    'relative p-4 rounded-xl border transition-all text-left',
-                    selectedTheme === theme.id
-                      ? 'border-accent-primary bg-accent-primary/10'
-                      : 'border-white/10 bg-white/5 hover:bg-white/10'
-                  )}
-                >
-                  {selectedTheme === theme.id && (
-                    <div className="absolute top-3 right-3 w-6 h-6 bg-accent-primary rounded-full flex items-center justify-center">
-                      <Check className="w-4 h-4 text-black" />
-                    </div>
-                  )}
-
-                  {/* Color preview */}
-                  <div className="flex gap-2 mb-3">
-                    <div
-                      className="w-8 h-8 rounded-lg"
-                      style={{ backgroundColor: theme.colors?.primary || '#00f5d4' }}
-                    />
-                    <div
-                      className="w-8 h-8 rounded-lg"
-                      style={{ backgroundColor: theme.colors?.secondary || '#9d4edd' }}
-                    />
-                    <div
-                      className="w-8 h-8 rounded-lg border border-white/20"
-                      style={{ backgroundColor: theme.colors?.bg || '#06060a' }}
-                    />
-                    <div
-                      className="w-8 h-8 rounded-lg border border-white/20"
-                      style={{ backgroundColor: theme.colors?.card || '#10101a' }}
-                    />
+      <div className="card">
+        <div className="card-header">
+          <h3 className="font-medium text-white">Available Themes</h3>
+          <span className="text-sm text-white/50">{themes.length} themes</span>
+        </div>
+        <div className="card-body">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {themes.map((theme) => (
+              <button
+                key={theme.id}
+                onClick={() => handleThemeChange(theme.id)}
+                className={cn(
+                  'relative p-4 rounded-xl border transition-all text-left group',
+                  currentTheme.id === theme.id
+                    ? 'border-accent-primary bg-accent-primary/10 ring-2 ring-accent-primary/20'
+                    : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20'
+                )}
+              >
+                {currentTheme.id === theme.id && (
+                  <div className="absolute top-3 right-3 w-6 h-6 bg-accent-primary rounded-full flex items-center justify-center">
+                    <Check className="w-4 h-4 text-black" />
                   </div>
+                )}
 
-                  <h4 className="font-medium text-white mb-1">{theme.name}</h4>
-                  {theme.description && (
-                    <p className="text-sm text-white/50">{theme.description}</p>
-                  )}
-                </button>
-              ))}
-            </div>
+                {/* Color preview */}
+                <div className="flex gap-2 mb-3">
+                  <div
+                    className="w-8 h-8 rounded-lg shadow-lg transition-transform group-hover:scale-110"
+                    style={{ backgroundColor: theme.colors.primary }}
+                    title="Primary"
+                  />
+                  <div
+                    className="w-8 h-8 rounded-lg shadow-lg transition-transform group-hover:scale-110"
+                    style={{ backgroundColor: theme.colors.secondary }}
+                    title="Secondary"
+                  />
+                  <div
+                    className="w-8 h-8 rounded-lg border border-white/20 transition-transform group-hover:scale-110"
+                    style={{ backgroundColor: theme.colors.bg }}
+                    title="Background"
+                  />
+                  <div
+                    className="w-8 h-8 rounded-lg border border-white/20 transition-transform group-hover:scale-110"
+                    style={{ backgroundColor: theme.colors.card }}
+                    title="Card"
+                  />
+                </div>
+
+                <h4 className="font-medium text-white mb-1">{theme.name}</h4>
+                {theme.description && (
+                  <p className="text-sm text-white/50">{theme.description}</p>
+                )}
+              </button>
+            ))}
           </div>
         </div>
-      )}
+      </div>
 
-      {/* Preview */}
-      {currentTheme && (
-        <div className="card">
-          <div className="card-header">
-            <h3 className="font-medium text-white">Preview</h3>
-          </div>
+      {/* Live Preview */}
+      <div className="card">
+        <div className="card-header">
+          <h3 className="font-medium text-white">Live Preview</h3>
+        </div>
+        <div
+          className="p-6 rounded-b-xl transition-colors"
+          style={{ backgroundColor: currentTheme.colors.bg }}
+        >
           <div
-            className="p-6 rounded-b-xl"
-            style={{ backgroundColor: currentTheme.colors?.bg }}
+            className="p-6 rounded-xl border border-white/10 transition-colors"
+            style={{ backgroundColor: currentTheme.colors.card }}
           >
-            <div
-              className="p-6 rounded-xl border border-white/10"
-              style={{ backgroundColor: currentTheme.colors?.card }}
-            >
-              <div className="flex items-center gap-4 mb-4">
-                <div
-                  className="w-12 h-12 rounded-lg"
-                  style={{
-                    background: `linear-gradient(135deg, ${currentTheme.colors?.primary}, ${currentTheme.colors?.secondary})`,
-                  }}
-                />
-                <div>
-                  <h4
-                    className="text-lg font-bold"
-                    style={{ color: currentTheme.colors?.primary }}
-                  >
-                    Sample Card Title
-                  </h4>
-                  <p className="text-sm" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                    This is how cards will look
-                  </p>
+            <div className="flex items-center gap-4 mb-4">
+              <div
+                className="w-12 h-12 rounded-lg transition-all"
+                style={{
+                  background: `linear-gradient(135deg, ${currentTheme.colors.primary}, ${currentTheme.colors.secondary})`,
+                }}
+              />
+              <div>
+                <h4
+                  className="text-lg font-bold transition-colors"
+                  style={{ color: currentTheme.colors.primary }}
+                >
+                  Sample Card Title
+                </h4>
+                <p className="text-sm" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                  This is how cards will look with the current theme
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="p-3 rounded-lg bg-white/5">
+                <div className="text-sm text-white/50">Metric 1</div>
+                <div className="text-xl font-bold" style={{ color: currentTheme.colors.primary }}>
+                  2.5x
                 </div>
               </div>
+              <div className="p-3 rounded-lg bg-white/5">
+                <div className="text-sm text-white/50">Metric 2</div>
+                <div className="text-xl font-bold" style={{ color: currentTheme.colors.secondary }}>
+                  156ms
+                </div>
+              </div>
+              <div className="p-3 rounded-lg bg-white/5">
+                <div className="text-sm text-white/50">Metric 3</div>
+                <div className="text-xl font-bold text-white">95%</div>
+              </div>
+            </div>
 
-              <div className="flex gap-2">
-                <button
-                  className="px-4 py-2 rounded-lg font-medium"
-                  style={{
-                    backgroundColor: currentTheme.colors?.primary,
-                    color: '#000',
-                  }}
-                >
-                  Primary Button
-                </button>
-                <button
-                  className="px-4 py-2 rounded-lg font-medium"
-                  style={{
-                    backgroundColor: `${currentTheme.colors?.secondary}30`,
-                    color: currentTheme.colors?.secondary,
-                  }}
-                >
-                  Secondary Button
-                </button>
+            <div className="flex gap-2">
+              <button
+                className="px-4 py-2 rounded-lg font-medium transition-all hover:opacity-90"
+                style={{
+                  backgroundColor: currentTheme.colors.primary,
+                  color: '#000',
+                }}
+              >
+                Primary Button
+              </button>
+              <button
+                className="px-4 py-2 rounded-lg font-medium transition-all hover:opacity-90"
+                style={{
+                  backgroundColor: `${currentTheme.colors.secondary}30`,
+                  color: currentTheme.colors.secondary,
+                }}
+              >
+                Secondary Button
+              </button>
+              <button className="px-4 py-2 rounded-lg font-medium bg-white/10 text-white/80 hover:bg-white/20 transition-all">
+                Ghost Button
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Theme info */}
+      <div className="card">
+        <div className="card-header">
+          <h3 className="font-medium text-white">Theme Details</h3>
+        </div>
+        <div className="card-body">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="p-4 bg-white/5 rounded-lg">
+              <div className="text-sm text-white/50 mb-2">Primary Color</div>
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-6 h-6 rounded"
+                  style={{ backgroundColor: currentTheme.colors.primary }}
+                />
+                <code className="text-sm text-white font-mono">{currentTheme.colors.primary}</code>
+              </div>
+            </div>
+            <div className="p-4 bg-white/5 rounded-lg">
+              <div className="text-sm text-white/50 mb-2">Secondary Color</div>
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-6 h-6 rounded"
+                  style={{ backgroundColor: currentTheme.colors.secondary }}
+                />
+                <code className="text-sm text-white font-mono">{currentTheme.colors.secondary}</code>
+              </div>
+            </div>
+            <div className="p-4 bg-white/5 rounded-lg">
+              <div className="text-sm text-white/50 mb-2">Background</div>
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-6 h-6 rounded border border-white/20"
+                  style={{ backgroundColor: currentTheme.colors.bg }}
+                />
+                <code className="text-sm text-white font-mono">{currentTheme.colors.bg}</code>
+              </div>
+            </div>
+            <div className="p-4 bg-white/5 rounded-lg">
+              <div className="text-sm text-white/50 mb-2">Card</div>
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-6 h-6 rounded border border-white/20"
+                  style={{ backgroundColor: currentTheme.colors.card }}
+                />
+                <code className="text-sm text-white font-mono text-xs">{currentTheme.colors.card.slice(0, 20)}...</code>
               </div>
             </div>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

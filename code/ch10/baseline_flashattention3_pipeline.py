@@ -202,7 +202,7 @@ class BaselineFlashAttention3Benchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return baseline attention metrics using standard roofline helpers."""
-        from benchmark.metrics import compute_roofline_metrics
+        from core.benchmark.metrics import compute_roofline_metrics
         
         # FLOPs for naive attention (same compute as optimized)
         attn_flops = 4.0 * self.batch_size * self.num_heads * (self.seq_len ** 2) * self.head_dim

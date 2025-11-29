@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 // CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
 struct alignas(32) Float8 {

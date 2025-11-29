@@ -25,7 +25,7 @@ from core.utils.compile_utils import configure_tf32, restore_tf32
 def _try_cutlass_gemm(a: torch.Tensor, b: torch.Tensor):
     """Try CUTLASS GEMM, fallback to torch.matmul if unavailable."""
     try:
-        from benchmark.cutlass_binding import cutlass_gemm_fp16
+        from core.benchmark.cutlass_binding import cutlass_gemm_fp16
         return cutlass_gemm_fp16(a, b), True
     except Exception:
         return torch.matmul(a, b), False
@@ -82,7 +82,7 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Single optimized GEMM (vs baseline's many small GEMMs)."""
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
@@ -95,7 +95,7 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
                 raise RuntimeError("Benchmark not initialized")
             
             if self._use_cutlass:
-                from benchmark.cutlass_binding import cutlass_gemm_fp16
+                from core.benchmark.cutlass_binding import cutlass_gemm_fp16
                 self.C = cutlass_gemm_fp16(self.A, self.B)
             else:
                 # Fallback: Still faster than baseline's blocked matmul
@@ -123,7 +123,7 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_triton_metrics
+        from core.benchmark.metrics import compute_triton_metrics
         return compute_triton_metrics(
             num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
             elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),

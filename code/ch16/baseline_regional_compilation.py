@@ -22,8 +22,8 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
-from benchmark.utils import warn_benchmark_scaling  # noqa: E402
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from core.benchmark.utils import warn_benchmark_scaling  # noqa: E402
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 MODEL_CANDIDATES: List[Dict[str, Any]] = [
     {"label": "20B (48x7168)", "n_layers": 48, "d_model": 7168, "d_ff": 28672, "seq_len": 2048},
@@ -143,7 +143,7 @@ class BaselineRegionalCompilationBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_inference_metrics
+        from core.benchmark.metrics import compute_inference_metrics
         return compute_inference_metrics(
             ttft_ms=getattr(self, '_ttft_ms', 50.0),
             tpot_ms=getattr(self, '_tpot_ms', 10.0),

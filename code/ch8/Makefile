@@ -1,6 +1,6 @@
 # Chapter 8 Makefile - Control-flow and occupancy tuning examples
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_LINEINFO ?= -lineinfo
 PTXAS_WARN ?= -Xptxas=-warn-spills

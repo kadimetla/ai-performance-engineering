@@ -12,7 +12,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-from benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
+from core.benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -107,7 +107,7 @@ class OptimizedKVCacheNvlinkPoolBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_inference_metrics
+        from core.benchmark.metrics import compute_inference_metrics
         return compute_inference_metrics(
             ttft_ms=getattr(self, '_ttft_ms', 50.0),
             tpot_ms=getattr(self, '_tpot_ms', 10.0),

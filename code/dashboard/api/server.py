@@ -30,10 +30,14 @@ import threading
 import time
 import uuid
 import typer
+from urllib.parse import urlparse, parse_qs
 
 
 # Find the code root (repository root)
 CODE_ROOT = Path(__file__).resolve().parents[2]
+
+# Allow rapid restarts without hitting EADDRINUSE on 6970
+socketserver.TCPServer.allow_reuse_address = True
 
 # Add tools to path for imports
 if str(CODE_ROOT) not in sys.path:
@@ -68,12 +72,12 @@ _optimization_jobs: Dict[str, Dict[str, Any]] = {}
 _job_events: Dict[str, queue.Queue] = {}
 
 # =============================================================================
-# LLM IMPORTS - LLM is THE engine, not optional!
+# LLM IMPORTS - required for AI-powered analysis
 # =============================================================================
 
 # Import LLM engine for real AI-powered analysis
 try:
-    from tools.llm_engine import PerformanceAnalysisEngine, LLMConfig
+    from core.llm_engine import PerformanceAnalysisEngine, LLMConfig
     LLM_ENGINE_AVAILABLE = True
 except ImportError:
     LLM_ENGINE_AVAILABLE = False
@@ -115,6 +119,18 @@ INFERENCE_OPTIMIZER_AVAILABLE = True
 class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler):
     """Custom handler that serves the dashboard and API endpoints."""
     
+    LLM_SETUP_ERROR = {
+        "available": False,
+        "error": "LLM engine unavailable. Set OPENAI_API_KEY or ANTHROPIC_API_KEY (or configure VLLM_API_BASE/OLLAMA_HOST).",
+        "setup_instructions": [
+            "export OPENAI_API_KEY=sk-...",
+            "or export ANTHROPIC_API_KEY=...",
+            "or configure a local vLLM endpoint via VLLM_API_BASE",
+        ],
+    }
+    _llm_engine: Optional[Any] = None
+    _llm_advisor: Optional[Any] = None
+    
     def __init__(self, *args, data_file: Optional[Path] = None, **kwargs):
         # Initialize shared core state without invoking HTTP handler
         try:
@@ -131,6 +147,39 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             data_path = getattr(self, "data_file", None)
             self._analyzer = PerformanceAnalyzer(lambda: load_benchmark_results(data_path))
         return self._analyzer
+
+    def _parse_query(self) -> Dict[str, List[str]]:
+        """Parse query parameters from the current request path."""
+        parsed = urlparse(self.path)
+        return parse_qs(parsed.query or "")
+    
+    def _get_llm_engine(self):
+        """Instantiate and cache the LLM analysis engine."""
+        if getattr(self, "_llm_engine", None):
+            return self._llm_engine
+        if not LLM_ENGINE_AVAILABLE:
+            self._llm_init_error = "LLM engine import failed"
+            return None
+        try:
+            self._llm_engine = PerformanceAnalysisEngine()
+            return self._llm_engine
+        except Exception as exc:  # pragma: no cover - defensive
+            self._llm_init_error = str(exc)
+            return None
+    
+    def _get_llm_advisor(self):
+        """Instantiate and cache the LLM optimization advisor."""
+        if getattr(self, "_llm_advisor", None):
+            return self._llm_advisor
+        if not LLM_ADVISOR_AVAILABLE:
+            self._llm_advisor_init_error = "LLM advisor import failed"
+            return None
+        try:
+            self._llm_advisor = LLMOptimizationAdvisor()
+            return self._llm_advisor
+        except Exception as exc:  # pragma: no cover - defensive
+            self._llm_advisor_init_error = str(exc)
+            return None
     
     def load_benchmark_data(self) -> dict:
         return load_benchmark_results(self.data_file)
@@ -227,6 +276,23 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             self.send_json_response(self.get_power_efficiency())
         elif self.path == '/api/analysis/scaling':
             self.send_json_response(self.get_scaling_analysis())
+        elif self.path.startswith('/api/report'):
+            params = self._parse_query()
+            self.send_json_response(self.generate_report_from_query(params))
+        elif self.path.startswith('/api/compare-runs'):
+            params = self._parse_query()
+            self.send_json_response(self.compare_runs_from_query(params))
+        elif self.path.startswith('/api/export/generic'):
+            params = self._parse_query()
+            self.send_json_response(self.export_results_from_query(params))
+        elif self.path.startswith('/api/launch-plan'):
+            params = self._parse_query()
+            self.send_json_response(self.generate_launch_plan_from_query(params))
+        elif self.path.startswith('/api/roofline'):
+            params = self._parse_query()
+            size_mb = int((params.get("size_mb") or ["32"])[0])
+            strides = [int(s) for s in (params.get("stride") or [])] if params.get("stride") else None
+            self.send_json_response(self.roofline_sweep(size_mb=size_mb, strides=strides))
         # Microbench endpoints
         elif self.path.startswith('/api/export/csv'):
             detailed = False
@@ -243,7 +309,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         elif self.path == '/api/export/pdf':
             self.export_pdf_report()
         elif self.path.startswith('/api/microbench/disk'):
-            from monitoring import microbench
+            from core.diagnostics import microbench
             params = self._parse_query()
             res = microbench.disk_io_test(
                 file_size_mb=int(params.get('file_size_mb', [256])[0]),
@@ -252,7 +318,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             )
             self.send_json_response(res)
         elif self.path.startswith('/api/microbench/pcie'):
-            from monitoring import microbench
+            from core.diagnostics import microbench
             params = self._parse_query()
             res = microbench.pcie_bandwidth_test(
                 size_mb=int(params.get('size_mb', [256])[0]),
@@ -260,15 +326,20 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             )
             self.send_json_response(res)
         elif self.path.startswith('/api/microbench/mem'):
-            from monitoring import microbench
+            from core.diagnostics import microbench
             params = self._parse_query()
             res = microbench.mem_hierarchy_test(
                 size_mb=int(params.get('size_mb', [256])[0]),
                 stride=int(params.get('stride', [128])[0]),
             )
             self.send_json_response(res)
+        elif self.path.startswith('/api/microbench/roofline'):
+            params = self._parse_query()
+            size_mb = int(params.get('size_mb', [32])[0])
+            strides = [int(s) for s in params.get('stride', [])] if params.get('stride') else None
+            self.send_json_response(self.roofline_sweep(size_mb=size_mb, strides=strides))
         elif self.path.startswith('/api/microbench/tensor'):
-            from monitoring import microbench
+            from core.diagnostics import microbench
             params = self._parse_query()
             res = microbench.tensor_core_bench(
                 size=int(params.get('size', [4096])[0]),
@@ -276,14 +347,14 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             )
             self.send_json_response(res)
         elif self.path.startswith('/api/microbench/sfu'):
-            from monitoring import microbench
+            from core.diagnostics import microbench
             params = self._parse_query()
             res = microbench.sfu_bench(
                 size=int(params.get('elements', [64 * 1024 * 1024])[0]),
             )
             self.send_json_response(res)
         elif self.path.startswith('/api/microbench/loopback'):
-            from monitoring import microbench
+            from core.diagnostics import microbench
             params = self._parse_query()
             res = microbench.network_loopback_test(
                 size_mb=int(params.get('size_mb', [64])[0]),
@@ -409,8 +480,14 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         # =====================================================================
         # LLM-POWERED DYNAMIC ANALYSIS (NOT HARD-CODED!)
         # =====================================================================
-        elif self.path == '/api/llm/status':
-            self.send_json_response(self.get_llm_status())
+        elif self.path.startswith('/api/llm/status'):
+            probe_flag = False
+            try:
+                params = self._parse_query()
+                probe_flag = params.get("probe", ["0"])[0].lower() in {"1", "true", "yes"}
+            except Exception:
+                probe_flag = False
+            self.send_json_response(self.get_llm_status(probe=probe_flag))
         elif self.path == '/api/llm/analyze-bottlenecks':
             self.send_json_response(self.llm_analyze_bottlenecks())
         elif self.path.startswith('/api/llm/distributed'):
@@ -547,12 +624,9 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             self.send_json_response(self.get_nvlink_status())
         # Historical Performance Tracking
         elif self.path == '/api/history':
-            self.send_json_response({
-                "runs": self.get_historical_runs(),
-                "trends": self.get_performance_trends(),
-            })
+            self.send_json_response(self.get_history_summary())
         elif self.path == '/api/history/runs':
-            self.send_json_response(self.get_historical_runs())
+            self.send_json_response(self.get_history_runs())
         elif self.path == '/api/history/trends':
             self.send_json_response(self.get_performance_trends())
         # Batch Size Optimizer
@@ -1006,6 +1080,9 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         # Theme preferences (stored in memory for session)
         elif self.path == '/api/themes':
             self.send_json_response(self.get_available_themes())
+        # Webhook configuration (persistent)
+        elif self.path == '/api/webhooks':
+            self.send_json_response(self.get_webhooks())
         # Code diff for baseline vs optimized
         elif self.path.startswith('/api/code-diff/'):
             parts = self.path.split('/api/code-diff/')[1].split('/')
@@ -1212,6 +1289,15 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             except json.JSONDecodeError:
                 params = {}
             result = self.send_webhook_notification(params)
+            self.send_json_response(result)
+        elif self.path == '/api/webhooks/save':
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            try:
+                params = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                params = {}
+            result = self.save_webhooks(params)
             self.send_json_response(result)
         # Quick benchmark runner
         elif self.path == '/api/benchmark/run':
@@ -2020,14 +2106,21 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
     def generate_slurm_script(self, model: str, nodes: int, gpus: int, framework: str) -> dict:
         """Generate SLURM job script for distributed training."""
         try:
-            from core.optimization.parallelism_planner.cluster_config import SlurmGenerator
-            
-            generator = SlurmGenerator()
-            script = generator.generate(
-                model=model,
-                nodes=nodes,
+            from core.optimization.parallelism_planner.extras import JobScriptGenerator
+
+            generator = JobScriptGenerator()
+            launch_cmd = (
+                f"torchrun --nnodes={nodes} --nproc_per_node={gpus} "
+                f"train.py --model {model} --framework {framework}"
+            )
+            script = generator.generate_slurm(
+                job_name=f"{model}-{framework}",
+                num_nodes=nodes,
                 gpus_per_node=gpus,
-                framework=framework,
+                time_hours=24,
+                partition="gpu",
+                script="train.py",
+                launch_command=launch_cmd,
             )
             return {"success": True, "slurm_script": script}
         except Exception as e:
@@ -2307,6 +2400,128 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             results["error"] = str(e)[:100]
         
         return results
+
+    def roofline_sweep(self, size_mb: int = 32, strides: Optional[List[int]] = None) -> dict:
+        """Stride sweep for memory roofline."""
+        from core.diagnostics import microbench
+        rows = []
+        strides = strides or [32, 64, 128, 256, 512, 1024, 2048, 4096]
+        for stride in strides:
+            res = microbench.mem_hierarchy_test(size_mb=size_mb, stride=stride)
+            rows.append({"stride": stride, "bandwidth_gbps": res.get("bandwidth_gbps")})
+        return {"size_mb": size_mb, "rows": rows}
+
+    def generate_launch_plan_from_query(self, params: Dict[str, List[str]]) -> dict:
+        """Generate launch plan JSON from query parameters."""
+        try:
+            from core.optimization.parallelism_planner.launch_plan import generate_launch_plan
+            plan = generate_launch_plan(
+                model_params=int((params.get("model_params") or ["70"])[0]),
+                nodes=int((params.get("nodes") or ["1"])[0]),
+                gpus_per_node=int((params.get("gpus") or ["8"])[0]),
+                tp=int((params.get("tp") or ["1"])[0]),
+                pp=int((params.get("pp") or ["1"])[0]),
+                dp=int((params.get("dp") or ["1"])[0]),
+                batch_size=int((params.get("batch_size") or ["1"])[0]),
+                script=(params.get("script") or ["train.py"])[0],
+                extra_args=(params.get("extra_args") or [None])[0],
+            )
+            return {"command": plan.command, "plan": json.loads(plan.to_json())}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def export_results_from_query(self, params: Dict[str, List[str]]) -> dict:
+        """Export benchmark results to csv/markdown/json."""
+        fmt = (params.get("format") or ["csv"])[0].lower()
+        analyzer = self.analyzer
+        data = analyzer._load_data()  # type: ignore[attr-defined]
+        benchmarks = data.get("benchmarks", [])
+        if fmt == "json":
+            return {"format": "json", "payload": data}
+        elif fmt == "markdown":
+            lines = ["| Benchmark | Speedup | Baseline (ms) | Type |", "|---|---|---|---|"]
+            for b in benchmarks:
+                lines.append(
+                    f"| {b.get('chapter')}:{b.get('name')} | {b.get('speedup', 0):.2f}x | {b.get('baseline_time_ms', 0):.3f} | {b.get('type', 'python')} |"
+                )
+            return {"format": "markdown", "payload": "\n".join(lines)}
+        elif fmt == "csv":
+            import csv
+            from io import StringIO
+            buf = StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["benchmark", "speedup", "baseline_ms", "type"])
+            for b in benchmarks:
+                writer.writerow(
+                    [
+                        f"{b.get('chapter')}:{b.get('name')}",
+                        f"{b.get('speedup', 0):.2f}",
+                        f"{b.get('baseline_time_ms', 0):.3f}",
+                        b.get("type", "python"),
+                    ]
+                )
+            return {"format": "csv", "payload": buf.getvalue()}
+        else:
+            return {"error": "format must be csv|markdown|json"}
+
+    def compare_runs_from_query(self, params: Dict[str, List[str]]) -> dict:
+        """Compare two benchmark JSON payloads on the server side."""
+        base = (params.get("baseline") or [None])[0]
+        cand = (params.get("candidate") or [None])[0]
+        top = int((params.get("top") or ["10"])[0])
+        if not base or not cand:
+            return {"error": "baseline and candidate required"}
+
+        def _load(path: str) -> dict:
+            with open(path) as f:
+                return json.load(f)
+
+        try:
+            b = _load(base)
+            c = _load(cand)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        def _flatten(blob: dict) -> dict:
+            flat = {}
+            for chapter in blob.get("results", []):
+                chap = chapter.get("chapter", "unknown")
+                for bench in chapter.get("benchmarks", []):
+                    key = f"{chap}:{bench.get('example', bench.get('name', 'unknown'))}"
+                    flat[key] = bench
+            return flat
+
+        bflat = _flatten(b)
+        cflat = _flatten(c)
+        deltas = []
+        for key, cand_bench in cflat.items():
+            base_bench = bflat.get(key)
+            if not base_bench:
+                continue
+            delta = (cand_bench.get("best_speedup", 0) or 0) - (base_bench.get("best_speedup", 0) or 0)
+            deltas.append((key, delta, base_bench.get("best_speedup", 0) or 0, cand_bench.get("best_speedup", 0) or 0))
+        deltas.sort(key=lambda x: x[1])
+        regressions = [d for d in deltas if d[1] < 0][:top]
+        improvements = sorted([d for d in deltas if d[1] > 0], key=lambda x: -x[1])[:top]
+        return {
+            "regressions": [{"name": n, "delta": d, "baseline": b, "candidate": c} for n, d, b, c in regressions],
+            "improvements": [{"name": n, "delta": d, "baseline": b, "candidate": c} for n, d, b, c in improvements],
+        }
+
+    def generate_report_from_query(self, params: Dict[str, List[str]]) -> dict:
+        """Generate PDF/HTML report and return the output path."""
+        data_file = (params.get("data_file") or [None])[0]
+        output = Path((params.get("output") or ["report.pdf"])[0])
+        fmt = (params.get("format") or ["pdf"])[0]
+        title = (params.get("title") or ["GPU Performance Report"])[0]
+        author = (params.get("author") or ["AI Performance Engineering"])[0]
+        try:
+            from core.analysis.reporting.generator import generate_report, ReportConfig
+            cfg = ReportConfig(title=title, author=author)
+            path = generate_report(data_file or "benchmark_test_results.json", str(output), format=fmt, config=cfg)
+            return {"output": str(path)}
+        except Exception as exc:
+            return {"error": str(exc)}
     
     def get_full_system_context(self) -> dict:
         """Get complete system context optimized for LLM-based analysis."""
@@ -2515,7 +2730,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         except Exception as e:
             return {"error": str(e)}
     
-    def get_llm_status(self) -> dict:
+    def get_llm_status(self, probe: bool = False) -> dict:
         """
         Get status of LLM backends using unified client.
         
@@ -2523,7 +2738,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         """
         try:
             from core.llm import get_llm_status as unified_status, get_config
-            status = unified_status()
+            status = unified_status(probe=probe)
             
             # Add backend details for UI
             config = get_config()
@@ -2533,6 +2748,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 "model": config.model,
                 "type": "api" if config.provider in ('openai', 'anthropic') else "local"
             }]
+            status["probed"] = probe
             
             return status
             
@@ -2542,7 +2758,8 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 "provider": None,
                 "model": None,
                 "backends": [],
-                "error": str(e)
+                "error": str(e),
+                "probed": probe,
             }
         
         # If no LLM available, provide setup instructions
@@ -4386,15 +4603,20 @@ print(response)
             "use_case": use_case,
             "constraints": constraints,
         }
+        engine = self._get_llm_engine()
+        if not engine:
+            return self._get_fallback_advice(context, "LLM engine unavailable")
         
-        try:
-            from tools.llm_engine import PerformanceAnalysisEngine
-            engine = PerformanceAnalysisEngine()
-            question = f"Provide optimization recommendations for {model_name} on {gpu_name} for {use_case}."
-            llm_response = engine.ask(question, context)
-            return {"success": True, "source": "llm", "model": model_name, "use_case": use_case, "hardware": context["hardware"], "recommendations": llm_response}
-        except Exception as e:
-            return self._get_fallback_advice(context, str(e))
+        question = f"Provide optimization recommendations for {model_name} on {gpu_name} for {use_case}."
+        llm_response = engine.ask(question, context)
+        return {
+            "success": True,
+            "source": "llm",
+            "model": model_name,
+            "use_case": use_case,
+            "hardware": context["hardware"],
+            "recommendations": llm_response,
+        }
     
     def _detect_gpu_arch(self, gpu_name: str) -> str:
         name_lower = gpu_name.lower()
@@ -4411,72 +4633,203 @@ print(response)
         """Calculate compound effects of stacking multiple optimizations (LLM-powered)."""
         model_params = params.get("params", 7e9)
         selected_opts = params.get("optimizations", ["bf16", "flash_attn"])
+        engine = self._get_llm_engine()
+        if engine:
+            prompt = "Estimate compound effects of stacked optimizations."
+            context = {
+                "model_params": model_params,
+                "optimizations": selected_opts,
+            }
+            try:
+                response = engine.ask(prompt, context)
+                return {"success": True, "llm_powered": True, "analysis": response}
+            except Exception as exc:
+                self._llm_init_error = str(exc)
+                # fall through to heuristic path
         
-        # Try LLM-powered analysis first
+        optimization_db = {
+            "fp16": {"speedup": 1.8, "memory": 0.5}, "bf16": {"speedup": 1.7, "memory": 0.5},
+            "fp8": {"speedup": 2.0, "memory": 0.75}, "int8": {"speedup": 1.5, "memory": 0.75},
+            "flash_attn": {"speedup": 2.5, "memory": 0.8}, "continuous_batch": {"speedup": 2.5, "memory": 1.0},
+            "cuda_graphs": {"speedup": 1.3, "memory": 1.0}, "torch_compile": {"speedup": 1.5, "memory": 1.0},
+        }
+        
+        total_speedup, total_memory = 1.0, 1.0
+        applied = []
+        for opt_id in selected_opts:
+            if opt_id in optimization_db:
+                opt = optimization_db[opt_id]
+                total_speedup *= opt["speedup"]
+                total_memory *= opt["memory"]
+                applied.append({"id": opt_id, "speedup": opt["speedup"]})
+        
+        base_mem = (model_params * 2) / (1024**3)
+        return {
+            "success": True,
+            "llm_powered": False,
+            "fallback_reason": "LLM engine unavailable",
+            "total_speedup": round(total_speedup, 2),
+            "memory_reduction": f"{(1-total_memory)*100:.0f}%",
+            "base_memory_gb": round(base_mem, 1),
+            "optimized_memory_gb": round(base_mem * total_memory, 1),
+            "applied": applied
+        }
+    
+    # =========================================================================
+    # WEBHOOK SYSTEM
+    # =========================================================================
+    
+    _webhooks_file = CODE_ROOT / "dashboard" / "webhooks.json"
+    
+    def _load_webhooks(self) -> list:
+        """Load webhooks from persistent storage."""
         try:
-            from tools.llm_engine import PerformanceAnalysisEngine
-            
-            engine = PerformanceAnalysisEngine()
-            
-            workload_info = {
-                "model_params_b": model_params / 1e9,
-                "task": params.get("task", "inference"),
-            }
-            
-            constraints = {}
-            if params.get("memory_limit"):
-                constraints["max_memory_gb"] = params["memory_limit"]
-            
-            result = engine.analyze_compound_optimizations(
-                optimizations=selected_opts,
-                workload_info=workload_info,
-                constraints=constraints or None,
-            )
-            
-            # Format response for API compatibility
-            base_mem = (model_params * 2) / (1024**3)
-            memory_reduction = result.get("compound_memory_reduction_pct", 0)
-            
-            return {
-                "success": True,
-                "llm_powered": result.get("_llm_powered", False),
-                "total_speedup": result.get("compound_speedup", 1.0),
-                "memory_reduction": f"{memory_reduction:.0f}%",
-                "base_memory_gb": round(base_mem, 1),
-                "optimized_memory_gb": round(base_mem * (1 - memory_reduction/100), 1),
-                "applied": result.get("optimization_stack", []),
-                "bottleneck_analysis": result.get("bottleneck_analysis"),
-                "warnings": result.get("warnings", []),
-                "compatibility_notes": result.get("compatibility_notes", []),
-            }
+            if self._webhooks_file.exists():
+                return json.loads(self._webhooks_file.read_text())
+        except Exception:
+            pass
+        return []
+    
+    def _save_webhooks(self, webhooks: list) -> None:
+        """Save webhooks to persistent storage."""
+        try:
+            self._webhooks_file.write_text(json.dumps(webhooks, indent=2))
         except Exception as e:
-            # Fallback to heuristic database
-            optimization_db = {
-                "fp16": {"speedup": 1.8, "memory": 0.5}, "bf16": {"speedup": 1.7, "memory": 0.5},
-                "fp8": {"speedup": 2.0, "memory": 0.75}, "int8": {"speedup": 1.5, "memory": 0.75},
-                "flash_attn": {"speedup": 2.5, "memory": 0.8}, "continuous_batch": {"speedup": 2.5, "memory": 1.0},
-                "cuda_graphs": {"speedup": 1.3, "memory": 1.0}, "torch_compile": {"speedup": 1.5, "memory": 1.0},
+            print(f"Failed to save webhooks: {e}")
+    
+    def get_webhooks(self) -> dict:
+        """Get all configured webhooks."""
+        return {"webhooks": self._load_webhooks()}
+    
+    def save_webhooks(self, params: dict) -> dict:
+        """Save webhooks to persistent storage."""
+        webhooks = params.get("webhooks", [])
+        self._save_webhooks(webhooks)
+        return {"success": True, "count": len(webhooks)}
+    
+    def test_webhook(self, params: dict) -> dict:
+        """Test a webhook by sending a test notification."""
+        url = params.get("url", "")
+        platform = params.get("platform", "slack")
+        name = params.get("name", "Test Webhook")
+        
+        if not url:
+            return {"success": False, "error": "No URL provided"}
+        
+        # Build test payload based on platform
+        if platform == "slack":
+            payload = {
+                "text": f"🧪 Test notification from AI Performance Dashboard\n*Webhook:* {name}\n*Status:* Connection successful!"
             }
-            
-            total_speedup, total_memory = 1.0, 1.0
-            applied = []
-            for opt_id in selected_opts:
-                if opt_id in optimization_db:
-                    opt = optimization_db[opt_id]
-                    total_speedup *= opt["speedup"]
-                    total_memory *= opt["memory"]
-                    applied.append({"id": opt_id, "speedup": opt["speedup"]})
-            
-            base_mem = (model_params * 2) / (1024**3)
+        elif platform == "discord":
+            payload = {
+                "content": f"🧪 Test notification from AI Performance Dashboard\n**Webhook:** {name}\n**Status:** Connection successful!"
+            }
+        elif platform == "teams":
+            payload = {
+                "@type": "MessageCard",
+                "@context": "http://schema.org/extensions",
+                "themeColor": "00f5d4",
+                "summary": "AI Performance Dashboard Test",
+                "sections": [{
+                    "activityTitle": "🧪 Test Notification",
+                    "facts": [
+                        {"name": "Webhook", "value": name},
+                        {"name": "Status", "value": "Connection successful!"}
+                    ],
+                }]
+            }
+        else:
+            payload = {"message": f"Test notification from AI Performance Dashboard - {name}"}
+        
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return {
+                    "success": True,
+                    "status_code": response.status,
+                    "message": "Webhook test successful!"
+                }
+        except Exception as e:
             return {
-                "success": True,
-                "llm_powered": False,
-                "fallback_reason": str(e),
-                "total_speedup": round(total_speedup, 2),
-                "memory_reduction": f"{(1-total_memory)*100:.0f}%",
-                "base_memory_gb": round(base_mem, 1),
-                "optimized_memory_gb": round(base_mem * total_memory, 1),
-                "applied": applied
+                "success": False,
+                "error": str(e),
+                "message": "Failed to send test notification"
+            }
+    
+    def send_webhook_notification(self, params: dict) -> dict:
+        """Send a notification to a webhook."""
+        url = params.get("url", "")
+        message_type = params.get("message_type", "custom")
+        platform = params.get("type", "slack")
+        custom_message = params.get("message", "")
+        
+        if not url:
+            return {"success": False, "error": "No URL provided"}
+        
+        # Build payload based on message type
+        if message_type == "summary":
+            # Get benchmark summary
+            data = self.load_benchmark_data()
+            summary = data.get("summary", {})
+            
+            summary_text = (
+                f"📊 *Performance Summary*\n"
+                f"• Total Benchmarks: {summary.get('total', 0)}\n"
+                f"• Succeeded: {summary.get('succeeded', 0)}\n"
+                f"• Failed: {summary.get('failed', 0)}\n"
+                f"• Avg Speedup: {summary.get('avg_speedup', 0):.2f}x\n"
+                f"• Max Speedup: {summary.get('max_speedup', 0):.2f}x"
+            )
+            message = summary_text
+        elif message_type == "regression":
+            message = "⚠️ Performance regression detected! Check the dashboard for details."
+        elif message_type == "optimization_complete":
+            message = "✅ Optimization job completed successfully!"
+        else:
+            message = custom_message or "Notification from AI Performance Dashboard"
+        
+        # Format for platform
+        if platform == "slack":
+            payload = {"text": message}
+        elif platform == "discord":
+            payload = {"content": message.replace("*", "**")}
+        elif platform == "teams":
+            payload = {
+                "@type": "MessageCard",
+                "@context": "http://schema.org/extensions",
+                "themeColor": "00f5d4",
+                "summary": "AI Performance Dashboard",
+                "sections": [{"activityTitle": message}]
+            }
+        else:
+            payload = {"message": message}
+        
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return {
+                    "success": True,
+                    "status_code": response.status,
+                    "message": "Notification sent successfully!"
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "message": "Failed to send notification"
             }
     
     # =========================================================================
@@ -5215,7 +5568,7 @@ print(json.dumps(info))
     def calculate_occupancy(self, threads: int, shared: int, registers: int) -> dict:
         """Calculate kernel occupancy."""
         try:
-            from analysis.advanced_analysis import KernelAnalyzer
+            from core.analysis.advanced_analysis import KernelAnalyzer
             
             # Get GPU specs
             software_info = self.get_software_info()
@@ -5276,7 +5629,7 @@ print(json.dumps(info))
     def llm_analyze_bottlenecks(self) -> dict:
         """Use LLM to analyze bottlenecks from profiling data."""
         try:
-            from analysis.llm_advisor import get_advisor, OptimizationContext
+            from core.analysis.llm_advisor import get_advisor, OptimizationContext
             
             # Gather context from existing analysis
             kernel_data = self.detect_bottlenecks()
@@ -5314,7 +5667,7 @@ print(json.dumps(info))
     def llm_distributed_recommendations(self, params: dict) -> dict:
         """Get LLM-powered distributed training recommendations."""
         try:
-            from analysis.llm_advisor import get_advisor
+            from core.analysis.llm_advisor import get_advisor
             
             advisor = get_advisor()
             return advisor.get_distributed_recommendations(
@@ -5332,7 +5685,7 @@ print(json.dumps(info))
     def llm_inference_recommendations(self, params: dict) -> dict:
         """Get LLM-powered inference optimization recommendations."""
         try:
-            from analysis.llm_advisor import get_advisor
+            from core.analysis.llm_advisor import get_advisor
             
             advisor = get_advisor()
             return advisor.get_inference_recommendations(
@@ -5351,7 +5704,7 @@ print(json.dumps(info))
     def llm_rlhf_recommendations(self, params: dict) -> dict:
         """Get LLM-powered RLHF training recommendations."""
         try:
-            from analysis.llm_advisor import get_advisor
+            from core.analysis.llm_advisor import get_advisor
             
             advisor = get_advisor()
             return advisor.get_rlhf_recommendations(
@@ -5368,7 +5721,7 @@ print(json.dumps(info))
     def llm_custom_query(self, query: str) -> dict:
         """Send a custom query to the LLM advisor."""
         try:
-            from analysis.llm_advisor import get_advisor, SYSTEM_PROMPT
+            from core.analysis.llm_advisor import get_advisor, SYSTEM_PROMPT
             
             if not query.strip():
                 return {"error": "Empty query", "llm_available": False}

@@ -19,7 +19,7 @@ from labs.moe_parallelism.moe_env_presets import (  # noqa: E402
     estimate_collective,
     render_summary,
 )
-from labs.moe_parallelism.plan import (  # noqa: E402
+from core.common.moe_parallelism_plan import (  # noqa: E402
     ClusterSpec,
     ModelSpec,
     ParallelismPlan,

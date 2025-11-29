@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 def _wrap(func_name: str, *args, **kwargs) -> Dict[str, Any]:
     try:
-        import analysis.advanced_analysis as aa
+        import core.analysis.advanced_analysis as aa
 
         func = getattr(aa, func_name)
         return func(*args, **kwargs)

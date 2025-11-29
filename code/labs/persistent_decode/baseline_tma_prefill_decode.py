@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 import torch
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from benchmark.blackwell_requirements import ensure_blackwell_tma_supported
+from core.benchmark.blackwell_requirements import ensure_blackwell_tma_supported
 from labs.persistent_decode.persistent_decode_common import (
     build_inputs,
     resolve_device,

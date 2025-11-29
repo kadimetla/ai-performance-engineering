@@ -7,7 +7,7 @@
 #include <cuda/barrier>
 #include <cuda_runtime.h>
 
-#include "../../common/headers/tma_helpers.cuh"
+#include "../../core/common/headers/tma_helpers.cuh"
 #ifdef prefetch
 #undef prefetch
 #endif

@@ -29,13 +29,13 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
-from profiling.gpu_memory_logger import (  # noqa: E402
+from core.profiling.gpu_memory_logger import (  # noqa: E402
     GpuMemoryLogger,
     resolve_gpu_log_interval,
     resolve_gpu_log_path,
 )
-from profiling.gpu_telemetry import query_gpu_telemetry  # noqa: E402
-from optimization.moe_inference import (  # noqa: E402
+from core.profiling.gpu_telemetry import query_gpu_telemetry  # noqa: E402
+from core.optimization.moe_inference import (  # noqa: E402
     MoeInferenceConfig,
     SimpleMoEGPT,
     dtype_bytes,

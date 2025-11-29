@@ -1,6 +1,6 @@
 # Chapter 7 Makefile - Memory optimization examples with dual-arch support
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
 SUFFIX = $(TARGET_SUFFIX)
@@ -9,6 +9,20 @@ CUDA_SOURCES = $(wildcard *.cu)
 BASE_TARGETS = $(CUDA_SOURCES:.cu=)
 
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+
+.PHONY: baseline_hbmcopy$(SUFFIX) optimized_hbmcopy$(SUFFIX) baseline_hbmpeak$(SUFFIX) optimized_hbmpeak$(SUFFIX)
+
+baseline_hbmcopy$(SUFFIX): baseline_hbm_copy$(SUFFIX)
+	@ln -sf $< $@
+
+optimized_hbmcopy$(SUFFIX): optimized_hbm_copy$(SUFFIX)
+	@ln -sf $< $@
+
+baseline_hbmpeak$(SUFFIX): baseline_hbm_peak$(SUFFIX)
+	@ln -sf $< $@
+
+optimized_hbmpeak$(SUFFIX): optimized_hbm_peak$(SUFFIX)
+	@ln -sf $< $@
 
 .PHONY: all clean compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all $(TARGETS)
 
@@ -85,5 +99,5 @@ profile-all: all
 	done
 
 clean:
-	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) *.o *.so *.a
+	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) baseline_hbmcopy$(SUFFIX) optimized_hbmcopy$(SUFFIX) baseline_hbmpeak$(SUFFIX) optimized_hbmpeak$(SUFFIX) *.o *.so *.a
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*

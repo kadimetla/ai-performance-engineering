@@ -3,10 +3,10 @@
 Lightweight helper to regenerate Nsight Compute CSV metrics for chapter examples.
 
 Usage examples:
-  python tools/extract_ncu_metrics.py --example ch6_add_parallel \
+  python core/profiling/extract_ncu_metrics.py --example ch6_add_parallel \
       --metrics gpu__time_duration.avg,gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed
 
-  python tools/extract_ncu_metrics.py --example ch6_add_parallel \
+  python core/profiling/extract_ncu_metrics.py --example ch6_add_parallel \
       --metrics default --output output/metrics/ch6_add_parallel.csv
 
 By default we collect a set of latency/throughput counters that are useful when
@@ -92,7 +92,7 @@ def main() -> None:
 
     example = EXAMPLE_BY_NAME.get(args.example)
     if example is None:
-        raise SystemExit(f"Unknown example '{args.example}'. Run scripts/profile_harness.py --list for options.")
+        raise SystemExit(f"Unknown example '{args.example}'. Run core/scripts/harness/profile_harness.py --list for options.")
 
     metrics: List[str]
     if args.metrics.strip().lower() == "default":

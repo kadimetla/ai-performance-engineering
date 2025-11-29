@@ -1,7 +1,7 @@
 # Makefile for Chapter 1 - Performance Basics Examples
 # Builds optimized CUDA examples demonstrating profiling improvements.
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) --use_fast_math -lineinfo
 NVCC_LIBS = -lcublas -lcublasLt

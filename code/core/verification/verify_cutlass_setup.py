@@ -221,7 +221,7 @@ def main() -> int:
             print("""
 2. Update main CUTLASS to 4.3.0:
    
-   ./scripts/install_cutlass.sh
+   ./core/scripts/install_cutlass.sh
 """)
         
         print()
@@ -232,4 +232,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

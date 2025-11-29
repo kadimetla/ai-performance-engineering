@@ -18,7 +18,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
 class SimpleLLM(nn.Module):

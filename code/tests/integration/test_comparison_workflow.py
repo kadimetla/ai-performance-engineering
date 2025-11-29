@@ -20,7 +20,7 @@ import torch
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from core.utils.chapter_compare_template import discover_benchmarks, load_benchmark
 from core.discovery import discover_all_chapters
-from benchmark.comparison import compare_results, ComparisonResult
+from core.benchmark.comparison import compare_results, ComparisonResult
 
 
 # Skip tests if CUDA is not available
@@ -65,7 +65,7 @@ class TestComparisonWorkflowIntegration:
         
         config = BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_profiling=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
@@ -79,13 +79,14 @@ class TestComparisonWorkflowIntegration:
         
         # Verify comparison structure
         assert comparison.speedup > 0
-        assert comparison.improvement_pct is not None
-        assert comparison.baseline_time_ms > 0
-        assert comparison.optimized_time_ms > 0
+        assert comparison.baseline_mean_ms > 0
+        assert comparison.optimized_mean_ms > 0
+        if comparison.improvement_pct is not None:
+            assert comparison.improvement_pct >= 0
     
     def test_comparison_with_same_performance(self):
         """Test comparison when both benchmarks have same performance."""
-        from benchmark.models import BenchmarkResult, TimingStats
+        from core.benchmark.models import BenchmarkResult, TimingStats
         
         # Create two results with identical timing
         timing = TimingStats(
@@ -105,11 +106,11 @@ class TestComparisonWorkflowIntegration:
         
         # Speedup should be 1.0 (no improvement)
         assert comparison.speedup == pytest.approx(1.0, rel=0.01)
-        assert comparison.improvement_pct == pytest.approx(0.0, abs=0.1)
+        assert comparison.improvement_pct is None
     
     def test_comparison_with_regression(self):
         """Test comparison when optimized is slower (regression)."""
-        from benchmark.models import BenchmarkResult, TimingStats
+        from core.benchmark.models import BenchmarkResult, TimingStats
         
         # Baseline is faster
         baseline_timing = TimingStats(
@@ -140,24 +141,16 @@ class TestComparisonWorkflowIntegration:
         
         # Speedup should be < 1.0 (regression)
         assert comparison.speedup < 1.0
-        assert comparison.improvement_pct < 0
+        assert comparison.regression is True
+        assert comparison.regression_pct is not None and comparison.regression_pct > 0
     
     def test_comparison_with_missing_timing(self):
         """Test comparison handles missing timing gracefully."""
-        from benchmark.models import BenchmarkResult
+        from core.benchmark.models import BenchmarkResult
         
-        # Create results without timing
-        result1 = BenchmarkResult(timing=None)
-        result2 = BenchmarkResult(timing=None)
-        
-        # Should handle gracefully (may raise or return default comparison)
-        try:
-            comparison = compare_results(result1, result2)
-            # If it returns, verify structure
-            assert isinstance(comparison, ComparisonResult)
-        except (ValueError, AttributeError):
-            # Exception is also acceptable for invalid inputs
-            pass
+        # Creating results without timing should raise validation errors
+        with pytest.raises(Exception):
+            BenchmarkResult(timing=None)  # type: ignore[arg-type]
     
     def test_multiple_optimizations_comparison(self):
         """Test comparing baseline against multiple optimizations."""
@@ -188,7 +181,7 @@ class TestComparisonWorkflowIntegration:
         
         config = BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_profiling=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
@@ -202,7 +195,13 @@ class TestComparisonWorkflowIntegration:
             if optimized is None:
                 continue
             
-            optimized_result = harness.benchmark(optimized)
+            try:
+                optimized_result = harness.benchmark(optimized)
+            except RuntimeError as e:
+                msg = str(e).lower()
+                if "multi gpu" in msg or "multiple gpu" in msg:
+                    continue
+                raise
             comparison = compare_results(baseline_result, optimized_result)
             comparisons.append(comparison)
         
@@ -210,4 +209,3 @@ class TestComparisonWorkflowIntegration:
         assert len(comparisons) > 0
         for comparison in comparisons:
             assert comparison.speedup > 0
-

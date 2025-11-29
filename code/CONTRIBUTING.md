@@ -157,7 +157,7 @@ import torch.nn as nn
 # Local
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.harness.benchmark_harness import BaseBenchmark
-from benchmark.metrics import compute_memory_transfer_metrics
+from core.benchmark.metrics import compute_memory_transfer_metrics
 ```
 
 ### Type Hints
@@ -213,10 +213,10 @@ def benchmark_fn(self) -> None:
 
 ### Use Helper Functions
 
-Always use the standardized metric helpers from `benchmark/metrics.py`:
+Always use the standardized metric helpers from `core/benchmark/metrics.py`:
 
 ```python
-from benchmark.metrics import (
+from core.benchmark.metrics import (
     compute_memory_transfer_metrics,    # Ch2: bandwidth
     compute_kernel_fundamentals_metrics, # Ch6: bank conflicts
     compute_memory_access_metrics,       # Ch7: coalescing
@@ -291,7 +291,7 @@ pytest tests/ --cov=benchmark --cov=core --cov=profiling --cov-report=html
 
 ```python
 import pytest
-from benchmark.metrics import compute_memory_transfer_metrics
+from core.benchmark.metrics import compute_memory_transfer_metrics
 
 class TestMemoryTransferMetrics:
     def test_basic_transfer(self):
@@ -355,13 +355,13 @@ Labs should have README.md with:
 
 ```bash
 # Check get_custom_metrics() status
-python scripts/update_custom_metrics.py --analyze
+python core/scripts/update_custom_metrics.py --analyze
 
 # Apply suggested improvements
-python scripts/update_custom_metrics.py --apply
+python core/scripts/update_custom_metrics.py --apply
 
 # Validate metric quality
-python scripts/update_custom_metrics.py --validate
+python core/scripts/update_custom_metrics.py --validate
 ```
 
 ### Benchmark Comparison
@@ -380,7 +380,7 @@ python -m cli.aisp bench compare \
 nsys profile -o output python ch7/optimized_memory_access.py
 
 # ncu profile with chapter-specific metrics
-ncu --set full --metrics $(python -c "from profiling.profiler_config import get_chapter_metrics; print(','.join(get_chapter_metrics(7)))") python ch7/optimized_memory_access.py
+ncu --set full --metrics $(python -c "from core.profiling.profiler_config import get_chapter_metrics; print(','.join(get_chapter_metrics(7)))") python ch7/optimized_memory_access.py
 ```
 
 ---

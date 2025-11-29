@@ -33,4 +33,4 @@ python -m cli.aisp bench run --targets labs/flexattention --profile minimal
 
 ## Notes
 - Environment variables such as `BLOCK_SIZE`, `DOC_SPAN`, and `TORCH_COMPILE_MODE` are read at runtime for quick experiments.
-- Artifacts include NVTX traces; feed them to `tools/analysis/deep_profiling_report.py` for convenience.
+- Artifacts include NVTX traces; feed them to `core/analysis/deep_profiling_report.py` for convenience.

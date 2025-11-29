@@ -21,7 +21,7 @@ def load_tmem_cache_module():
     
     include_dirs = [
         _REPO_ROOT / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include",
-        _REPO_ROOT / "common" / "headers",
+        _REPO_ROOT / "core" / "common" / "headers",
         _REPO_ROOT / "third_party" / "cutlass" / "include",
     ]
     

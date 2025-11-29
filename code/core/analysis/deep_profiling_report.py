@@ -11,14 +11,14 @@ out as missing:
 
 Typical usage:
 
-    python tools/deep_profiling_report.py \\
+    python core/analysis/deep_profiling_report.py \\
         --ncu-csv output/double_buffered_pipeline_512.csv \\
         --nsys-report ch10/pipeline_async_verified.nsys-rep \\
         --output-json output/double_buffered_pipeline_analysis.json
 
 The script understands the CSV format produced by either:
 * `ncu --set roofline --csv ...`
-* `python tools/extract_ncu_metrics.py --example <name>`
+* `python core/profiling/extract_ncu_metrics.py --example <name>`
 
 It does not require GPU access to run; it analyses offline artifacts.
 """
@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-# Allow running from repo root or tools/ directory
+# Allow running from repo root
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -613,7 +613,7 @@ def build_advisory(metrics: KernelMetrics) -> Advisory:
                 "TMEM throughput is binding; fix tensor-map alignment, reduce multicast fan-out, or streamline TMA descriptors."
             )
             recommendations.append(
-                "Capture Nsight metrics + labs/blackwell_matmul metadata and run tools/analysis/dual_roofline_plot.py to visualise the dual ceilings."
+                "Capture Nsight metrics + labs/blackwell_matmul metadata and run core/analysis/dual_roofline_plot.py to visualise the dual ceilings."
             )
         elif roofline_summary.is_compute_bound:
             recommendations.append(

@@ -8,7 +8,7 @@ This script:
 4. Generates a comprehensive summary report
 
 Usage:
-    python tools/testing/run_all_benchmarks.py [--targets chX chY:example] [--format json|markdown|both]
+    python core/harness/run_all_benchmarks.py [--targets chX chY:example] [--format json|markdown|both]
 """
 
 import sys
@@ -56,15 +56,15 @@ from core.utils.chapter_compare_template import (
     get_last_load_error,
 )
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
-from benchmark.defaults import BenchmarkDefaults, set_defaults
-from benchmark.smoke import is_smoke_mode, set_smoke_mode
-from benchmark.run_manifest import reset_gpu_state, get_git_info
-from profiling.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
+from core.benchmark.defaults import BenchmarkDefaults, set_defaults
+from core.benchmark.smoke import is_smoke_mode, set_smoke_mode
+from core.benchmark.run_manifest import reset_gpu_state, get_git_info
+from core.profiling.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
 try:
-    from benchmark.cuda_binary_benchmark import detect_supported_arch
+    from core.benchmark.cuda_binary_benchmark import detect_supported_arch
 except ImportError:  # pragma: no cover - optional dependency during docs builds
     detect_supported_arch = None  # type: ignore[assignment]
-from benchmark.expectations import (
+from core.benchmark.expectations import (
     ExpectationsStore,
     METRIC_DIRECTIONS,
     detect_expectation_key,
@@ -101,7 +101,7 @@ except ImportError:
 
 
 def reset_gpu_via_script(reason: str) -> None:
-    """Invoke tools/reset_gpu.py with the provided reason."""
+    """Invoke core/scripts/reset_gpu.py with the provided reason."""
     reset_script = Path(__file__).resolve().parents[1] / "tools" / "reset_gpu.py"
     if not reset_script.exists():
         logger.warning("GPU reset script not found at %s", reset_script)
@@ -201,7 +201,7 @@ INFORMATIONAL_BENCHMARKS: Dict[str, Set[str]] = {
     "ch17": {"pipeline_parallelism", "prefill_decode_disagg"},
     # Ch18: Speculative decoding demos show technique patterns
     "ch18": {"speculative_decoding_multi_draft", "flexdecoding_graphs"},
-    # Ch19: NVFP4 is cutting-edge and may not be faster than BF16 yet
+    # Ch19: NVFP4 is new and may not be faster than BF16 yet
     "ch19": {"nvfp4_training"},
     # Labs: Dynamic router demos show routing patterns
     "dynamic_router": {"dynamic_router", "router_vectorized"},
@@ -209,12 +209,12 @@ INFORMATIONAL_BENCHMARKS: Dict[str, Set[str]] = {
     "persistent_decode": {"kv_locality_microbench", "persistent_decode_cuda"},
 }
 
-# Note: The following have been moved to tools/:
+# Note: The following legacy paths were previously under tools/ and are now in monitoring/ or core/ subpackages:
 # - ch2/uma_memory_reporting -> monitoring/diagnostics/uma_memory/
-# - ch10/roofline -> tools/analysis/roofline/
+# - ch10/roofline -> core/analysis/roofline/
 # - ch15/moe_validation -> core/verification/moe/
-# - speculative_decode/spec_config_sweep -> tools/analysis/speculative_decode/
-# - occupancy_tuning/proton_* -> tools/profiling/occupancy_tuning/
+# - speculative_decode/spec_config_sweep -> core/analysis/speculative_decode/
+# - occupancy_tuning/proton_* -> core/profiling/occupancy_tuning/
 
 def format_time_ms(time_ms: float) -> str:
     """Format time in milliseconds with adaptive precision.
@@ -1650,6 +1650,8 @@ def _test_chapter_impl(
     # Verification - BOTH enabled by default; without verification, benchmarks are meaningless
     verify_input: bool = True,
     verify_output: bool = True,
+    only_cuda: bool = False,
+    only_python: bool = False,
     # LLM analysis and patching options
     llm_analysis: bool = False,
     force_llm: bool = False,
@@ -1793,8 +1795,10 @@ def _test_chapter_impl(
                 pair for pair in python_pairs if pair[2] in example_filters
             ]
             logger.info(f"  Filtered to {len(python_pairs)} example(s): {', '.join(sorted(example_filters))}")
+    if only_cuda:
+        python_pairs = []
     logger.info(f"  Found {len(python_pairs)} Python benchmark pair(s)")
-    
+
     # Discover CUDA benchmarks and ensure executables are built
     logger.info(f"  Discovering CUDA benchmarks...")
     cuda_pairs = discover_cuda_benchmarks(chapter_dir)
@@ -1802,6 +1806,8 @@ def _test_chapter_impl(
         cuda_pairs = [
             pair for pair in cuda_pairs if pair[2] in example_filters
         ]
+    if only_python:
+        cuda_pairs = []
     cuda_build_ok = True
     cuda_build_warning = None
     if cuda_pairs:
@@ -1841,7 +1847,7 @@ def _test_chapter_impl(
         warmup = 5
     
     try:
-        from benchmark.defaults import get_defaults as _get_defaults  # type: ignore
+        from core.benchmark.defaults import get_defaults as _get_defaults  # type: ignore
         _defaults_obj = _get_defaults()
     except Exception:
         _defaults_obj = None
@@ -4371,6 +4377,8 @@ def test_chapter(
     # Verification - BOTH enabled by default; without verification, benchmarks are meaningless
     verify_input: bool = True,
     verify_output: bool = True,
+    only_cuda: bool = False,
+    only_python: bool = False,
     # LLM analysis and patching options
     llm_analysis: bool = False,
     force_llm: bool = False,
@@ -4404,6 +4412,8 @@ def test_chapter(
         verify_input=verify_input,
         verify_output=verify_output,
         force_llm=force_llm,
+        only_cuda=only_cuda,
+        only_python=only_python,
         llm_analysis=llm_analysis,
         llm_provider=llm_provider,
         apply_llm_patches=apply_llm_patches,
@@ -4682,6 +4692,16 @@ def main():
         help='Per-target extra args, format: target="--flag value" (repeatable).'
     )
     parser.add_argument(
+        '--only-cuda',
+        action='store_true',
+        help='Run only CUDA benchmarks (skip Python).'
+    )
+    parser.add_argument(
+        '--only-python',
+        action='store_true',
+        help='Run only Python benchmarks (skip CUDA).'
+    )
+    parser.add_argument(
         '--timeout-multiplier',
         type=float,
         default=1.0,
@@ -4820,6 +4840,8 @@ def main():
             rdzv_endpoint=args.rdzv_endpoint,
             env_passthrough=args.torchrun_env,
             target_extra_args=extra_arg_map,
+            only_cuda=bool(args.only_cuda),
+            only_python=bool(args.only_python),
         )
         all_results.append(result)
     

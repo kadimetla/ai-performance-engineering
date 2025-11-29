@@ -62,10 +62,12 @@ class TestPythonBenchmarkDiscovery:
         optimized2.write_text("# optimized2")
         
         pairs = discover_benchmarks(chapter_dir)
-        
-        assert len(pairs) == 1
-        baseline_path, optimized_paths, example_name = pairs[0]
-        assert example_name == "moe"
+
+        names = {example_name for _, _, example_name in pairs}
+        assert {"moe", "moe_sparse", "moe_dense"} <= names
+
+        primary = next(p for p in pairs if p[2] == "moe")
+        baseline_path, optimized_paths, _ = primary
         assert len(optimized_paths) == 2
         assert any(p.name == "optimized_moe_sparse.py" for p in optimized_paths)
         assert any(p.name == "optimized_moe_dense.py" for p in optimized_paths)
@@ -111,7 +113,7 @@ class TestPythonBenchmarkDiscovery:
         
         assert len(pairs) == 1
         _, _, example_name = pairs[0]
-        assert example_name == "speculative"
+        assert example_name == "speculative_decoding"
     
     def test_discover_benchmarks_real_chapter(self):
         """Test discovery on a real chapter directory if it exists."""
@@ -323,4 +325,3 @@ class TestBenchmarkPairDiscovery:
         pairs = discover_benchmark_pairs(tmp_path, chapter="ch999")
         
         assert len(pairs) == 0
-

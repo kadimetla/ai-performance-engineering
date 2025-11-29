@@ -11,7 +11,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
-from benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
 class OptimizedFusedL2NormBenchmark(CudaBinaryBenchmark):
@@ -31,7 +31,7 @@ class OptimizedFusedL2NormBenchmark(CudaBinaryBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return roofline metrics for fused_l2norm."""
-        from benchmark.metrics import compute_roofline_metrics
+        from core.benchmark.metrics import compute_roofline_metrics
         return compute_roofline_metrics(
             total_flops=self._total_flops,
             total_bytes=self._total_bytes,

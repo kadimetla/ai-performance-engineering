@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 constexpr int M = 1024;
 constexpr int N = 1024;

@@ -4,6 +4,8 @@ import { useState, useMemo } from 'react';
 import { Benchmark } from '@/types';
 import { formatMs, getSpeedupColor, cn } from '@/lib/utils';
 import { GitCompare, Search, ArrowRight, Check, X } from 'lucide-react';
+import { compareRuns as compareRunsApi } from '@/lib/api';
+import { useToast } from '@/components/Toast';
 
 interface CompareTabProps {
   benchmarks: Benchmark[];
@@ -16,6 +18,9 @@ export function CompareTab({ benchmarks, pinnedBenchmarks }: CompareTabProps) {
   const [searchLeft, setSearchLeft] = useState('');
   const [searchRight, setSearchRight] = useState('');
   const [mode, setMode] = useState<'single' | 'pinned'>('single');
+  const [compareInputs, setCompareInputs] = useState({ baseline: 'benchmark_test_results.json', candidate: 'benchmark_test_results.json', top: 5 });
+  const [compareResult, setCompareResult] = useState<{ regressions: any[]; improvements: any[] } | null>(null);
+  const { showToast } = useToast();
 
   const succeededBenchmarks = benchmarks.filter((b) => b.status === 'succeeded');
 
@@ -54,6 +59,16 @@ export function CompareTab({ benchmarks, pinnedBenchmarks }: CompareTabProps) {
       .filter(Boolean) as Benchmark[];
   }, [pinnedBenchmarks, benchmarks]);
 
+  const handleRunDiff = async () => {
+    try {
+      const res = await compareRunsApi(compareInputs);
+      setCompareResult(res as any);
+      showToast('Compared runs', 'success');
+    } catch (e) {
+      showToast('Compare failed', 'error');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="card">
@@ -82,6 +97,52 @@ export function CompareTab({ benchmarks, pinnedBenchmarks }: CompareTabProps) {
               Pinned Grid
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <h3 className="font-medium text-white">Compare Runs (JSON)</h3>
+            <p className="text-xs text-white/60">Diff two benchmark_test_results.json files</p>
+          </div>
+        </div>
+        <div className="card-body space-y-2 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <input
+              className="rounded bg-white/10 px-3 py-2 text-white"
+              value={compareInputs.baseline}
+              onChange={(e) => setCompareInputs((p) => ({ ...p, baseline: e.target.value }))}
+              placeholder="baseline benchmark_test_results.json"
+            />
+            <input
+              className="rounded bg-white/10 px-3 py-2 text-white"
+              value={compareInputs.candidate}
+              onChange={(e) => setCompareInputs((p) => ({ ...p, candidate: e.target.value }))}
+              placeholder="candidate benchmark_test_results.json"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-white/60">Top</label>
+            <input
+              type="number"
+              className="w-16 rounded bg-white/10 px-2 py-1 text-white text-sm"
+              value={compareInputs.top}
+              onChange={(e) => setCompareInputs((p) => ({ ...p, top: Number(e.target.value) || 0 }))}
+            />
+            <button
+              onClick={handleRunDiff}
+              className="ml-auto px-3 py-1.5 bg-accent-primary/20 text-accent-primary rounded text-sm"
+            >
+              Diff
+            </button>
+          </div>
+          {compareResult && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <ChartList title="Regressions" colorClass="bg-accent-warning" data={compareResult.regressions || []} />
+              <ChartList title="Improvements" colorClass="bg-accent-success" data={compareResult.improvements || []} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -358,3 +419,36 @@ export function CompareTab({ benchmarks, pinnedBenchmarks }: CompareTabProps) {
   );
 }
 
+function ChartList({
+  title,
+  colorClass,
+  data,
+}: {
+  title: string;
+  colorClass: string;
+  data: { name: string; delta: number; baseline?: number; candidate?: number }[];
+}) {
+  const maxAbs = Math.max(...data.map((d) => Math.abs(d.delta || 0)), 1);
+  return (
+    <div className="text-xs text-white/80 space-y-1 max-h-60 overflow-y-auto">
+      <div className="font-semibold">{title}</div>
+      {data.length === 0 && <div className="text-white/50">None</div>}
+      {data.map((r, idx) => {
+        const width = Math.min(100, (Math.abs(r.delta || 0) / maxAbs) * 100);
+        return (
+          <div key={idx} className="flex items-center gap-2">
+            <span className="flex-1 truncate" title={r.name}>
+              {r.name}
+            </span>
+            <div className="w-32 h-2 bg-white/5 rounded">
+              <div className={`h-2 ${colorClass} rounded`} style={{ width: `${width}%` }} />
+            </div>
+            <span className="w-28 text-right">
+              {r.baseline?.toFixed?.(2)}x → {r.candidate?.toFixed?.(2)}x
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

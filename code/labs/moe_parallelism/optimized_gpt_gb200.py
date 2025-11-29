@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from labs.moe_parallelism.plan import ParallelismPlan, SPEC_PRESETS
+from core.common.moe_parallelism_plan import ParallelismPlan, SPEC_PRESETS
 from labs.moe_parallelism.benchmarking import PlanBenchmark, run_benchmark
 
 

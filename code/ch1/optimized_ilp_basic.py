@@ -20,7 +20,7 @@ from typing import Optional
 
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode, WorkloadMetadata
-from benchmark.utils import warn_benchmark_scaling
+from core.benchmark.utils import warn_benchmark_scaling
 
 
 class OptimizedIlpBasicBenchmark(BaseBenchmark):
@@ -130,7 +130,7 @@ class OptimizedIlpBasicBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_environment_metrics
+        from core.benchmark.metrics import compute_environment_metrics
         return compute_environment_metrics(
             gpu_count=getattr(self, 'gpu_count', 1),
             gpu_memory_gb=getattr(self, 'gpu_memory_gb', 80.0),

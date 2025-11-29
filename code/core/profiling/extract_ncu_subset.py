@@ -58,7 +58,7 @@ def main(args: Iterable[str]) -> int:
     try:
         pattern = next(iter(args))
     except StopIteration:
-        print("usage: python tools/extract_ncu_subset.py 'output/reports/*.csv'", file=sys.stderr)
+        print("usage: python core/profiling/extract_ncu_subset.py 'output/reports/*.csv'", file=sys.stderr)
         return 2
 
     rows = collect(pattern)

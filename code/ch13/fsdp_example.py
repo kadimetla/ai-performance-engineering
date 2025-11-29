@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.distributed as dist
 import os
 import functools
-from common.device_utils import cuda_supported
+from core.common.device_utils import cuda_supported
 
 try:
     from torch.distributed.fsdp import (

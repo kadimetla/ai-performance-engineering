@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "../common/headers/tma_helpers.cuh"
+#include "../core/common/headers/tma_helpers.cuh"
 
 #if CUDART_VERSION < 13000
 int main() {

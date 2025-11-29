@@ -21,7 +21,7 @@ def get_optimization_stacking(analyzer) -> Dict[str, Any]:
 def get_all_optimizations() -> Dict[str, Any]:
     """Return all optimizations and categories from advanced_analysis."""
     try:
-        from analysis.advanced_analysis import get_all_optimizations, OPTIMIZATION_DATABASE
+        from core.analysis.advanced_analysis import get_all_optimizations, OPTIMIZATION_DATABASE
 
         return {
             "optimizations": get_all_optimizations(),
@@ -35,7 +35,7 @@ def get_all_optimizations() -> Dict[str, Any]:
 def get_optimization_playbooks() -> Dict[str, Any]:
     """Return predefined playbooks from advanced_analysis."""
     try:
-        from analysis.advanced_analysis import get_all_playbooks
+        from core.analysis.advanced_analysis import get_all_playbooks
 
         pbs = get_all_playbooks()
         return {"playbooks": pbs, "count": len(pbs)}
@@ -46,7 +46,7 @@ def get_optimization_playbooks() -> Dict[str, Any]:
 def calculate_compound_optimization(optimizations: List[str], software_info: Dict[str, Any]) -> Dict[str, Any]:
     """Compute compound effects of multiple optimizations."""
     try:
-        from analysis.advanced_analysis import CompoundOptimizationCalculator
+        from core.analysis.advanced_analysis import CompoundOptimizationCalculator
 
         hardware = {"features": software_info.get("features", [])}
         calc = CompoundOptimizationCalculator(hardware)
@@ -73,7 +73,7 @@ def calculate_compound_optimization(optimizations: List[str], software_info: Dic
 def get_optimal_optimization_stack(target_speedup: float, max_difficulty: str, software_info: Dict[str, Any]) -> Dict[str, Any]:
     """Find optimal optimization stack for target speedup."""
     try:
-        from analysis.advanced_analysis import CompoundOptimizationCalculator
+        from core.analysis.advanced_analysis import CompoundOptimizationCalculator
 
         features = software_info.get("features", [])
         gpu_cap = software_info.get("compute_capability", "")

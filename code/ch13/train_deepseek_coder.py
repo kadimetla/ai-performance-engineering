@@ -31,7 +31,7 @@ from contextlib import nullcontext
 import torch
 from torch.profiler import ProfilerActivity, profile
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from common.device_utils import get_preferred_device
+from core.common.device_utils import get_preferred_device
 
 
 def _select_model() -> tuple[str, int, int]:

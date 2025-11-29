@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, Any, Optional, List
 
-# Find the repo root (tools/analysis is two levels below)
+# Find the repo root
 CODE_ROOT = Path(__file__).parent.parent.parent
 
 

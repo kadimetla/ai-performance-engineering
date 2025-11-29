@@ -603,6 +603,17 @@ export async function getHfTrending() {
 // WEBHOOK ENDPOINTS
 // ============================================================================
 
+export async function getWebhooks() {
+  return fetchAPI('/webhooks');
+}
+
+export async function saveWebhooks(webhooks: unknown[]) {
+  return fetchAPI('/webhooks/save', {
+    method: 'POST',
+    body: JSON.stringify({ webhooks }),
+  });
+}
+
 export async function testWebhook(config: { name: string; url: string; events: string[]; platform?: string }) {
   return fetchAPI('/webhook/test', {
     method: 'POST',
@@ -639,4 +650,47 @@ export async function exportPDF() {
 export async function exportHTML() {
   const res = await fetch(`${API_BASE}/export/html`);
   return res.blob();
+}
+
+// Generic export (csv|markdown|json payload in JSON wrapper)
+export async function exportGeneric(format: 'csv' | 'markdown' | 'json') {
+  return fetchAPI<{ format: string; payload: string | object }>(
+    `/export/generic?format=${encodeURIComponent(format)}`
+  );
+}
+
+// Compare two benchmark runs
+export async function compareRuns(params: { baseline: string; candidate: string; top?: number }) {
+  const search = new URLSearchParams();
+  search.set('baseline', params.baseline);
+  search.set('candidate', params.candidate);
+  if (params.top !== undefined) search.set('top', params.top.toString());
+  return fetchAPI('/compare-runs?' + search.toString());
+}
+
+// Generate launch plan
+export async function generateLaunchPlan(params: {
+  model_params: number;
+  nodes: number;
+  gpus: number;
+  tp: number;
+  pp: number;
+  dp: number;
+  batch_size: number;
+  script?: string;
+  extra_args?: string;
+}) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) search.set(k, String(v));
+  });
+  return fetchAPI('/launch-plan?' + search.toString());
+}
+
+// Roofline stride sweep
+export async function getRooflineSweep(sizeMb: number, strides?: number[]) {
+  const search = new URLSearchParams();
+  search.set('size_mb', sizeMb.toString());
+  (strides || []).forEach((s) => search.append('stride', s.toString()));
+  return fetchAPI('/roofline?' + search.toString());
 }

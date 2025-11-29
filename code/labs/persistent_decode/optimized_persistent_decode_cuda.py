@@ -31,7 +31,7 @@ def _load_extension() -> object:
     include_dirs = [
         # Stick to the repo-pinned CUTLASS to avoid mixing cute headers from TransformerEngine.
         REPO_ROOT / "third_party" / "cutlass" / "include",
-        REPO_ROOT / "common" / "headers",
+        REPO_ROOT / "core" / "common" / "headers",
     ]
     return load_cuda_extension_v2(
         name="persistent_decode_ext",

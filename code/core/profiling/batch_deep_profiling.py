@@ -4,13 +4,13 @@ Batch Nsight profiling + deep-report generator across representative chapter wor
 
 Examples:
     # List available workloads
-    python tools/batch_deep_profiling.py --list
+    python core/profiling/batch_deep_profiling.py --list
 
     # Profile a subset
-    python tools/batch_deep_profiling.py --workload ch10_double_buffered_pipeline
+    python core/profiling/batch_deep_profiling.py --workload ch10_double_buffered_pipeline
 
     # Profile everything (writes into output/)
-    python tools/batch_deep_profiling.py
+    python core/profiling/batch_deep_profiling.py
 """
 
 from __future__ import annotations

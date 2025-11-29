@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 // CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads (available but not used in transpose)
 // Transpose operations use float4 for optimal shared memory bank conflict avoidance

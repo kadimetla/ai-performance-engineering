@@ -11,7 +11,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from benchmark.comparison import (
+from core.benchmark.comparison import (
     MetricComparison,
     MetricDirection,
     ComparisonResult,
@@ -23,7 +23,7 @@ from benchmark.comparison import (
     get_chapter_metric_config,
     METRIC_CONFIG,
 )
-from benchmark.models import (
+from core.benchmark.models import (
     BenchmarkResult,
     TimingStats,
     InferenceTimingStats,
@@ -561,7 +561,7 @@ class TestInferenceTiming:
     def test_chapter_metric_config_ttft_tpot(self):
         """Test chapter metric config mappings for TTFT/TPOT."""
         # Mock get_chapter_metrics to return CH17 metrics
-        with patch('benchmark.comparison.get_chapter_metrics') as mock_get_metrics:
+        with patch('core.benchmark.comparison.get_chapter_metrics') as mock_get_metrics:
             mock_get_metrics.return_value = {
                 "ttft_p99_ms": {"target": 300, "unit": "ms", "lower_is_better": True},
                 "ttft_p99_mlperf_ms": {"target": 450, "unit": "ms", "lower_is_better": True},
@@ -582,4 +582,3 @@ class TestInferenceTiming:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

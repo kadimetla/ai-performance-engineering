@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import argparse
 import pathlib
+import random
 import sys
 
 _EXTRAS_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -36,7 +38,7 @@ from dataclasses import dataclass, field
 from collections import defaultdict, deque
 from enum import Enum
 import threading
-from prometheus_client import Counter, Gauge, Histogram, Summary
+from prometheus_client import Counter, Gauge, Histogram, Summary, start_http_server
 
 
 class CacheType(Enum):
@@ -445,12 +447,67 @@ class SimpleCache:
         )
 
 
+def _run_demo(serve_metrics: bool = False, duration: float = 5.0):
+    """
+    Lightweight demo workload with optional Prometheus exporter.
+    
+    Keeps runtime short by default; enable --serve-metrics to expose gauges on :8001.
+    """
+    monitor = CacheMonitor(export_interval=2.0)
+    cache = SimpleCache(
+        capacity_bytes=8 * 1024 * 1024,  # 8 MB
+        cache_type=CacheType.KV_CACHE,
+        monitor=monitor,
+        eviction_policy=EvictionPolicy.LRU,
+    )
+    
+    if serve_metrics:
+        start_http_server(8001)
+        print("Prometheus exporter listening on http://localhost:8001/metrics")
+    
+    rng = random.Random(0)
+    keys = [f"key_{i}" for i in range(256)]
+    payload_sizes = [512, 1024, 2048, 4096]
+    
+    end_time = time.time() + duration
+    while time.time() < end_time:
+        key = rng.choice(keys)
+        cached_value = cache.get(key)
+        if cached_value is None:
+            payload = bytes(rng.choice(payload_sizes))
+            cache.put(key, payload)
+        elif rng.random() < 0.1:
+            # Occasional overwrite to exercise evictions/updates
+            payload = bytes(rng.choice(payload_sizes))
+            cache.put(key, payload)
+        
+        # Simulate prefix merge events intermittently
+        if rng.random() < 0.2:
+            monitor.record_prefix_merge(
+                tokens_deduplicated=rng.randint(16, 256),
+                compute_saved_ms=rng.random() * 2.0,
+            )
+        time.sleep(0.005)
+    
+    monitor.export_metrics()
+    monitor.print_summary()
+    if serve_metrics:
+        print("Demo complete; leave the process running to keep metrics available.")
+
+
 # Example usage and testing
 if __name__ == '__main__':
-    # TODO(cfregly): Re-enable the cache monitoring demo when we explicitly
-    # need the Prometheus exporter during manual experiments. It is disabled
-    # to keep automation runs from spawning the long-lived server on port 8001.
-    print(
-        "Cache monitoring demo is temporarily disabled. "
-        "Re-enable the __main__ block in extras/ch16/cache_monitoring.py when needed."
+    parser = argparse.ArgumentParser(description="Cache monitoring demo (Chapter 16)")
+    parser.add_argument(
+        "--serve-metrics",
+        action="store_true",
+        help="Expose Prometheus exporter on :8001/metrics during the short demo run.",
     )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=5.0,
+        help="How long to run the demo workload (seconds).",
+    )
+    args = parser.parse_args()
+    _run_demo(serve_metrics=args.serve_metrics, duration=args.duration)

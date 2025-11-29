@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-#include "../common/headers/profiling_helpers.cuh"
+#include "../core/common/headers/profiling_helpers.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \

@@ -333,7 +333,7 @@ python -m dashboard.api.server
 ## Architecture
 
 ```
-tools/parallelism_planner/
+core/optimization/parallelism_planner/
 ├── __init__.py              # Public API exports
 ├── __main__.py              # CLI entry point
 ├── cli.py                   # Comprehensive CLI
@@ -450,7 +450,7 @@ Implementation Steps:
 ## Integration
 
 This tool integrates with:
-- `labs/moe_parallelism/plan.py` - Compatible data structures
+- `core/common/moe_parallelism_plan.py` - Compatible data structures
 - `core/harness/hardware_capabilities.py` - Hardware detection
 - `dashboard/api/server.py` - Web UI and API
 - `ch4/training_8xb200_pipeline.py` - Training examples

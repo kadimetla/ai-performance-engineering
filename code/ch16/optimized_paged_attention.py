@@ -126,7 +126,7 @@ class OptimizedPagedAttentionBenchmark(BaseBenchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Flash Attention."""
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False

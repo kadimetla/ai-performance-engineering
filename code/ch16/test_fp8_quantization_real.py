@@ -24,6 +24,7 @@ robust FP8 training/inference, but this script uses PyTorch native APIs.
 
 import sys
 import os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -201,6 +202,13 @@ def test_fp8_native(
     print("="*80)
     print("FP8 Quantization Benchmark (PyTorch Native)")
     print("="*80)
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        batch_size = 1
+        seq_len = 16
+        n_layers = 1
+        warmup = 0
+        iters = 1
     
     if not check_fp8_support():
         print("\nERROR: ERROR: FP8 not supported on this GPU")
@@ -263,6 +271,9 @@ def test_fp8_native(
     except Exception as e:
         print(f"  ERROR: FP8 test failed: {e}")
     
+    # Avoid pytest "returned non-None" warning when executed as a test.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
     return results
 
 

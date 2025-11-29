@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 constexpr int WIDTH = 4096;
 constexpr int BLOCK_X = 32;

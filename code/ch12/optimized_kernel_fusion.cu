@@ -6,7 +6,7 @@
 #include <cstdlib>
 #include <vector>
 #include <chrono>
-#include "../common/headers/profiling_helpers.cuh"
+#include "../core/common/headers/profiling_helpers.cuh"
 
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \

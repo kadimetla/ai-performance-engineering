@@ -23,7 +23,7 @@ import torch
 
 from ch10.optimized_matmul import resolve_device
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from benchmark.tcgen05_requirements import check_tcgen05_support
+from core.benchmark.tcgen05_requirements import check_tcgen05_support
 
 
 class BaselineMatmulTCGen05PipelinedBenchmark(BaseBenchmark):

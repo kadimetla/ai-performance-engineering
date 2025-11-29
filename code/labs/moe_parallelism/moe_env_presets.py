@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from textwrap import indent
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from labs.moe_parallelism.plan import ClusterSpec, ModelSpec, ParallelismPlan
+from core.common.moe_parallelism_plan import ClusterSpec, ModelSpec, ParallelismPlan
 
 # Minimal validation commands common to the MoE env presets (format placeholders).
 DEFAULT_VALIDATION: List[str] = [

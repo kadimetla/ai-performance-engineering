@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 constexpr int N = 1 << 24;               // 64 MB footprint
 constexpr int REPEAT = 50;               // match harness iterations

@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "../common/headers/profiling_helpers.cuh"
+#include "../core/common/headers/profiling_helpers.cuh"
 
 #define NUM_BANKS 32
 #define INNER_SWEEPS 256

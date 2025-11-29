@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 import os
-from benchmark.smoke import is_smoke_mode
+from core.benchmark.smoke import is_smoke_mode
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -22,7 +22,7 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 from ch3.grace_blackwell_topology import NICInfo, discover_nics, format_cpulist
 

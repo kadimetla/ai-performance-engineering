@@ -18,7 +18,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
 class RouterGraph(nn.Module):
@@ -83,7 +83,7 @@ class CUDAGraphRouterBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_graph_metrics
+        from core.benchmark.metrics import compute_graph_metrics
         return compute_graph_metrics(
             baseline_launch_overhead_us=getattr(self, '_baseline_launch_us', 10.0),
             graph_launch_overhead_us=getattr(self, '_graph_launch_us', 1.0),

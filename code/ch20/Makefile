@@ -1,6 +1,6 @@
 # Chapter 20 Makefile - End-to-end optimization examples with architecture-aware builds
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo
 SUFFIX = $(TARGET_SUFFIX)

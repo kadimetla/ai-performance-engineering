@@ -205,13 +205,13 @@ def main():
         epilog="""
 Examples:
   # Analyze inference power efficiency
-  python tools/power_efficiency_analyzer.py \\
+  python core/analysis/power_efficiency_analyzer.py \\
       --power power_metrics.json \\
       --throughput inference_results.json \\
       --output efficiency_report.md
   
   # Quick analysis with JSON output only
-  python tools/power_efficiency_analyzer.py \\
+  python core/analysis/power_efficiency_analyzer.py \\
       --power power_metrics.json \\
       --throughput inference_results.json \\
       --json-output efficiency.json
@@ -301,4 +301,3 @@ Examples:
 
 if __name__ == "__main__":
     sys.exit(main())
-

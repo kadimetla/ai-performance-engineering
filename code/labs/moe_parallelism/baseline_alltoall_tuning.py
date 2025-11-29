@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from labs.moe_parallelism.plan import (  # noqa: E402
+from core.common.moe_parallelism_plan import (  # noqa: E402
     ClusterSpec,
     ModelSpec,
     ParallelismPlan,

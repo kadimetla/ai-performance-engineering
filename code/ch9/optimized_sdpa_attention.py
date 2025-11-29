@@ -118,7 +118,7 @@ class OptimizedSDPAAttentionBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_roofline_metrics
+        from core.benchmark.metrics import compute_roofline_metrics
         return compute_roofline_metrics(
             total_flops=float(getattr(self, 'total_flops', getattr(self, 'N', 1024) * 2)),
             total_bytes=float(getattr(self, 'N', 1024) * 4 * 2),

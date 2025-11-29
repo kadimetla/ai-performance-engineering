@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../common/headers/tma_helpers.cuh"
+#include "../core/common/headers/tma_helpers.cuh"
 
 #if CUDART_VERSION >= 13000
 #include <cuda.h>

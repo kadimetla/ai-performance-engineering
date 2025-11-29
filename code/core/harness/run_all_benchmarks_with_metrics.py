@@ -9,7 +9,7 @@ This script:
 5. Identifies benchmarks that need fixing
 
 Usage:
-    python tools/testing/run_all_benchmarks_with_metrics.py [--targets chX chY:example]
+    python core/harness/run_all_benchmarks_with_metrics.py [--targets chX chY:example]
 """
 
 import sys

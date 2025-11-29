@@ -70,7 +70,7 @@ Despite the complexity, TE provides critical functionality:
 - Fused FP8 Linear layers
 - cuDNN fused attention paths
 
-Used in: `ch16/`, `ch19/`, `labs/nanochat/`, `labs/ultimate_moe_inference/`,
+Used in: `ch16/`, `ch19/`, `labs/nanochat_fullstack/`, `labs/ultimate_moe_inference/`,
 `benchmark/benchmark_peak.py`, and 230+ other files.
 
 ### Troubleshooting
@@ -91,7 +91,6 @@ ln -s ../../cutlass TransformerEngine/3rdparty/cutlass
 ls -la TransformerEngine/3rdparty/cutlass
 cat cutlass/include/cutlass/version.h | grep CUTLASS_
 ```
-
 
 
 

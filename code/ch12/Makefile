@@ -1,6 +1,6 @@
 # Chapter 12 Makefile - CUDA graph and dynamic parallelism examples
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) $(CUDA_NVTX_CFLAGS)
 NVCC_LIBS = -lcuda $(CUDA_NVTX_LDFLAGS)

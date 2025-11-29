@@ -12,7 +12,7 @@
 #include <cmath>
 #include <vector>
 
-#include "../common/headers/tma_helpers.cuh"
+#include "../core/common/headers/tma_helpers.cuh"
 
 static void run_tma_example();
 

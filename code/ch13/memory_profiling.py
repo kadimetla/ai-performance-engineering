@@ -16,7 +16,7 @@ from arch_config import ArchitectureConfig
 import torch
 import torch.nn as nn
 import os
-from common.device_utils import get_preferred_device
+from core.common.device_utils import get_preferred_device
 
 _ARCH_CFG = ArchitectureConfig()
 

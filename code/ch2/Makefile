@@ -1,6 +1,6 @@
 # Chapter 2 Makefile (includes Blackwell and Grace-Blackwell NVLink demos)
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo -Xptxas -O3
 NVCC_DEBUG_FLAGS = $(NVCC_FLAGS) -G

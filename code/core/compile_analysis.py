@@ -94,4 +94,3 @@ def load_compile_analysis(code_root: Path = CODE_ROOT, benchmarks: List[Dict[str
             ]
 
     return compile_data
-

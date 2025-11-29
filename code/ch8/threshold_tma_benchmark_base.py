@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from benchmark.blackwell_requirements import ensure_blackwell_tma_supported
+from core.benchmark.blackwell_requirements import ensure_blackwell_tma_supported
 
 from ch8.threshold_benchmark_base import ThresholdBenchmarkBase
 

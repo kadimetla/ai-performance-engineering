@@ -59,7 +59,7 @@ class BaselineWorkQueueBenchmark(BaseBenchmark):
     def benchmark_fn(self) -> None:
         """Benchmark: Static work distribution."""
 
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
 
@@ -93,7 +93,7 @@ class BaselineWorkQueueBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_graph_metrics
+        from core.benchmark.metrics import compute_graph_metrics
         return compute_graph_metrics(
             baseline_launch_overhead_us=getattr(self, '_baseline_launch_us', 10.0),
             graph_launch_overhead_us=getattr(self, '_graph_launch_us', 1.0),

@@ -173,7 +173,7 @@ def test_profiling_tools():
                 with_stack=True,
                 with_flops=True,
                 with_modules=True,
-                schedule=schedule(wait=1, warmup=1, active=3, repeat=2),
+                schedule=schedule(wait=1, warmup=5, active=3, repeat=2),
             ):
                 x = torch.randn(1000, 1000, device="cuda")
                 y = torch.randn(1000, 1000, device="cuda")
@@ -185,7 +185,7 @@ def test_profiling_tools():
 
     try:
         # Use conditional NVTX ranges - only enabled when profiling
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
         config = SimpleNamespace(enable_nvtx=True)
         enable_nvtx = get_nvtx_enabled(config)
 

@@ -105,7 +105,7 @@ class BaselineGraphBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return baseline graph metrics using standard helpers."""
-        from benchmark.metrics import compute_graph_metrics
+        from core.benchmark.metrics import compute_graph_metrics
         
         # Baseline has full launch overhead per iteration
         baseline_launch_us = 8.0 * 35  # ~35 ops × 8us each

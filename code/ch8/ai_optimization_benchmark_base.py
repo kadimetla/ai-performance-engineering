@@ -54,7 +54,7 @@ class AiOptimizationBenchmarkBase(BaseBenchmark):
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
+        from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False

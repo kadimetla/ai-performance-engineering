@@ -29,7 +29,7 @@ except ImportError:
             os.environ.setdefault("MASTER_PORT", "29500")
             os.environ.setdefault("LOCAL_RANK", "0")
 
-from benchmark.gpu_requirements import require_min_gpus, warn_optimal_gpu_count
+from core.benchmark.gpu_requirements import require_min_gpus, warn_optimal_gpu_count
 
 
 def init_distributed() -> tuple[int, int, torch.device]:

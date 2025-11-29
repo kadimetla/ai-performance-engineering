@@ -127,7 +127,7 @@ def cleanup_old_extension_caches(
     cwd = Path.cwd()
     repo_root = cwd
     while repo_root.parent != repo_root:
-        if (repo_root / ".git").exists() or (repo_root / "common").exists():
+        if (repo_root / ".git").exists() or (repo_root / "core" / "common").exists():
             break
         repo_root = repo_root.parent
     
@@ -381,7 +381,7 @@ def load_cuda_extension_v2(
             # Use first source's parent as reference
             repo_root = sources[0].parent
             while repo_root.parent != repo_root:
-                if (repo_root / ".git").exists() or (repo_root / "common").exists():
+                if (repo_root / ".git").exists() or (repo_root / "core" / "common").exists():
                     break
                 repo_root = repo_root.parent
             build_dir = repo_root / ".torch_extensions" / name
@@ -503,7 +503,7 @@ def load_cuda_extension(
         repo_root = source_path
         while repo_root.parent != repo_root:
             repo_root = repo_root.parent
-            common_headers = repo_root / "common" / "headers"
+            common_headers = repo_root / "core" / "common" / "headers"
             if common_headers.exists():
                 include_dirs.append(common_headers)
                 break
@@ -636,7 +636,7 @@ def load_inline_with_fingerprint(
             cwd = Path.cwd()
             repo_root = cwd
             while repo_root.parent != repo_root:
-                if (repo_root / ".git").exists() or (repo_root / "common").exists():
+                if (repo_root / ".git").exists() or (repo_root / "core" / "common").exists():
                     break
                 repo_root = repo_root.parent
             build_dir = repo_root / ".torch_extensions" / name
@@ -715,7 +715,7 @@ def invalidate_all_caches() -> list[Path]:
     cwd = Path.cwd()
     repo_root = cwd
     while repo_root.parent != repo_root:
-        if (repo_root / ".git").exists() or (repo_root / "common").exists():
+        if (repo_root / ".git").exists() or (repo_root / "core" / "common").exists():
             break
         repo_root = repo_root.parent
     
@@ -762,7 +762,7 @@ def get_all_extension_loaders() -> dict[str, callable]:
     cwd = Path.cwd()
     repo_root = cwd
     while repo_root.parent != repo_root:
-        if (repo_root / ".git").exists() or (repo_root / "common").exists():
+        if (repo_root / ".git").exists() or (repo_root / "core" / "common").exists():
             break
         repo_root = repo_root.parent
     
@@ -770,7 +770,7 @@ def get_all_extension_loaders() -> dict[str, callable]:
     extension_modules = [
         ("ch6.cuda_extensions", ["coalescing", "bank_conflicts", "ilp", "launch_bounds"]),
         ("ch12.cuda_extensions", ["kernel_fusion", "graph_bandwidth", "work_queue", "cuda_graphs"]),
-        ("common.tcgen05", ["tcgen05"]),
+        ("core.common.tcgen05", ["tcgen05"]),
     ]
     
     for module_path, ext_names in extension_modules:
@@ -805,7 +805,7 @@ def prebuild_all_extensions(verbose: bool = False) -> dict[str, tuple[bool, str]
     cwd = Path.cwd()
     repo_root = cwd
     while repo_root.parent != repo_root:
-        if (repo_root / ".git").exists() or (repo_root / "common").exists():
+        if (repo_root / ".git").exists() or (repo_root / "core" / "common").exists():
             break
         repo_root = repo_root.parent
     
@@ -818,7 +818,7 @@ def prebuild_all_extensions(verbose: bool = False) -> dict[str, tuple[bool, str]
     extensions = [
         ("ch6.cuda_extensions", "Chapter 6 extensions"),
         ("ch12.cuda_extensions", "Chapter 12 extensions"),
-        ("common.tcgen05", "tcgen05 (SM100+ only)"),
+        ("core.common.tcgen05", "tcgen05 (SM100+ only)"),
     ]
     
     for module_path, description in extensions:
@@ -896,7 +896,7 @@ def generate_build_lockfile(output_path: Optional[Path] = None) -> dict:
     cwd = Path.cwd()
     repo_root = cwd
     while repo_root.parent != repo_root:
-        if (repo_root / ".git").exists() or (repo_root / "common").exists():
+        if (repo_root / ".git").exists() or (repo_root / "core" / "common").exists():
             break
         repo_root = repo_root.parent
     

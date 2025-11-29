@@ -15,7 +15,7 @@
 #include <cmath>
 #include <vector>
 
-#include "../common/headers/arch_detection.cuh"
+#include "../core/common/headers/arch_detection.cuh"
 
 #define CUDA_CHECK(call)                                                                 \
     do {                                                                                 \

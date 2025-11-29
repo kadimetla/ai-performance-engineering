@@ -79,10 +79,10 @@
         "updated_at": "2025-11-28T01:13:09.233239"
       },
       "metrics": {
-        "baseline_p75_ms": 1.289,
-        "baseline_throughput.latency_ms": 1.286,
-        "baseline_throughput.requests_per_s": 777.6049766718506,
-        "baseline_time_ms": 1.286,
+        "baseline_p75_ms": 0.591,
+        "baseline_throughput.latency_ms": 0.5903999999999999,
+        "baseline_throughput.requests_per_s": 1693.7669376693768,
+        "baseline_time_ms": 0.5903999999999999,
         "best_optimized_p75_ms": 0.345,
         "best_optimized_speedup": 4.946153846153846,
         "best_optimized_throughput.latency_ms": 0.3446666666666667,
@@ -103,9 +103,9 @@
         "updated_at": "2025-11-28T00:17:44.231008"
       },
       "metrics": {
-        "baseline_p75_ms": 2150.189356994815,
-        "baseline_p90_ms": 2150.189356994815,
-        "baseline_time_ms": 2192.4294606627277,
+        "baseline_p75_ms": 1407.8708399902098,
+        "baseline_p90_ms": 1407.8708399902098,
+        "baseline_time_ms": 1415.2860859952245,
         "best_optimized_p75_ms": 342.89331000763923,
         "best_optimized_p90_ms": 342.89331000763923,
         "best_optimized_speedup": 5.970983026385582,
@@ -209,30 +209,30 @@
       "type": "cuda"
     },
     "matmul_cuda": {
-      "example": "matmul",
+      "example": "matmul_cuda",
       "metadata": {
-        "best_optimization": "tiled",
-        "best_optimization_file": "optimized_matmul_tiled.cu",
-        "best_optimization_speedup": 1.581855481496779,
-        "best_optimization_time_ms": 368.5615153517574,
-        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
-        "updated_at": "2025-11-28T00:17:47.159854"
+        "best_optimization": "optimized_matmul_cuda",
+        "best_optimization_file": "optimized_matmul_cuda.py",
+        "best_optimization_speedup": 4.389797687308084,
+        "best_optimization_time_ms": 0.365721,
+        "git_commit": "a0436ce2692b1ecdd2ac8aa27bf76762b9116789",
+        "updated_at": "2025-11-28T21:59:35.909807"
       },
       "metrics": {
-        "baseline_p75_ms": 584.982123982627,
+        "baseline_p75_ms": 1.60566,
         "baseline_p90_ms": 686.6172589943744,
         "baseline_throughput.latency_ms": 1.875751,
         "baseline_throughput.requests_per_s": 533.1198010823398,
-        "baseline_time_ms": 583.0110533279367,
-        "best_optimized_p75_ms": 373.6286220373586,
+        "baseline_time_ms": 1.6054412,
+        "best_optimized_p75_ms": 0.365796,
         "best_optimized_p90_ms": 345.290097000543,
-        "best_optimized_speedup": 1.581855481496779,
+        "best_optimized_speedup": 4.389797687308084,
         "best_optimized_throughput.latency_ms": 0.3651703333333333,
         "best_optimized_throughput.requests_per_s": 2633.2905862494836,
-        "best_optimized_time_ms": 368.5615153517574,
-        "best_speedup": 1.581855481496779
+        "best_optimized_time_ms": 0.365721,
+        "best_speedup": 4.389797687308084
       },
-      "type": "cuda"
+      "type": "python"
     },
     "memory_access": {
       "example": "memory_access",
@@ -355,21 +355,21 @@
     "tma_cuda": {
       "example": "tma",
       "metadata": {
-        "best_optimization": "copy",
-        "best_optimization_file": "optimized_tma_copy.cu",
-        "best_optimization_speedup": 0.9584651136192507,
-        "best_optimization_time_ms": 784.8519040077614,
-        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
-        "updated_at": "2025-11-28T00:17:30.928506"
+        "best_optimization": "bulk_tensor_2d",
+        "best_optimization_file": "optimized_tma_bulk_tensor_2d.cu",
+        "best_optimization_speedup": 0.9838405790696767,
+        "best_optimization_time_ms": 373.6475696787238,
+        "git_commit": "a0436ce2692b1ecdd2ac8aa27bf76762b9116789",
+        "updated_at": "2025-11-28T22:01:40.477655"
       },
       "metrics": {
-        "baseline_p75_ms": 746.3237610063516,
-        "baseline_p90_ms": 746.3237610063516,
-        "baseline_time_ms": 752.2531693490843,
-        "best_optimized_p75_ms": 801.5297100064345,
-        "best_optimized_p90_ms": 801.5297100064345,
+        "baseline_p75_ms": 368.87254199245945,
+        "baseline_p90_ms": 368.87254199245945,
+        "baseline_time_ms": 367.609641320693,
+        "best_optimized_p75_ms": 378.417102037929,
+        "best_optimized_p90_ms": 378.417102037929,
         "best_optimized_speedup": 0.9660267921857748,
-        "best_optimized_time_ms": 784.8519040077614,
+        "best_optimized_time_ms": 373.6475696787238,
         "best_speedup": 1.0
       },
       "type": "cuda"

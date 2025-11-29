@@ -9,7 +9,7 @@ import pytest
 def test_linter_discovers_benchmarks():
     """Test that linter can discover benchmarks without crashing."""
     repo_root = Path(__file__).parent.parent
-    linter_path = repo_root / "tools" / "linting" / "check_benchmarks.py"
+    linter_path = repo_root / "scripts" / "linting" / "check_benchmarks.py"
     
     # Run linter (should not crash even if files have errors)
     result = subprocess.run(
@@ -57,7 +57,7 @@ def test_linter_with_specific_path():
 def test_linter_run_setup_flag():
     """Test that --run-setup flag exists and works."""
     repo_root = Path(__file__).parent.parent
-    linter_path = repo_root / "tools" / "linting" / "check_benchmarks.py"
+    linter_path = repo_root / "scripts" / "linting" / "check_benchmarks.py"
     
     # Check help output
     result = subprocess.run(
@@ -101,4 +101,3 @@ def test_linter_works_without_cuda():
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])
-

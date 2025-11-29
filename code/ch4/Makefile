@@ -1,7 +1,7 @@
 # Makefile for Chapter 4: Multi-GPU Communication Examples
 # Supports dual-architecture builds for Blackwell B200 and Grace-Blackwell GB10.
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVSHMEM_HOME ?= $(if $(wildcard /usr/lib/x86_64-linux-gnu/libnvshmem_host.so),/usr/lib/x86_64-linux-gnu,/usr/lib/aarch64-linux-gnu)
 NVSHMEM_INCLUDE = -I/usr/include/nvshmem

@@ -112,7 +112,7 @@ class BaselinePerformanceBenchmark(BaseBenchmark):
         """Function to benchmark."""
         # Use conditional NVTX ranges - only enabled when profiling
 
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
 
@@ -145,7 +145,7 @@ class BaselinePerformanceBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_environment_metrics
+        from core.benchmark.metrics import compute_environment_metrics
         return compute_environment_metrics(
             gpu_count=getattr(self, 'gpu_count', 1),
             gpu_memory_gb=getattr(self, 'gpu_memory_gb', 80.0),

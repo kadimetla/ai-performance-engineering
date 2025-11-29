@@ -8,7 +8,7 @@
 #include <random>
 #include <vector>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 constexpr int ELEMENTS = 1 << 24;          // 16M elements (~64 MB)
 constexpr int ITERATIONS = 40;

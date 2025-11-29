@@ -326,6 +326,7 @@ class AnalyzeEngine:
         warp_divergence()       - Warp divergence analysis
         bank_conflicts()        - Bank conflict analysis
         memory_access()         - Memory access patterns
+        data_loading()          - Data loading pipeline analysis
         occupancy()             - Occupancy analysis
         cpu_memory()            - CPU-memory correlation
         system_params()         - System parameters
@@ -411,6 +412,10 @@ class AnalyzeEngine:
     def memory_access(self) -> Dict[str, Any]:
         """Memory access pattern analysis."""
         return _get_handler().get_memory_access_patterns()
+
+    def data_loading(self) -> Dict[str, Any]:
+        """Data loading pipeline analysis."""
+        return _get_handler().get_data_loading_analysis()
     
     def occupancy(self) -> Dict[str, Any]:
         """Occupancy analysis."""

@@ -12,8 +12,8 @@ from ch8.tiling_benchmark_base import TilingBenchmarkBase
 def _check_tcgen05_extension_available() -> tuple[bool, Optional[str]]:
     """Check if the tcgen05 tiling extension can be built."""
     try:
-        from benchmark.tcgen05_requirements import ensure_tcgen05_supported
-        from common.tcgen05 import load_tiling_tcgen05_module
+        from core.benchmark.tcgen05_requirements import ensure_tcgen05_supported
+        from core.common.tcgen05 import load_tiling_tcgen05_module
         ensure_tcgen05_supported(
             loader=load_tiling_tcgen05_module,
             module_name="ch8 tiling tcgen05 kernels",
@@ -45,5 +45,5 @@ class TilingBenchmarkBaseTCGen05(TilingBenchmarkBase):
         super().__init__()
 
     def _load_extension(self) -> None:
-        from common.tcgen05 import load_tiling_tcgen05_module
+        from core.common.tcgen05 import load_tiling_tcgen05_module
         self.extension = load_tiling_tcgen05_module()

@@ -1,7 +1,7 @@
 """Optimized matmul benchmark: Pipelined tcgen05 kernel variant.
 
-CHAPTER 10 CONTEXT: This demonstrates a MORE optimized tcgen05 kernel that adds
-software pipelining to overlap compute with memory operations.
+CHAPTER 10 CONTEXT: Uses a 2-stage pipelined tcgen05 kernel from the
+custom_vs_cublas lab to overlap compute and memory via double-buffering.
 
 Key optimizations over basic tcgen05:
 1. Double-buffered shared memory for async prefetch
@@ -13,7 +13,7 @@ Compare against:
 - optimized_matmul_tcgen05.py (basic tcgen05) - Single-stage version
 
 EDUCATIONAL VALUE: Shows the progression from basic tensor core kernel
-to production-quality pipelined implementation.
+to a pipelined implementation with overlap.
 """
 
 from __future__ import annotations
@@ -24,15 +24,12 @@ import torch
 
 from ch10.matmul_extension_tcgen05 import load_matmul_tcgen05_module
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from benchmark.tcgen05_requirements import check_tcgen05_support
+from core.benchmark.tcgen05_requirements import check_tcgen05_support
+from labs.custom_vs_cublas.tcgen05_loader import matmul_tcgen05_pipelined
 
 
 class OptimizedMatmulTCGen05PipelinedBenchmark(BaseBenchmark):
     """Pipelined tcgen05 kernel with double-buffering.
-    
-    NOTE: This currently uses the same kernel as the basic version.
-    A true pipelined implementation would require significant CUDA changes.
-    This benchmark exists to show WHERE the optimization opportunity lies.
     """
 
     def __init__(self) -> None:
@@ -43,18 +40,17 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(BaseBenchmark):
         )
         self._tcgen05_available = available
         self._skip_reason = reason or "SKIPPED: tcgen05 matmul unavailable"
-        self.module = None
         self.device = torch.device("cuda")
         # Use larger size to amortize kernel launch overhead
         self.size = 8192
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
+        self._placeholder_kernel = False
+        self._warned_placeholder = False
 
     def setup(self) -> None:
         if not self._tcgen05_available:
             raise RuntimeError(self._skip_reason)
-        if self.module is None:
-            self.module = load_matmul_tcgen05_module()
         torch.manual_seed(0)
         dtype = torch.float16
         self.A = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
@@ -64,12 +60,10 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(BaseBenchmark):
     def benchmark_fn(self) -> None:
         if not self._tcgen05_available:
             raise RuntimeError(self._skip_reason)
-        assert self.A is not None and self.B is not None and self.module is not None
+        assert self.A is not None and self.B is not None
         with self._nvtx_range("optimized_matmul_tcgen05_pipelined"):
             with torch.no_grad():
-                # TODO: Replace with pipelined kernel when implemented
-                # For now, this demonstrates the benchmark structure
-                _ = self.module.matmul_tcgen05(self.A, self.B)
+                _ = matmul_tcgen05_pipelined(self.A, self.B)
         self._synchronize()
 
     def teardown(self) -> None:
@@ -87,7 +81,8 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(BaseBenchmark):
         return {
             "matrix_size": self.size,
             "theoretical_flops": flops,
-            "optimization": "pipelined (placeholder)",
+            "optimization": "pipelined tcgen05 (2-stage async overlap)",
+            "pipelined_kernel_available": True,
         }
 
 
@@ -127,4 +122,3 @@ if __name__ == "__main__":
     print(f"  Performance: {tflops:.1f} TFLOPS")
     print()
     print("Compare with cuBLAS to see the optimization gap.")
-

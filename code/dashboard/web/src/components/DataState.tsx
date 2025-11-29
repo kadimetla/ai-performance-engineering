@@ -92,3 +92,72 @@ export function EmptyState({ title, description, actionLabel, onAction, classNam
 export function Skeleton({ className }: { className?: string }) {
   return <div className={cn('animate-pulse rounded-md bg-white/5', className)} aria-hidden="true" />;
 }
+
+// Skeleton loader for cards
+export function SkeletonCard() {
+  return (
+    <div className="card p-5 animate-pulse">
+      <div className="h-4 w-1/3 bg-white/10 rounded mb-4" />
+      <div className="space-y-3">
+        <div className="h-3 w-full bg-white/5 rounded" />
+        <div className="h-3 w-2/3 bg-white/5 rounded" />
+        <div className="h-3 w-4/5 bg-white/5 rounded" />
+      </div>
+    </div>
+  );
+}
+
+// Skeleton loader for tables
+export function SkeletonTable({ rows = 5 }: { rows?: number }) {
+  return (
+    <div className="card animate-pulse">
+      <div className="card-header">
+        <div className="h-5 w-32 bg-white/10 rounded" />
+        <div className="h-5 w-24 bg-white/5 rounded" />
+      </div>
+      <div className="p-5 space-y-3">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="flex items-center gap-4">
+            <div className="h-4 w-1/4 bg-white/5 rounded" />
+            <div className="h-4 w-1/3 bg-white/5 rounded" />
+            <div className="h-4 w-1/5 bg-white/5 rounded" />
+            <div className="h-4 w-16 bg-white/5 rounded ml-auto" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Skeleton loader for charts
+export function SkeletonChart() {
+  return (
+    <div className="card p-5 animate-pulse">
+      <div className="h-5 w-40 bg-white/10 rounded mb-6" />
+      <div className="h-64 bg-white/5 rounded-lg flex items-end justify-around p-4">
+        {[0.6, 0.8, 0.4, 0.9, 0.5, 0.7, 0.3].map((h, i) => (
+          <div
+            key={i}
+            className="w-8 bg-white/10 rounded-t"
+            style={{ height: `${h * 100}%` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Skeleton loader for stats cards
+export function SkeletonStats() {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="card p-5 animate-pulse">
+          <div className="h-4 w-20 bg-white/10 rounded mb-2" />
+          <div className="h-8 w-16 bg-white/5 rounded mb-1" />
+          <div className="h-3 w-24 bg-white/5 rounded" />
+        </div>
+      ))}
+    </div>
+  );
+}

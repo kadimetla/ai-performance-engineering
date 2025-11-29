@@ -14,8 +14,8 @@ from typing import Iterable, List, Sequence
 
 import torch
 
-from labs.occupancy_tuning import triton_matmul
-from labs.occupancy_tuning.triton_matmul_schedules import MatmulSchedule, SCHEDULES
+from core.profiling.occupancy_tuning import triton_matmul
+from core.profiling.occupancy_tuning.triton_matmul_schedules import MatmulSchedule, SCHEDULES
 
 
 @dataclass

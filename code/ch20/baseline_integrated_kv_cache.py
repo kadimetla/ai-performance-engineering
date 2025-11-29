@@ -152,7 +152,7 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
         """Function to benchmark - baseline integrated KV cache."""
         # Use conditional NVTX ranges - only enabled when profiling
 
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
 
@@ -190,7 +190,7 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_ai_optimization_metrics
+        from core.benchmark.metrics import compute_ai_optimization_metrics
         return compute_ai_optimization_metrics(
             original_time_ms=getattr(self, '_original_ms', 10.0),
             ai_optimized_time_ms=getattr(self, '_optimized_ms', 5.0),

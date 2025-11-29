@@ -148,11 +148,11 @@ def main():
         from ch1.optimized_warp_specialization import OptimizedWarpSpecializationBenchmark
         
         print("Running baseline...")
-        baseline_avg, baseline_median, baseline_times = run_benchmark(BaselineWarpSpecializationBenchmark, iterations=10, warmup=2)
+        baseline_avg, baseline_median, baseline_times = run_benchmark(BaselineWarpSpecializationBenchmark, iterations=10, warmup=5)
         print(f"  Baseline: {baseline_avg:.3f} ms (median: {baseline_median:.3f} ms)")
         
         print("Running optimized...")
-        optimized_avg, optimized_median, optimized_times = run_benchmark(OptimizedWarpSpecializationBenchmark, iterations=10, warmup=2)
+        optimized_avg, optimized_median, optimized_times = run_benchmark(OptimizedWarpSpecializationBenchmark, iterations=10, warmup=5)
         print(f"  Optimized: {optimized_avg:.3f} ms (median: {optimized_median:.3f} ms)")
         
         speedup = baseline_avg / optimized_avg if optimized_avg > 0 else 0
@@ -209,11 +209,11 @@ def main():
         from ch13.optimized_warp_specialization_training import OptimizedWarpSpecializationTrainingBenchmark
         
         print("Running baseline...")
-        baseline_avg, baseline_median, baseline_times = run_benchmark(BaselineWarpSpecializationTrainingBenchmark, iterations=10, warmup=2)
+        baseline_avg, baseline_median, baseline_times = run_benchmark(BaselineWarpSpecializationTrainingBenchmark, iterations=10, warmup=5)
         print(f"  Baseline: {baseline_avg:.3f} ms (median: {baseline_median:.3f} ms)")
         
         print("Running optimized...")
-        optimized_avg, optimized_median, optimized_times = run_benchmark(OptimizedWarpSpecializationTrainingBenchmark, iterations=10, warmup=2)
+        optimized_avg, optimized_median, optimized_times = run_benchmark(OptimizedWarpSpecializationTrainingBenchmark, iterations=10, warmup=5)
         print(f"  Optimized: {optimized_avg:.3f} ms (median: {optimized_median:.3f} ms)")
         
         speedup = baseline_avg / optimized_avg if optimized_avg > 0 else 0

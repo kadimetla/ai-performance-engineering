@@ -42,7 +42,7 @@ def check_nvidia_fs_module():
         else:
             print("  ERROR: nvidia-fs kernel module NOT loaded")
             print("  ℹ️  Load it with: sudo modprobe nvidia-fs")
-            print("  ℹ️  Or run: sudo tools/setup/load_gds_module.sh")
+            print("  ℹ️  Or run: sudo core/scripts/setup/load_gds_module.sh")
             return False
     except Exception as e:
         print(f"  ERROR: Error checking module: {e}")
@@ -240,11 +240,10 @@ def main():
         print("\n  ERROR: Critical check failed: nvidia-fs kernel module not loaded")
         print("\n  To fix:")
         print("    1. Run: sudo modprobe nvidia-fs")
-        print("    2. Or: sudo tools/setup/load_gds_module.sh")
+        print("    2. Or: sudo core/scripts/setup/load_gds_module.sh")
         print("    3. Re-run this script to verify")
         return 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
-

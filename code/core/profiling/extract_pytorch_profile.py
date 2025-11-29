@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarise torch.profiler outputs captured by scripts/pytorch_profiler_runner.py."""
+"""Summarise torch.profiler outputs captured by core/scripts/pytorch_profiler_runner.py."""
 
 import argparse
 import csv

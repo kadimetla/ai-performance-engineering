@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/update_custom_metrics.py.
+"""Unit tests for core/scripts/update_custom_metrics.py.
 
 Run with: pytest tests/test_update_custom_metrics.py -v
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from scripts.update_custom_metrics import (
+from core.scripts.update_custom_metrics import (
     get_chapter_from_path,
     has_conditional_none_return,
     analyze_get_custom_metrics,
@@ -39,7 +39,7 @@ class TestGetChapterFromPath:
     
     def test_no_chapter(self):
         """Should return None for paths without chapter."""
-        assert get_chapter_from_path(Path("benchmark/utils.py")) is None
+        assert get_chapter_from_path(Path("core/benchmark/utils.py")) is None
         assert get_chapter_from_path(Path("labs/test.py")) is None
 
 
@@ -90,7 +90,7 @@ class TestAnalyzeGetCustomMetrics:
         """Should detect use of helper functions."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
             f.write('''
-from benchmark.metrics import compute_memory_transfer_metrics
+from core.benchmark.metrics import compute_memory_transfer_metrics
 
 class MyBenchmark:
     def get_custom_metrics(self):
@@ -202,7 +202,7 @@ class TestHelperSignatures:
         """All signatures should have import statement."""
         for name, sig in HELPER_SIGNATURES.items():
             assert "import" in sig, f"Missing import for {name}"
-            assert "from benchmark.metrics" in sig["import"]
+            assert "from core.benchmark.metrics" in sig["import"]
     
     def test_all_have_params(self):
         """All signatures should have params list."""
@@ -264,7 +264,7 @@ class BaselineBenchmark(BaseBenchmark):
 """Optimized benchmark."""
 
 from core.harness.benchmark_harness import BaseBenchmark
-from benchmark.metrics import compute_memory_transfer_metrics
+from core.benchmark.metrics import compute_memory_transfer_metrics
 
 class OptimizedBenchmark(BaseBenchmark):
     def setup(self):

@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from benchmark.performance_targets import (
+from core.benchmark.performance_targets import (
     TARGETS,
     get_chapter_description,
     get_chapter_metrics,

@@ -41,7 +41,7 @@ class BaselineGemmBenchmark(BaseBenchmark):
         self._synchronize()
 
     def benchmark_fn(self) -> None:
-        from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
+        from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
@@ -69,7 +69,7 @@ class BaselineGemmBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_system_config_metrics
+        from core.benchmark.metrics import compute_system_config_metrics
         return compute_system_config_metrics(
             numa_nodes=getattr(self, 'numa_nodes', 1),
             cpu_cores=getattr(self, 'cpu_cores', 64),

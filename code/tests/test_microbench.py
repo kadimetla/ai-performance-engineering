@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def test_microbench_disk_and_loopback():
-    from monitoring import microbench
+    from core.diagnostics import microbench
 
     disk = microbench.disk_io_test(file_size_mb=1, block_size_kb=64)
     assert "read_gbps" in disk and disk["read_gbps"] is not None
@@ -25,7 +25,7 @@ def test_microbench_disk_and_loopback():
 def test_microbench_pcie_mem_tensor_sfu_cuda():
     """These assume CUDA + torch available on this hardware."""
     import torch
-    from monitoring import microbench
+    from core.diagnostics import microbench
 
     assert torch.cuda.is_available(), "CUDA expected to be available"
 

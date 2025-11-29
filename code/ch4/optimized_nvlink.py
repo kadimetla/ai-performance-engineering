@@ -23,11 +23,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
 
 
 class OptimizedNVLinkBenchmark(BaseBenchmark):
-    """Optimized: NVLink for high-speed GPU-to-GPU communication.
-    
-    NVLink: Uses NVLink for optimized GPU-to-GPU transfers.
-    Provides high bandwidth and low latency compared to PCIe.
-    """
+    """NVLink GPU-to-GPU transfer benchmark."""
     
     def __init__(self):
         super().__init__()
@@ -108,7 +104,7 @@ class OptimizedNVLinkBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_memory_transfer_metrics
+        from core.benchmark.metrics import compute_memory_transfer_metrics
         return compute_memory_transfer_metrics(
             bytes_transferred=self._bytes_transferred if hasattr(self, '_bytes_transferred') else float(getattr(self, 'N', 1024) * 4),
             elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),

@@ -19,7 +19,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
 class BaselineMemoryBoundBenchmark(BaseBenchmark):
@@ -61,7 +61,7 @@ class BaselineMemoryBoundBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_roofline_metrics
+        from core.benchmark.metrics import compute_roofline_metrics
         return compute_roofline_metrics(
             total_flops=float(getattr(self, 'total_flops', getattr(self, 'N', 1024) * 2)),
             total_bytes=float(getattr(self, 'N', 1024) * 4 * 2),

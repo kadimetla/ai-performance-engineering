@@ -1,11 +1,11 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { vi } from 'vitest';
+import '@testing-library/jest-dom';
 import { DeepProfileTab } from '../components/tabs/DeepProfileTab';
 
-const mockUseApiQuery = vi.fn();
+const mockUseApiQuery = jest.fn();
 
-vi.mock('@/lib/useApi', () => ({
+jest.mock('@/lib/useApi', () => ({
   useApiQuery: (...args: unknown[]) => mockUseApiQuery(...(args as any)),
   getErrorMessage: (err: any) => String(err),
 }));
@@ -22,7 +22,7 @@ describe('DeepProfileTab', () => {
           },
           isLoading: false,
           error: null,
-          mutate: vi.fn(),
+          mutate: jest.fn(),
           isValidating: false,
         };
       }
@@ -35,16 +35,16 @@ describe('DeepProfileTab', () => {
           },
           isLoading: false,
           error: null,
-          mutate: vi.fn(),
+          mutate: jest.fn(),
           isValidating: false,
         };
       }
-      return { data: null, isLoading: false, error: null, mutate: vi.fn(), isValidating: false };
+      return { data: null, isLoading: false, error: null, mutate: jest.fn(), isValidating: false };
     });
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
   });
 
   it('renders deep profile content', () => {

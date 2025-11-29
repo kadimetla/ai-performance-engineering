@@ -28,7 +28,7 @@ from torch._dynamo import compiled_autograd
 import time
 from typing import Optional
 from contextlib import nullcontext
-from common.device_utils import get_preferred_device
+from core.common.device_utils import get_preferred_device
 
 # Check if compiled autograd is available
 try:

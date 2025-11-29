@@ -24,7 +24,7 @@ class OptimizedThresholdBenchmark(ThresholdBenchmarkBase):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return optimization metrics for threshold."""
-        from benchmark.metrics import compute_speedup_metrics
+        from core.benchmark.metrics import compute_speedup_metrics
         return compute_speedup_metrics(
             baseline_ms=getattr(self, '_baseline_ms', 1.0),
             optimized_ms=getattr(self, '_last_elapsed_ms', 1.0),

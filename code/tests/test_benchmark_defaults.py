@@ -10,7 +10,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from benchmark.defaults import BenchmarkDefaults, get_defaults, set_defaults
+from core.benchmark.defaults import BenchmarkDefaults, get_defaults, set_defaults
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, ExecutionMode, LaunchVia
 
 
@@ -22,11 +22,11 @@ class TestBenchmarkDefaults:
         defaults = BenchmarkDefaults()
         assert defaults.iterations == 100
         assert defaults.warmup == 10
-        assert defaults.enable_profiling is True
-        assert defaults.enable_nsys is True
+        assert defaults.enable_profiling is False
+        assert defaults.enable_nsys is False
         assert defaults.enable_ncu is True
         assert defaults.use_subprocess is True
-        assert defaults.measurement_timeout_seconds == 180
+        assert defaults.measurement_timeout_seconds == 1200
         assert defaults.execution_mode is None
         assert defaults.launch_via == "python"
     
@@ -34,8 +34,8 @@ class TestBenchmarkDefaults:
         """Test that from_env() returns default values (env vars no longer supported)."""
         defaults = BenchmarkDefaults.from_env()
         # Should use declared defaults
-        assert defaults.enable_profiling is True, "enable_profiling should default to True"
-        assert defaults.enable_nsys is True, "enable_nsys should default to True"
+        assert defaults.enable_profiling is False, "enable_profiling should default to False"
+        assert defaults.enable_nsys is False, "enable_nsys should default to False"
         assert defaults.enable_ncu is True, "enable_ncu should default to True"
         assert defaults.use_subprocess is True, "use_subprocess should default to True"
         assert defaults.execution_mode is None, "execution_mode should default to None"
@@ -52,8 +52,8 @@ class TestBenchmarkConfigDefaults:
         # Should use defaults from BenchmarkDefaults
         assert config.iterations == 100
         assert config.warmup == 10
-        assert config.enable_profiling is True, "enable_profiling should default to True"
-        assert config.enable_nsys is True, "enable_nsys should default to True"
+        assert config.enable_profiling is False, "enable_profiling should default to False"
+        assert config.enable_nsys is False, "enable_nsys should default to False"
         assert config.enable_ncu is True, "enable_ncu should default to True"
         assert config.use_subprocess is True, "use_subprocess should default to True"
         assert config.execution_mode == ExecutionMode.SUBPROCESS
@@ -72,17 +72,14 @@ class TestBenchmarkTimeoutMultiplier:
     
     def test_multiplier_scales_default_timeouts(self):
         """Default timeout fields should scale when multiplier > 1."""
-        set_defaults(BenchmarkDefaults(timeout_multiplier=1.0))
+        base_defaults = BenchmarkDefaults(timeout_multiplier=1.0)
+        set_defaults(base_defaults)
         config = BenchmarkConfig(timeout_multiplier=2.0)
-        # setup_timeout_seconds default 60 -> 120 after scaling
-        assert config.setup_timeout_seconds == 120
-        # measurement_timeout_seconds default 180 -> 360 after scaling
-        assert config.measurement_timeout_seconds == 360
-        # Derived warmup timeout should follow measurement timeout
-        assert config.warmup_timeout_seconds == 360
-        # Profiler-specific timeouts should also scale
-        assert config.nsys_timeout_seconds == 240
-        assert config.ncu_timeout_seconds == 360
+        assert config.setup_timeout_seconds == (base_defaults.setup_timeout_seconds or 0) * 2
+        assert config.measurement_timeout_seconds == base_defaults.measurement_timeout_seconds * 2
+        assert config.warmup_timeout_seconds == config.measurement_timeout_seconds
+        assert config.nsys_timeout_seconds == base_defaults.nsys_timeout_seconds * 2
+        assert config.ncu_timeout_seconds == base_defaults.ncu_timeout_seconds * 2
     
     def test_multiplier_does_not_override_explicit_values(self):
         """Explicit per-stage overrides must remain unchanged."""
@@ -113,7 +110,7 @@ class TestWarmupEnforcement:
     def test_minimum_warmup_enforced(self):
         """Test that warmup below minimum is auto-corrected to minimum."""
         import warnings
-        from benchmark.defaults import MINIMUM_WARMUP_ITERATIONS
+        from core.benchmark.defaults import MINIMUM_WARMUP_ITERATIONS
         
         # Setting warmup below minimum should trigger warning and auto-correct
         with warnings.catch_warnings(record=True) as w:
@@ -132,7 +129,7 @@ class TestWarmupEnforcement:
     def test_warmup_at_minimum_is_accepted(self):
         """Test that warmup exactly at minimum doesn't trigger warning."""
         import warnings
-        from benchmark.defaults import MINIMUM_WARMUP_ITERATIONS
+        from core.benchmark.defaults import MINIMUM_WARMUP_ITERATIONS
         
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -146,7 +143,7 @@ class TestWarmupEnforcement:
     def test_warmup_above_minimum_is_accepted(self):
         """Test that warmup above minimum is accepted unchanged."""
         import warnings
-        from benchmark.defaults import MINIMUM_WARMUP_ITERATIONS
+        from core.benchmark.defaults import MINIMUM_WARMUP_ITERATIONS
         
         high_warmup = MINIMUM_WARMUP_ITERATIONS + 10
         with warnings.catch_warnings(record=True) as w:
@@ -160,7 +157,7 @@ class TestWarmupEnforcement:
     
     def test_smoke_mode_respects_minimum_warmup(self):
         """Test that smoke mode doesn't set warmup below minimum."""
-        from benchmark.defaults import BenchmarkDefaults, MINIMUM_WARMUP_ITERATIONS
+        from core.benchmark.defaults import BenchmarkDefaults, MINIMUM_WARMUP_ITERATIONS
         
         smoke_defaults = BenchmarkDefaults.for_smoke(smoke=True)
         assert smoke_defaults.warmup >= MINIMUM_WARMUP_ITERATIONS, \
@@ -169,7 +166,7 @@ class TestWarmupEnforcement:
     def test_validate_warmup_function(self):
         """Test the validate_warmup helper function directly."""
         import warnings
-        from benchmark.defaults import validate_warmup, MINIMUM_WARMUP_ITERATIONS
+        from core.benchmark.defaults import validate_warmup, MINIMUM_WARMUP_ITERATIONS
         
         # Test low warmup is corrected
         with warnings.catch_warnings(record=True) as w:

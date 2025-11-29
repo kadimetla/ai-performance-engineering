@@ -2,7 +2,7 @@
 """Extract NVLink throughput summaries from Nsight Systems reports.
 
 Usage:
-    python tools/profiling/parse_nvlink_metrics.py artifacts/<run>/<file>.nsys-rep
+    python core/profiling/parse_nvlink_metrics.py artifacts/<run>/<file>.nsys-rep
 
 The script shells out to ``nsys stats --report nvlink --format csv`` and prints
 the rows that contain throughput/byte metrics so teams can diff the values

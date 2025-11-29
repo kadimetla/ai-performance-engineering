@@ -1,13 +1,13 @@
 # Chapter 10 Makefile - Memory Pipelines and GPUDirect Storage with architecture-aware builds
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo -Xptxas=-v
 SUFFIX = $(TARGET_SUFFIX)
 
 # Include path for common headers
 INCLUDES = -I..
-COMMON_HEADERS = ../common/headers/arch_detection.cuh ../common/headers/tma_helpers.cuh
+COMMON_HEADERS = ../core/core/common/headers/arch_detection.cuh ../core/core/common/headers/tma_helpers.cuh
 
 # Explicit list of CUDA examples
 BASE_TARGETS = baseline_cluster_group optimized_cluster_group \

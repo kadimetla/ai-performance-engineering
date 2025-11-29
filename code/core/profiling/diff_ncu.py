@@ -11,7 +11,7 @@ import pandas as pd
 
 def main() -> None:
     if len(sys.argv) != 3:
-        print("Usage: python tools/profiling/diff_ncu.py <baseline.csv> <candidate.csv>", file=sys.stderr)
+        print("Usage: python core/profiling/diff_ncu.py <baseline.csv> <candidate.csv>", file=sys.stderr)
         raise SystemExit(2)
 
     a_path = Path(sys.argv[1]).expanduser().resolve()

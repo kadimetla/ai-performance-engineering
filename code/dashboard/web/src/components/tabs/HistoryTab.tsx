@@ -103,8 +103,8 @@ export function HistoryTab() {
               <RefreshCw className="w-4 h-4 text-white/50" />
             </button>
           </div>
+        </div>
       </div>
-    </div>
 
       {summary && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

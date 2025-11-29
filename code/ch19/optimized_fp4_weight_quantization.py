@@ -417,7 +417,7 @@ class OptimizedFP4WeightQuantizationBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return optimized FP4 metrics using standard helpers."""
-        from benchmark.metrics import compute_precision_metrics
+        from core.benchmark.metrics import compute_precision_metrics
         
         # Use standard precision metrics (FP4 = 8x memory reduction)
         # Note: FP4 main benefit is memory, not always speed

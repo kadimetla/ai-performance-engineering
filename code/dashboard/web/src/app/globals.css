@@ -25,6 +25,7 @@
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
+  font-family: var(--font-sans), 'Space Grotesk', system-ui, sans-serif;
 }
 
 /* Background gradients */

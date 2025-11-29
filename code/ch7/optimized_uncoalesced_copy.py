@@ -11,7 +11,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
-from benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
 class OptimizedCopyCoalescedBenchmark(CudaBinaryBenchmark):
@@ -32,7 +32,7 @@ class OptimizedCopyCoalescedBenchmark(CudaBinaryBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics for uncoalesced_copy."""
-        from benchmark.metrics import compute_memory_access_metrics
+        from core.benchmark.metrics import compute_memory_access_metrics
         return compute_memory_access_metrics(
             bytes_requested=self._bytes_requested,
             bytes_actually_transferred=self._bytes_requested,  # Ideal case

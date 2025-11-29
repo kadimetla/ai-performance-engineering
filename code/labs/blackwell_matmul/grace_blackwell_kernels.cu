@@ -10,7 +10,7 @@
 #include <cuda/pipeline>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
-#include "../../common/headers/tma_helpers.cuh"
+#include "../../core/common/headers/tma_helpers.cuh"
 
 namespace cg = cooperative_groups;
 using std::max;

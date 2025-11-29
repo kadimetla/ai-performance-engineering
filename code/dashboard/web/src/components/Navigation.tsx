@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { Benchmark } from '@/types';
@@ -26,7 +26,6 @@ import {
   Palette,
   RefreshCw,
   Command,
-  Settings,
   Volume2,
   VolumeX,
   Timer,
@@ -34,8 +33,17 @@ import {
   Target,
   Table,
   Keyboard,
+  FileText,
+  ChevronDown,
+  ChevronRight,
+  Settings,
+  Activity,
+  Layers,
+  Wrench,
+  LucideIcon,
 } from 'lucide-react';
 
+// Individual tab definitions
 export const tabs = [
   { id: 'overview', label: 'Overview', icon: BarChart3, shortcut: '1' },
   { id: 'compare', label: 'Compare', icon: GitCompare, shortcut: '2' },
@@ -43,21 +51,88 @@ export const tabs = [
   { id: 'roofline', label: 'Roofline', icon: Cpu, shortcut: '4' },
   { id: 'profiler', label: 'Profiler', icon: Flame, shortcut: '5' },
   { id: 'memory', label: 'Memory', icon: HardDrive, shortcut: '6' },
-  { id: 'compile', label: 'Compile', icon: Zap, gradient: 'from-yellow-500/20 to-orange-500/20' },
-  { id: 'deepprofile', label: 'Deep Profile', icon: Microscope, gradient: 'from-blue-500/20 to-cyan-500/20' },
-  { id: 'liveopt', label: 'Live Optimizer', icon: Rocket, gradient: 'from-green-500/20 to-emerald-500/20' },
+  { id: 'compile', label: 'Compile', icon: Zap },
+  { id: 'deepprofile', label: 'Deep Profile', icon: Microscope },
+  { id: 'liveopt', label: 'Live Optimizer', icon: Rocket },
   { id: 'analysis', label: 'Analysis', icon: PieChart },
-  { id: 'advanced', label: 'Advanced', icon: Sparkles, gradient: 'from-purple-500/20 to-blue-500/20' },
-  { id: 'multigpu', label: 'Multi-GPU', icon: Network, gradient: 'from-green-500/20 to-teal-500/20' },
-  { id: 'distributed', label: 'Distributed', icon: Server, gradient: 'from-red-500/20 to-orange-500/20' },
-  { id: 'rlhf', label: 'RL/RLHF', icon: Gamepad2, gradient: 'from-purple-500/20 to-pink-500/20' },
-  { id: 'inference', label: 'Inference', icon: Gauge, gradient: 'from-sky-500/20 to-cyan-500/20' },
+  { id: 'advanced', label: 'Advanced', icon: Sparkles },
+  { id: 'multigpu', label: 'Multi-GPU', icon: Network },
+  { id: 'distributed', label: 'Distributed', icon: Server },
+  { id: 'reports', label: 'Reports', icon: FileText },
+  { id: 'rlhf', label: 'RL/RLHF', icon: Gamepad2 },
+  { id: 'inference', label: 'Inference', icon: Gauge },
   { id: 'history', label: 'History', icon: History },
   { id: 'batchopt', label: 'Batch Opt', icon: Package },
   { id: 'webhooks', label: 'Webhooks', icon: Bell },
-  { id: 'microbench', label: 'Microbench', icon: Timer, gradient: 'from-amber-500/20 to-orange-500/20' },
+  { id: 'microbench', label: 'Microbench', icon: Timer },
   { id: 'themes', label: 'Themes', icon: Palette },
 ];
+
+// Grouped navigation structure
+interface TabGroup {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  color: string;
+  tabs: string[]; // tab IDs
+}
+
+const tabGroups: TabGroup[] = [
+  {
+    id: 'overview',
+    label: 'Overview',
+    icon: BarChart3,
+    color: 'text-accent-primary',
+    tabs: ['overview'],
+  },
+  {
+    id: 'analytics',
+    label: 'Analytics',
+    icon: PieChart,
+    color: 'text-accent-info',
+    tabs: ['compare', 'analysis', 'history', 'reports'],
+  },
+  {
+    id: 'profiling',
+    label: 'Profiling',
+    icon: Flame,
+    color: 'text-accent-warning',
+    tabs: ['roofline', 'profiler', 'memory', 'deepprofile', 'microbench'],
+  },
+  {
+    id: 'optimization',
+    label: 'Optimization',
+    icon: Rocket,
+    color: 'text-accent-success',
+    tabs: ['compile', 'liveopt', 'batchopt'],
+  },
+  {
+    id: 'ai',
+    label: 'AI / LLM',
+    icon: Brain,
+    color: 'text-accent-secondary',
+    tabs: ['insights', 'rlhf', 'inference'],
+  },
+  {
+    id: 'infrastructure',
+    label: 'Infrastructure',
+    icon: Server,
+    color: 'text-blue-400',
+    tabs: ['multigpu', 'distributed'],
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    icon: Settings,
+    color: 'text-white/60',
+    tabs: ['advanced', 'webhooks', 'themes'],
+  },
+];
+
+// Get tab data by ID
+function getTabById(id: string) {
+  return tabs.find((t) => t.id === id);
+}
 
 interface NavigationProps {
   activeTab: string;
@@ -93,6 +168,24 @@ export function Navigation({
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [timerRunning, setTimerRunning] = useState(false);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Find which group the active tab belongs to
+  const activeGroup = useMemo(() => {
+    return tabGroups.find((g) => g.tabs.includes(activeTab))?.id || 'overview';
+  }, [activeTab]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setExpandedGroup(null);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Timer effect
   useEffect(() => {
@@ -114,6 +207,7 @@ export function Navigation({
       // Close on escape
       if (e.key === 'Escape') {
         setShowCommandPalette(false);
+        setExpandedGroup(null);
       }
       // Tab shortcuts 1-9
       if (!showCommandPalette && e.key >= '1' && e.key <= '9') {
@@ -166,7 +260,26 @@ export function Navigation({
       icon: RefreshCw,
     },
     onOpenShortcuts && { label: 'Keyboard Shortcuts', action: onOpenShortcuts, icon: Command },
-  ].filter(Boolean) as { label: string; action: () => void; icon: any }[];
+  ].filter(Boolean) as { label: string; action: () => void; icon: LucideIcon }[];
+
+  const handleGroupClick = (groupId: string) => {
+    const group = tabGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    
+    // If it's a single-tab group (like Overview), just navigate
+    if (group.tabs.length === 1) {
+      onTabChange(group.tabs[0]);
+      setExpandedGroup(null);
+    } else {
+      // Toggle dropdown
+      setExpandedGroup(expandedGroup === groupId ? null : groupId);
+    }
+  };
+
+  const handleTabSelect = (tabId: string) => {
+    onTabChange(tabId);
+    setExpandedGroup(null);
+  };
 
   return (
     <>
@@ -248,27 +361,100 @@ export function Navigation({
             </div>
           </div>
 
-          {/* Tabs row */}
-          <div className="flex items-center gap-1 py-2 overflow-x-auto hide-scrollbar">
-            {tabs.map((tab) => {
-              const Icon = tab.icon;
+          {/* Grouped tabs row */}
+          <div className="flex items-center gap-1 py-2 overflow-x-auto hide-scrollbar" ref={dropdownRef}>
+            {tabGroups.map((group) => {
+              const GroupIcon = group.icon;
+              const isActive = activeGroup === group.id;
+              const isExpanded = expandedGroup === group.id;
+              const isSingleTab = group.tabs.length === 1;
+              
+              // Get active tab label if in this group
+              const activeTabInGroup = group.tabs.includes(activeTab) ? getTabById(activeTab) : null;
+              const displayLabel = activeTabInGroup && !isSingleTab 
+                ? activeTabInGroup.label 
+                : group.label;
+
               return (
-                <button
-                  key={tab.id}
-                  onClick={() => onTabChange(tab.id)}
-                  className={cn(
-                    'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap',
-                    tab.gradient && `bg-gradient-to-r ${tab.gradient}`,
-                    activeTab === tab.id
-                      ? 'bg-accent-primary/20 text-accent-primary border border-accent-primary/30'
-                      : 'text-white/60 hover:text-white hover:bg-white/5'
+                <div key={group.id} className="relative">
+                  <button
+                    onClick={() => handleGroupClick(group.id)}
+                    className={cn(
+                      'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap',
+                      isActive
+                        ? 'bg-accent-primary/20 text-accent-primary border border-accent-primary/30'
+                        : 'text-white/60 hover:text-white hover:bg-white/5'
+                    )}
+                  >
+                    <GroupIcon className={cn('w-4 h-4', isActive && group.color)} />
+                    <span>{displayLabel}</span>
+                    {!isSingleTab && (
+                      <ChevronDown 
+                        className={cn(
+                          'w-3 h-3 transition-transform',
+                          isExpanded && 'rotate-180'
+                        )} 
+                      />
+                    )}
+                  </button>
+
+                  {/* Dropdown menu */}
+                  {isExpanded && !isSingleTab && (
+                    <div className="absolute top-full left-0 mt-1 py-1 min-w-[180px] bg-brand-card border border-white/10 rounded-xl shadow-xl z-50 animate-slide-in">
+                      {group.tabs.map((tabId) => {
+                        const tab = getTabById(tabId);
+                        if (!tab) return null;
+                        const TabIcon = tab.icon;
+                        const isTabActive = activeTab === tabId;
+                        
+                        return (
+                          <button
+                            key={tabId}
+                            onClick={() => handleTabSelect(tabId)}
+                            className={cn(
+                              'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors',
+                              isTabActive
+                                ? 'bg-accent-primary/20 text-accent-primary'
+                                : 'text-white/70 hover:text-white hover:bg-white/5'
+                            )}
+                          >
+                            <TabIcon className="w-4 h-4" />
+                            <span>{tab.label}</span>
+                            {tab.shortcut && (
+                              <kbd className="ml-auto px-1.5 py-0.5 bg-white/5 border border-white/10 rounded text-[10px] text-white/40 font-mono">
+                                {tab.shortcut}
+                              </kbd>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span className="hidden xl:inline">{tab.label}</span>
-                </button>
+                </div>
               );
             })}
+
+            {/* Quick navigation dots for mobile */}
+            <div className="flex items-center gap-1 ml-auto pl-4 border-l border-white/10 xl:hidden">
+              {tabs.slice(0, 6).map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => onTabChange(tab.id)}
+                    className={cn(
+                      'p-2 rounded-lg transition-all',
+                      activeTab === tab.id
+                        ? 'bg-accent-primary/20 text-accent-primary'
+                        : 'text-white/40 hover:text-white hover:bg-white/5'
+                    )}
+                    title={`${tab.label} (${tab.shortcut})`}
+                  >
+                    <Icon className="w-4 h-4" />
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </nav>
@@ -288,7 +474,7 @@ export function Navigation({
               <Search className="w-5 h-5 text-white/40" />
               <input
                 type="text"
-                placeholder="Search commands..."
+                placeholder="Search tabs, benchmarks, actions..."
                 value={commandQuery}
                 onChange={(e) => setCommandQuery(e.target.value)}
                 className="flex-1 bg-transparent text-white text-lg outline-none placeholder:text-white/40"
@@ -300,41 +486,77 @@ export function Navigation({
             </div>
 
             {/* Results */}
-            <div className="max-h-[420px] overflow-y-auto space-y-2">
-              <div>
-                <div className="p-2 text-xs text-white/40 uppercase tracking-wider">Navigation</div>
-                {filteredTabs.map((tab) => {
-                  const Icon = tab.icon;
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => {
-                        onTabChange(tab.id);
-                        setShowCommandPalette(false);
-                        setCommandQuery('');
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors"
-                    >
-                      <Icon className="w-5 h-5 text-white/60" />
-                      <div className="flex-1 text-left">
-                        <div className="text-white font-medium">{tab.label}</div>
-                        <div className="text-sm text-white/40">Go to {tab.label} tab</div>
-                      </div>
-                      {tab.shortcut && (
-                        <kbd className="px-2 py-1 bg-white/5 border border-white/10 rounded text-xs text-white/40 font-mono">
-                          {tab.shortcut}
-                        </kbd>
-                      )}
-                    </button>
+            <div className="max-h-[420px] overflow-y-auto">
+              {/* Grouped Navigation */}
+              {tabGroups.map((group) => {
+                const groupTabs = group.tabs
+                  .map(getTabById)
+                  .filter(Boolean)
+                  .filter(
+                    (tab) =>
+                      !commandQuery ||
+                      tab!.label.toLowerCase().includes(commandQuery.toLowerCase()) ||
+                      tab!.id.toLowerCase().includes(commandQuery.toLowerCase())
                   );
-                })}
-              </div>
+
+                if (groupTabs.length === 0) return null;
+
+                const GroupIcon = group.icon;
+
+                return (
+                  <div key={group.id}>
+                    <div className="flex items-center gap-2 px-4 py-2 text-xs text-white/40 uppercase tracking-wider">
+                      <GroupIcon className={cn('w-3 h-3', group.color)} />
+                      {group.label}
+                    </div>
+                    {groupTabs.map((tab) => {
+                      if (!tab) return null;
+                      const Icon = tab.icon;
+                      return (
+                        <button
+                          key={tab.id}
+                          onClick={() => {
+                            onTabChange(tab.id);
+                            setShowCommandPalette(false);
+                            setCommandQuery('');
+                          }}
+                          className={cn(
+                            'w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors',
+                            activeTab === tab.id && 'bg-accent-primary/10'
+                          )}
+                        >
+                          <Icon className="w-5 h-5 text-white/60" />
+                          <div className="flex-1 text-left">
+                            <div className="text-white font-medium">{tab.label}</div>
+                          </div>
+                          {tab.shortcut && (
+                            <kbd className="px-2 py-1 bg-white/5 border border-white/10 rounded text-xs text-white/40 font-mono">
+                              {tab.shortcut}
+                            </kbd>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
 
               {filteredBenchmarks.length > 0 && (
                 <div>
-                  <div className="p-2 text-xs text-white/40 uppercase tracking-wider">Benchmarks</div>
+                  <div className="flex items-center gap-2 px-4 py-2 text-xs text-white/40 uppercase tracking-wider">
+                    <Activity className="w-3 h-3 text-accent-success" />
+                    Benchmarks
+                  </div>
                   {filteredBenchmarks.map((b, idx) => (
-                    <div key={idx} className="flex items-center justify-between px-4 py-3">
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors cursor-pointer"
+                      onClick={() => {
+                        onTabChange('overview');
+                        setShowCommandPalette(false);
+                        setCommandQuery('');
+                      }}
+                    >
                       <div>
                         <div className="text-white font-medium">{b.name}</div>
                         <div className="text-xs text-white/40">{b.chapter}</div>
@@ -349,9 +571,12 @@ export function Navigation({
                 </div>
               )}
 
-              {actionCommands.length > 0 && (
+              {actionCommands.length > 0 && (!commandQuery || 'actions'.includes(commandQuery.toLowerCase())) && (
                 <div>
-                  <div className="p-2 text-xs text-white/40 uppercase tracking-wider">Actions</div>
+                  <div className="flex items-center gap-2 px-4 py-2 text-xs text-white/40 uppercase tracking-wider">
+                    <Wrench className="w-3 h-3 text-accent-warning" />
+                    Actions
+                  </div>
                   {actionCommands.map((item, idx) => {
                     const Icon = item.icon;
                     return (

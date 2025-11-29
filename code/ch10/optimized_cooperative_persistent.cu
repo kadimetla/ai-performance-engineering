@@ -10,7 +10,7 @@
 #include <random>
 #include <vector>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 namespace cg = cooperative_groups;
 

@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 import torch
 
-from benchmark.blackwell_requirements import ensure_blackwell_tma_supported
+from core.benchmark.blackwell_requirements import ensure_blackwell_tma_supported
 
 MX_BLOCK_SIZE = 32  # Microscaling block granularity for MXFP8/NVFP4 paths.
 

@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from labs.occupancy_tuning.triton_matmul_schedules import (
+from core.profiling.occupancy_tuning.triton_matmul_schedules import (
     EXTRA_SCHEDULE,
     TritonMatmulProtonBenchmark,
 )

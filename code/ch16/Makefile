@@ -1,6 +1,6 @@
 # Chapter 16 Makefile - Inference profiling and optimization with architecture-aware builds
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo $(CUDA_NVTX_CFLAGS)
 NVCC_LIBS = -lcuda $(CUDA_NVTX_LDFLAGS)

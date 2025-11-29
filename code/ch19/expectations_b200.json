@@ -26,6 +26,30 @@
       },
       "type": "python"
     },
+    "fp4_hardware_kernel": {
+      "example": "fp4_hardware_kernel",
+      "metadata": {
+        "best_optimization": "optimized_fp4_hardware_kernel",
+        "best_optimization_file": "optimized_fp4_hardware_kernel.py",
+        "best_optimization_speedup": 21.603115660097668,
+        "best_optimization_time_ms": 311.17064208984374,
+        "git_commit": "a0436ce2692b1ecdd2ac8aa27bf76762b9116789",
+        "updated_at": "2025-11-29T01:07:32.307597"
+      },
+      "metrics": {
+        "baseline_p75_ms": 6706.0849609375,
+        "baseline_throughput.latency_ms": 6722.25537109375,
+        "baseline_throughput.requests_per_s": 0.14875959700967062,
+        "baseline_time_ms": 6722.25537109375,
+        "best_optimized_p75_ms": 321.6717529296875,
+        "best_optimized_speedup": 21.603115660097668,
+        "best_optimized_throughput.latency_ms": 311.17064208984374,
+        "best_optimized_throughput.requests_per_s": 3.2136707797494335,
+        "best_optimized_time_ms": 311.17064208984374,
+        "best_speedup": 21.603115660097668
+      },
+      "type": "python"
+    },
     "fp4_weight_quantization": {
       "example": "fp4_weight_quantization",
       "metadata": {

@@ -19,13 +19,13 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
-from profiling.gpu_memory_logger import (  # noqa: E402
+from core.profiling.gpu_memory_logger import (  # noqa: E402
     GpuMemoryLogger,
     resolve_gpu_log_interval,
     resolve_gpu_log_path,
 )
-from profiling.gpu_telemetry import query_gpu_telemetry  # noqa: E402
-from optimization.moe_inference import (  # noqa: E402
+from core.profiling.gpu_telemetry import query_gpu_telemetry  # noqa: E402
+from core.optimization.moe_inference import (  # noqa: E402
     MoeInferenceConfig,
     SimpleMoEGPT,
     allocate_kv_cache,
@@ -216,7 +216,7 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return inference metrics for moe_inference."""
-        from benchmark.metrics import compute_inference_metrics
+        from core.benchmark.metrics import compute_inference_metrics
         return compute_inference_metrics(
             ttft_ms=getattr(self, '_ttft_ms', 10.0),
             tpot_ms=getattr(self, '_tpot_ms', 1.0),

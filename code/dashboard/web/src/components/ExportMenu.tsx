@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Download, FileText, FileSpreadsheet, FileDown, Loader2 } from 'lucide-react';
-import { exportCSV, exportCSVDetailed, exportPDF, exportHTML, generateReport } from '@/lib/api';
+import { exportCSV, exportCSVDetailed, exportPDF, exportHTML, exportGeneric } from '@/lib/api';
 import { useToast } from './Toast';
 import { cn } from '@/lib/utils';
 
@@ -35,8 +35,9 @@ export function ExportMenu() {
           filename = `performance_report_${new Date().toISOString().split('T')[0]}.html`;
           break;
         case 'md':
-          const report = await generateReport('md');
-          blob = new Blob([JSON.stringify(report, null, 2)], { type: 'text/markdown' });
+          const md = await exportGeneric('markdown');
+          const payload = typeof md.payload === 'string' ? md.payload : JSON.stringify(md.payload, null, 2);
+          blob = new Blob([payload], { type: 'text/markdown' });
           filename = `performance_report_${new Date().toISOString().split('T')[0]}.md`;
           break;
         default:
@@ -156,5 +157,4 @@ export function ExportMenu() {
     </div>
   );
 }
-
 

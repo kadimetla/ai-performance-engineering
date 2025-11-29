@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 _CLI_BACKEND: Optional[str] = None
 _BACKEND_CHOICES = ("auto", "cudnn", "flash", "math")

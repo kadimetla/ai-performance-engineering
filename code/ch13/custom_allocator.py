@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 from arch_config import ArchitectureConfig
-from common.device_utils import cuda_supported, get_preferred_device
+from core.common.device_utils import cuda_supported, get_preferred_device
 import torch
 
 _ARCH_CFG = ArchitectureConfig()

@@ -95,7 +95,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.distributed as dist
 
-from optimization.symmetric_memory_patch import (
+from core.optimization.symmetric_memory_patch import (
     ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
 )
 

@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
-from labs.occupancy_tuning.triton_matmul_schedules import (
+from core.profiling.occupancy_tuning.triton_matmul_schedules import (
     OPTIMIZED_SCHEDULE,
     TritonMatmulProtonBenchmark,
 )

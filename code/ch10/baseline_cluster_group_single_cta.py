@@ -11,7 +11,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
-from benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
 class BaselineClusterGroupSingleCtaBenchmark(CudaBinaryBenchmark):
@@ -31,7 +31,7 @@ class BaselineClusterGroupSingleCtaBenchmark(CudaBinaryBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_pipeline_metrics
+        from core.benchmark.metrics import compute_pipeline_metrics
         return compute_pipeline_metrics(
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),

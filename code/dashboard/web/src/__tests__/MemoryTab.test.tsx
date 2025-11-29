@@ -1,16 +1,16 @@
 import React, { type ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, vi } from 'vitest';
+import '@testing-library/jest-dom';
 import { MemoryTab } from '../components/tabs/MemoryTab';
 
-const mockUseApiQuery = vi.fn();
+const mockUseApiQuery = jest.fn();
 
-vi.mock('@/lib/useApi', () => ({
+jest.mock('@/lib/useApi', () => ({
   useApiQuery: (...args: unknown[]) => mockUseApiQuery(...(args as any)),
   getErrorMessage: (err: any) => String(err),
 }));
 
-vi.mock('recharts', () => {
+jest.mock('recharts', () => {
   const Wrapper = ({ children }: { children: ReactNode }) => <div>{children}</div>;
   const Component = ({ children }: { children: ReactNode }) => <div>{children}</div>;
   return {
@@ -44,13 +44,13 @@ describe('MemoryTab', () => {
       },
       isLoading: false,
       error: null,
-      mutate: vi.fn(),
+      mutate: jest.fn(),
       isValidating: false,
     });
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
   });
 
   it('renders memory stats and allocations', () => {

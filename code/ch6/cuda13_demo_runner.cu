@@ -2,7 +2,7 @@
 #include <cuda_runtime.h>
 
 #if defined(CUDART_VERSION) && (CUDART_VERSION >= 13000)
-#include "../common/cuda13_demo_runner.cuh"
+#include "../core/common/cuda13_demo_runner.cuh"
 #endif
 
 int main() {

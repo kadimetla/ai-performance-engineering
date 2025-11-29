@@ -1,12 +1,12 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { vi } from 'vitest';
+import '@testing-library/jest-dom';
 import { ProfilerTab } from '../components/tabs/ProfilerTab';
 
-const mockUseApiQuery = vi.fn();
-const mockUseApiMutation = vi.fn();
+const mockUseApiQuery = jest.fn();
+const mockUseApiMutation = jest.fn();
 
-vi.mock('@/lib/useApi', () => ({
+jest.mock('@/lib/useApi', () => ({
   useApiQuery: (...args: unknown[]) => mockUseApiQuery(...(args as any)),
   useApiMutation: (...args: unknown[]) => mockUseApiMutation(...(args as any)),
   getErrorMessage: (err: any) => String(err),
@@ -24,17 +24,17 @@ describe('ProfilerTab', () => {
       },
       isLoading: false,
       error: null,
-      mutate: vi.fn(),
+      mutate: jest.fn(),
       isValidating: false,
     });
     mockUseApiMutation.mockReturnValue({
-      trigger: vi.fn(),
+      trigger: jest.fn(),
       isMutating: false,
     });
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
   });
 
   it('renders profiler data', () => {

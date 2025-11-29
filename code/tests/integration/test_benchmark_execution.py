@@ -22,7 +22,7 @@ import torch
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 from core.utils.chapter_compare_template import discover_benchmarks, load_benchmark
 from core.discovery import discover_all_chapters
-from benchmark.artifact_manager import ArtifactManager
+from core.benchmark.artifact_manager import ArtifactManager
 
 
 # Skip tests if CUDA is not available
@@ -59,7 +59,7 @@ class TestBenchmarkExecutionPipeline:
         
         config = BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_profiling=False,
             enable_memory_tracking=True,
         )
@@ -72,7 +72,7 @@ class TestBenchmarkExecutionPipeline:
         assert run.manifest is not None
         assert run.manifest.hardware is not None
         assert run.manifest.software is not None
-        assert run.manifest.git_info is not None
+        assert run.manifest.git is not None
         
         # Verify result exists
         assert run.result is not None
@@ -103,7 +103,7 @@ class TestBenchmarkExecutionPipeline:
         
         config = BenchmarkConfig(
             iterations=10,
-            warmup=2,
+            warmup=5,
             enable_profiling=False,
             enable_memory_tracking=True,
         )
@@ -114,7 +114,7 @@ class TestBenchmarkExecutionPipeline:
         # Verify result structure
         assert result.timing is not None
         assert result.timing.iterations == 10
-        assert result.timing.warmup_iterations == 2
+        assert result.timing.warmup_iterations == harness.config.warmup
         assert result.timing.mean_ms > 0
         assert result.timing.median_ms > 0
         
@@ -137,7 +137,7 @@ class TestBenchmarkExecutionPipeline:
         benchmark = FailingBenchmark()
         config = BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_profiling=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
@@ -190,7 +190,7 @@ class TestBenchmarkExecutionPipeline:
         
         config = BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_profiling=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
@@ -207,4 +207,3 @@ class TestBenchmarkExecutionPipeline:
         assert 'result' in data
         assert 'run_id' in data
         assert data['run_id'] == "test_serialization"
-

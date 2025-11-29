@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 constexpr int N = 1 << 20;
 

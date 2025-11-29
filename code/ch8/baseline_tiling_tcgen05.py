@@ -18,8 +18,8 @@ from ch8.baseline_tiling import BaselineTilingBenchmark
 def _check_tcgen05_extension_available() -> tuple[bool, Optional[str]]:
     """Check if the tcgen05 tiling extension can be built."""
     try:
-        from benchmark.tcgen05_requirements import ensure_tcgen05_supported
-        from common.tcgen05 import load_tiling_tcgen05_module
+        from core.benchmark.tcgen05_requirements import ensure_tcgen05_supported
+        from core.common.tcgen05 import load_tiling_tcgen05_module
         ensure_tcgen05_supported(
             loader=load_tiling_tcgen05_module,
             module_name="ch8 tiling tcgen05 kernels",
@@ -48,7 +48,7 @@ class BaselineTilingBenchmarkTCGen05(BaselineTilingBenchmark):
         if not available:
             raise RuntimeError(reason or "SKIPPED: tcgen05 extension unavailable")
         
-        from common.tcgen05 import load_tiling_tcgen05_module
+        from core.common.tcgen05 import load_tiling_tcgen05_module
         self.tcgen05_extension = load_tiling_tcgen05_module()
         # tcgen05 kernels require fp16 operands.
         self.tensor_dtype = torch.float16
@@ -86,7 +86,7 @@ class BaselineTilingBenchmarkTCGen05(BaselineTilingBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return optimization metrics for tiling_tcgen05."""
-        from benchmark.metrics import compute_speedup_metrics
+        from core.benchmark.metrics import compute_speedup_metrics
         return compute_speedup_metrics(
             baseline_ms=getattr(self, '_baseline_ms', 1.0),
             optimized_ms=getattr(self, '_last_elapsed_ms', 1.0),

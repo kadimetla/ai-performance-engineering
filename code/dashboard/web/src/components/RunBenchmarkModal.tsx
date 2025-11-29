@@ -155,9 +155,6 @@ export function RunBenchmarkModal({ isOpen, onClose, benchmarks, onRunComplete }
                   {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                   {running ? 'Running...' : 'Run Benchmark'}
                 </button>
-                <div className="text-xs text-white/50">
-                  This mirrors the quick runner from the original HTML dashboard.
-                </div>
               </div>
 
               {output && (

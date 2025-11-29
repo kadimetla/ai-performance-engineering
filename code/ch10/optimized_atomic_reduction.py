@@ -18,7 +18,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
-from benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
 class OptimizedAtomicReductionBenchmark(CudaBinaryBenchmark):
@@ -37,7 +37,7 @@ class OptimizedAtomicReductionBenchmark(CudaBinaryBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics."""
-        from benchmark.metrics import compute_bandwidth_metrics
+        from core.benchmark.metrics import compute_bandwidth_metrics
         return compute_bandwidth_metrics(
             total_bytes=getattr(self, '_total_bytes', 64 * 1024 * 1024 * 4),
             elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),

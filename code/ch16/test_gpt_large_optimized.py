@@ -23,10 +23,12 @@ Example:
 
 from __future__ import annotations
 
+import sys
+import os
+
 import argparse
 import contextlib
 import json
-import sys
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -37,8 +39,6 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import sys
-import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 

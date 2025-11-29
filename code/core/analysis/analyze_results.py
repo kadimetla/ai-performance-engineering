@@ -10,9 +10,10 @@ import sys
 from pathlib import Path
 from typing import Optional, List
 
-# Add tools directory to path for imports
-TOOLS_DIR = Path(__file__).parent
-sys.path.insert(0, str(TOOLS_DIR))
+# Add analysis directory to path for imports
+ANALYSIS_DIR = Path(__file__).parent
+if str(ANALYSIS_DIR) not in sys.path:
+    sys.path.insert(0, str(ANALYSIS_DIR))
 
 from metric_extractor import discover_and_extract_all, flatten_metrics
 from report_generator import generate_report_from_metrics
@@ -130,19 +131,19 @@ def main():
         epilog="""
 Examples:
   # Analyze latest test results
-  python tools/analyze_results.py
+  python core/analysis/analyze_results.py
   
   # Analyze specific directory
-  python tools/analyze_results.py --input test_results_20251028_063307
+  python core/analysis/analyze_results.py --input test_results_20251028_063307
   
   # Analyze all historical results
-  python tools/analyze_results.py --all
+  python core/analysis/analyze_results.py --all
   
   # Write to specific output file
-  python tools/analyze_results.py --output docs/analysis_latest.md
+  python core/analysis/analyze_results.py --output docs/analysis_latest.md
   
   # Analyze power efficiency
-  python tools/analyze_results.py --power-file power.json --throughput-file results.json
+  python core/analysis/analyze_results.py --power-file power.json --throughput-file results.json
         """
     )
     
@@ -287,4 +288,3 @@ Examples:
 
 if __name__ == "__main__":
     sys.exit(main())
-

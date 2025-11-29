@@ -26,9 +26,9 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
-        display: ['Playfair Display', 'serif'],
+        sans: ['var(--font-sans)', 'Space Grotesk', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-mono)', 'JetBrains Mono', 'monospace'],
+        display: ['Space Grotesk', 'system-ui', 'sans-serif'],
       },
       animation: {
         'gradient-shift': 'gradientShift 30s ease-in-out infinite alternate',

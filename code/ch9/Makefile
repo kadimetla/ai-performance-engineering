@@ -1,6 +1,6 @@
 # Chapter 9 Makefile - Fusion and CUTLASS examples with dual-arch builds
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
 SUFFIX = $(TARGET_SUFFIX)

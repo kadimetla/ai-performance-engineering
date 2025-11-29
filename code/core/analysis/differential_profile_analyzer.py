@@ -9,7 +9,7 @@ Takes two deep_profiling_report.py JSON outputs and generates:
 4. Remaining bottlenecks and next optimization steps
 
 Usage:
-    python tools/analysis/differential_profile_analyzer.py \\
+    python core/analysis/differential_profile_analyzer.py \\
         --baseline output/baseline_deep_profile.json \\
         --optimized output/optimized_deep_profile.json \\
         --output-json output/differential_analysis.json \\
@@ -759,4 +759,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -159,7 +159,7 @@ class BaselineTorchcommsBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics for distributed communication."""
-        from benchmark.metrics import compute_memory_transfer_metrics
+        from core.benchmark.metrics import compute_memory_transfer_metrics
         return compute_memory_transfer_metrics(
             bytes_transferred=self._bytes_transferred,
             elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),

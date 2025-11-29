@@ -13,9 +13,9 @@ import time
 from typing import Dict, Any, Optional
 import sys
 from pathlib import Path
-from benchmark.smoke import is_smoke_mode
+from core.benchmark.smoke import is_smoke_mode
 import os
-from benchmark.smoke import is_smoke_mode
+from core.benchmark.smoke import is_smoke_mode
 import ctypes
 
 # Add common to path
@@ -263,7 +263,7 @@ class OptimizedGraceCoherentMemoryBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory transfer metrics for grace_coherent_memory."""
-        from benchmark.metrics import compute_memory_transfer_metrics
+        from core.benchmark.metrics import compute_memory_transfer_metrics
         return compute_memory_transfer_metrics(
             bytes_transferred=self.size,
             elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),

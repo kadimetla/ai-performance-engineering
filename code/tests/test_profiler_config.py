@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from profiling.profiler_config import (
+from core.profiling.profiler_config import (
     # Metric sets
     ROOFLINE_METRICS,
     DEEP_DIVE_METRICS,

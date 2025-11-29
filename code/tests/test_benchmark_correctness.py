@@ -96,7 +96,7 @@ def harness():
     """Create a benchmark harness for testing."""
     config = BenchmarkConfig(
         iterations=5,  # Reduced for faster tests
-        warmup=1,
+        warmup=5,
         timeout_seconds=10,  # Shorter timeout for tests
         enable_profiling=False,  # Disable profiling for correctness tests
         enable_nsys=False,
@@ -246,7 +246,7 @@ def test_benchmark_validation(request):
 
 def test_benchmark_protocol_compliance():
     """Test that benchmarks implement the BaseBenchmark correctly (quick check only)."""
-    from core.harness.benchmark_harness import Benchmark
+    from core.harness.benchmark_harness import BaseBenchmark
     
     # Test that a sample benchmark implements the protocol
     repo_root = Path(__file__).parent.parent

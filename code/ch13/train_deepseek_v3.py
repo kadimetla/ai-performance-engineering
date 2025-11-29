@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 from torch import nn
-from common.device_utils import get_preferred_device
+from core.common.device_utils import get_preferred_device
 
 try:
     _compiler_api = torch.compiler  # type: ignore[attr-defined]

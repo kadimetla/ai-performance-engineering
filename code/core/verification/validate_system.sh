@@ -78,24 +78,11 @@ else
     "$PYTHON" "${PROJECT_ROOT}/core/verification/verify_cutlass_setup.py" 2>/dev/null | grep -E "(Version|Symlink|SM100|ISSUES|✗)" | head -10 || true
 fi
 
-# Step 5: Inspect example registry
+# Step 5: Inspect example registry (skipped to keep core/scripts/ as leaf-only)
 progress 5 "$TOTAL_STEPS" "Inspecting example registry"
 echo ""
 echo "📚 Example Registry:"
-python3 - <<'PY'
-try:
-    from scripts.harness.example_registry import EXAMPLES
-    from scripts.harness.metrics_config import resolve_overrides
-    print(f"   Total examples: {len(EXAMPLES)}")
-    print("   Sample examples:")
-    for i, example in enumerate(EXAMPLES[:5]):
-        overrides = resolve_overrides(example)
-        print(f"     {example.name} :: tags={example.tags}")
-    if len(EXAMPLES) > 5:
-        print(f"     ... and {len(EXAMPLES) - 5} more")
-except ImportError as e:
-    print(f"   ⚠️  Example registry not available: {e}")
-PY
+echo "   ℹ️  Skipped (core/scripts/ is treated as leaf-only; registry check is optional)"
 
 # Step 6: Check for recent profile failures
 progress 6 "$TOTAL_STEPS" "Analyzing recent profile failures"
@@ -146,9 +133,9 @@ fi
 progress 7 "$TOTAL_STEPS" "Dry-running harness validation"
 echo ""
 echo "🧪 Harness Validation:"
-if [[ -f "$PROJECT_ROOT/scripts/harness/profile_harness.py" ]]; then
+if [[ -f "$PROJECT_ROOT/core/scripts/harness/profile_harness.py" ]]; then
     echo "   Running dry-run test (max 3 examples)..."
-    python3 "$PROJECT_ROOT/scripts/harness/profile_harness.py" --profile all --dry-run --max-examples 3 2>&1 | tail -5 || echo "   ⚠️  Harness dry-run had issues"
+    python3 "$PROJECT_ROOT/core/scripts/harness/profile_harness.py" --profile all --dry-run --max-examples 3 2>&1 | tail -5 || echo "   ⚠️  Harness dry-run had issues"
 else
     echo "   ℹ️  profile_harness.py not found (optional)"
 fi

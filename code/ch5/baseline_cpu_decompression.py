@@ -18,7 +18,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
 class CPUDecompressionBenchmark(BaseBenchmark):
@@ -48,7 +48,7 @@ class CPUDecompressionBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_storage_io_metrics
+        from core.benchmark.metrics import compute_storage_io_metrics
         return compute_storage_io_metrics(
             bytes_read=getattr(self, '_bytes_read', 0.0),
             bytes_written=getattr(self, '_bytes_written', 0.0),

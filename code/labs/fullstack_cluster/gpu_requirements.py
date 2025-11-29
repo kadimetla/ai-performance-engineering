@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from benchmark.tcgen05_requirements import ensure_tcgen05_supported as _ensure
+from core.benchmark.tcgen05_requirements import ensure_tcgen05_supported as _ensure
 
 try:
     from labs.fullstack_cluster.capstone_extension_tcgen05 import load_tcgen05_module

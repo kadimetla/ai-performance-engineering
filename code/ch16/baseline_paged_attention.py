@@ -30,7 +30,7 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
-from profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
+from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
 class BaselinePagedAttentionBenchmark(BaseBenchmark):

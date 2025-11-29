@@ -300,7 +300,7 @@ This is why manual optimization is so hard - torch.compile does ALL of this!
 
 ```bash
 # Using aisp bench CLI
-python -m tools.cli.bench run -t moe_journey
+python -m cli.aisp bench run -t moe_journey
 
 # Run individual levels
 python labs/moe_optimization_journey/level0_naive.py

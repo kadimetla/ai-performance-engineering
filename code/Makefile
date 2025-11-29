@@ -192,17 +192,18 @@ test-fast:
 	python -m pytest tests/ -v --tb=short -m "not slow"
 
 test-cov:
-	python -m pytest tests/ -v --tb=short --cov=benchmark --cov=core --cov=profiling --cov-report=term-missing --cov-report=html
+	python -m pytest tests/ -v --tb=short --cov=core --cov-report=term-missing --cov-report=html
 
 # =============================================================================
 # Validation
 # =============================================================================
 
 validate:
-	python scripts/validate_imports.py
+	python core/scripts/validate_imports.py
+	python core/scripts/check_import_edges.py
 
 validate-ch%:
-	python scripts/validate_imports.py --chapter $*
+	python core/scripts/validate_imports.py --chapter $*
 
 # CUTLASS setup verification (critical for Blackwell/SM100a builds)
 verify-cutlass:
@@ -227,21 +228,21 @@ verify-deps:
 
 # Check for upstream updates (CUTLASS, TransformerEngine)
 check-updates:
-	@python scripts/check_upstream_versions.py --check-te-cutlass
+	@python core/scripts/check_upstream_versions.py --check-te-cutlass
 
 check-updates-json:
-	@python scripts/check_upstream_versions.py --json
+	@python core/scripts/check_upstream_versions.py --json
 
 # Alert on updates (supports Slack, email, file output)
 # Usage: make alert-updates SLACK_WEBHOOK_URL=https://hooks.slack.com/...
 alert-updates:
-	@python scripts/alert_dependency_updates.py
+	@python core/scripts/alert_dependency_updates.py
 
 alert-updates-slack:
-	@python scripts/alert_dependency_updates.py --slack-webhook $(SLACK_WEBHOOK_URL)
+	@python core/scripts/alert_dependency_updates.py --slack-webhook $(SLACK_WEBHOOK_URL)
 
 alert-updates-quiet:
-	@python scripts/alert_dependency_updates.py --quiet
+	@python core/scripts/alert_dependency_updates.py --quiet
 
 # =============================================================================
 # Performance Analysis (CLI parity with Dashboard UI)
@@ -320,42 +321,42 @@ analyze-cost:
 
 # Advanced Analysis (NEW!)
 analyze-cpu-mem:
-	@python -m analysis.advanced_analysis cpu-mem
+	@python -m core.analysis.advanced_analysis cpu-mem
 
 analyze-sysparams:
-	@python -m analysis.advanced_analysis sysparams
+	@python -m core.analysis.advanced_analysis sysparams
 
 analyze-container:
-	@python -m analysis.advanced_analysis container
+	@python -m core.analysis.advanced_analysis container
 
 analyze-divergence:
-	@python -m analysis.advanced_analysis divergence
+	@python -m core.analysis.advanced_analysis divergence
 
 analyze-bank-conflicts:
-	@python -m analysis.advanced_analysis bank-conflicts
+	@python -m core.analysis.advanced_analysis bank-conflicts
 
 analyze-memory-access:
-	@python -m analysis.advanced_analysis memory-access
+	@python -m core.analysis.advanced_analysis memory-access
 
 analyze-full:
-	@python -m analysis.advanced_analysis full
+	@python -m core.analysis.advanced_analysis full
 
 # Auto-tuning
 tune-matmul:
-	@python -m analysis.advanced_analysis tune --kernel matmul
+	@python -m core.analysis.advanced_analysis tune --kernel matmul
 
 tune-attention:
-	@python -m analysis.advanced_analysis tune --kernel attention
+	@python -m core.analysis.advanced_analysis tune --kernel attention
 
 # Optimization Stack
 optimization-list:
-	@python -m analysis.advanced_analysis list
+	@python -m core.analysis.advanced_analysis list
 
 optimization-playbooks:
-	@python -m analysis.advanced_analysis playbook
+	@python -m core.analysis.advanced_analysis playbook
 
 optimization-optimal:
-	@python -m analysis.advanced_analysis optimal --target $(or $(TARGET),10) --difficulty $(or $(DIFFICULTY),medium)
+	@python -m core.analysis.advanced_analysis optimal --target $(or $(TARGET),10) --difficulty $(or $(DIFFICULTY),medium)
 
 # Parallelism planning
 parallelism-topology:
@@ -655,15 +656,15 @@ llm-status:
 
 # Discover cluster topology
 cluster-topology:
-	@python -m analysis.distributed_analysis topology
+	@python -m core.analysis.distributed_analysis topology
 
 # Multi-node scaling analysis
 cluster-scaling:
-	@python -m analysis.distributed_analysis scaling --model-params $(or $(MODEL_PARAMS),70)
+	@python -m core.analysis.distributed_analysis scaling --model-params $(or $(MODEL_PARAMS),70)
 
 # Parallelism recommendation
 cluster-recommend:
-	@python -m analysis.distributed_analysis recommend --model-params $(or $(MODEL_PARAMS),70) $(if $(NODES),--nodes $(NODES))
+	@python -m core.analysis.distributed_analysis recommend --model-params $(or $(MODEL_PARAMS),70) $(if $(NODES),--nodes $(NODES))
 
 # =============================================================================
 # Inference Optimization (vLLM Integration)
@@ -683,52 +684,52 @@ rlhf-config:
 
 lint:
 	@echo "Running flake8..."
-	-flake8 benchmark/ profiling/ core/ optimization/ analysis/ scripts/ --max-line-length=120 --ignore=E501,W503
+	-flake8 core/ --max-line-length=120 --ignore=E501,W503
 	@echo ""
 	@echo "Running mypy..."
-	-mypy benchmark/metrics.py profiling/profiler_config.py --ignore-missing-imports
+	-mypy core/benchmark/metrics.py core/profiling/profiler_config.py --ignore-missing-imports
 
 metrics:
-	python scripts/update_custom_metrics.py --analyze
+	python core/scripts/update_custom_metrics.py --analyze
 
 metrics-validate:
-	python scripts/update_custom_metrics.py --validate
+	python core/scripts/update_custom_metrics.py --validate
 
 metrics-apply:
-	python scripts/update_custom_metrics.py --apply
+	python core/scripts/update_custom_metrics.py --apply
 
 # =============================================================================
 # Reports
 # =============================================================================
 
 coverage:
-	python scripts/benchmark_coverage.py
+	python core/scripts/benchmark_coverage.py
 
 coverage-md:
-	python scripts/benchmark_coverage.py --markdown
+	python core/scripts/benchmark_coverage.py --markdown
 
 coverage-json:
-	python scripts/benchmark_coverage.py --json
+	python core/scripts/benchmark_coverage.py --json
 
 # =============================================================================
 # Maintenance
 # =============================================================================
 
 audit:
-	python scripts/audit_silent_fallbacks.py
+	python core/scripts/audit_silent_fallbacks.py
 
 audit-fix:
-	python scripts/audit_silent_fallbacks.py --fix
+	python core/scripts/audit_silent_fallbacks.py --fix
 
 # Benchmark warmup validation - CRITICAL for accurate measurements
 # Low warmup causes JIT/compile overhead to be included in timing results.
 audit-warmup:
 	@echo "Auditing benchmark warmup settings..."
-	python scripts/audit_warmup_settings.py
+	python core/scripts/audit_warmup_settings.py
 
 audit-warmup-strict:
 	@echo "Auditing benchmark warmup settings (including recommended levels)..."
-	python scripts/audit_warmup_settings.py --check-recommended --verbose
+	python core/scripts/audit_warmup_settings.py --check-recommended --verbose
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

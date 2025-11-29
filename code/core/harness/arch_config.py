@@ -16,11 +16,11 @@ import torch
 from importlib import metadata as importlib_metadata
 from contextlib import nullcontext
 
-from optimization.symmetric_memory_patch import (
+from core.optimization.symmetric_memory_patch import (
     ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
 )
 from core.utils.compile_utils import enable_tf32
-from benchmark.triton_compat import (
+from core.benchmark.triton_compat import (
     ENABLE_TRITON_PATCH as _TRITON_PATCH_ENABLED,
     ensure_triton_compat,
 )

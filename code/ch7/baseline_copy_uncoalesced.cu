@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 constexpr int N = 1 << 23;           // 32 MB footprint
 constexpr int RANDOM_PASSES = 64;

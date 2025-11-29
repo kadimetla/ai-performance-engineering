@@ -1,6 +1,6 @@
 # Chapter 6 Makefile - CUDA basics with architecture-aware builds
 
-include ../common/cuda_arch.mk
+include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo -Xptxas=-v $(CUDA_NVTX_CFLAGS)
 NVCC_LIBS = -lcuda $(CUDA_NVTX_LDFLAGS)

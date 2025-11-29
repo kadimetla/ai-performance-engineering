@@ -37,7 +37,7 @@ import torch
 from core.utils.compile_utils import enable_tf32
 
 if TYPE_CHECKING:
-    from benchmark.models import (
+    from core.benchmark.models import (
         BenchmarkResult as PydanticBenchmarkResult,
         BenchmarkRun,
         MemoryStats,
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     )
 
 # Pydantic is required - fail fast if not available
-from benchmark.models import (
+from core.benchmark.models import (
     BenchmarkResult as PydanticBenchmarkResult,
     BenchmarkRun,
     MemoryStats,
@@ -71,7 +71,7 @@ PYDANTIC_AVAILABLE = True
 
 # Import unified profiling runner
 try:
-    from profiling.profiling_runner import (
+    from core.profiling.profiling_runner import (
         run_nsys_profiling,
         run_ncu_profiling,
         check_nsys_available,
@@ -129,7 +129,7 @@ except ImportError:
 
 # Import profiler wrapper
 try:
-    from profiling.profiler_wrapper import create_benchmark_wrapper
+    from core.profiling.profiler_wrapper import create_benchmark_wrapper
     PROFILER_WRAPPER_AVAILABLE = True
 except ImportError:
     PROFILER_WRAPPER_AVAILABLE = False
@@ -230,13 +230,13 @@ def _extract_skip_reason_from_messages(messages: Sequence[str]) -> Optional[str]
             return msg[idx:].strip()
     return None
 
-from profiling.gpu_memory_logger import (
+from core.profiling.gpu_memory_logger import (
     GpuMemoryLogger,
     resolve_gpu_log_interval,
     resolve_gpu_log_path,
     should_enable_gpu_memory_logging,
 )
-from profiling.gpu_telemetry import query_gpu_telemetry
+from core.profiling.gpu_telemetry import query_gpu_telemetry
 
 
 class BenchmarkMode(Enum):
@@ -262,10 +262,10 @@ class LaunchVia(str, Enum):
 
 # Import BenchmarkDefaults to use as source of truth for defaults
 try:
-    from benchmark.defaults import BenchmarkDefaults, get_defaults
+    from core.benchmark.defaults import BenchmarkDefaults, get_defaults
     _get_defaults_fn: Optional[Callable[[], BenchmarkDefaults]] = get_defaults
 except ImportError:
-    # Fallback if benchmark_defaults not available (shouldn't happen in normal usage)
+    # Fallback if benchmark defaults are unavailable (docs builds)
     _get_defaults_fn = None
 
 
@@ -367,7 +367,7 @@ class BenchmarkConfig:
         # CRITICAL: Validate and enforce minimum warmup iterations
         # This ensures JIT/compile overhead is NEVER included in measurements.
         # See benchmark/defaults.py for rationale.
-        from benchmark.defaults import validate_warmup, MINIMUM_WARMUP_ITERATIONS
+        from core.benchmark.defaults import validate_warmup, MINIMUM_WARMUP_ITERATIONS
         self.warmup = validate_warmup(self.warmup, context="BenchmarkConfig")
         
         if self.enable_nvtx is None:
@@ -958,7 +958,7 @@ class BaseBenchmark:
                 # code to profile
                 pass
         """
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
         
         # Prefer the harness-merged config if present to honor CLI flags
         config = getattr(self, "_config", None) or self.get_config()
@@ -1045,7 +1045,7 @@ class BenchmarkHarness:
         Args:
             name: Name for the NVTX range
         """
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
         
         config = self.config
         enable_nvtx = get_nvtx_enabled(config) if config else False
@@ -1558,7 +1558,7 @@ class BenchmarkHarness:
             raise ImportError("pydantic and BenchmarkRun are required for benchmark_with_manifest")
         
         from datetime import datetime
-        from benchmark.run_manifest import RunManifest
+        from core.benchmark.run_manifest import RunManifest
         
         # Create manifest at start
         start_time = datetime.now()
@@ -1566,7 +1566,7 @@ class BenchmarkHarness:
         manifest = RunManifest.create(config=config_dict, start_time=start_time)
         
         # Add seed information to manifest
-        from benchmark.run_manifest import SeedInfo
+        from core.benchmark.run_manifest import SeedInfo
         if self._seed_info:
             manifest.seeds = SeedInfo(
                 random_seed=self._seed_info.get("random_seed"),
@@ -1590,7 +1590,7 @@ class BenchmarkHarness:
         
         # Create BenchmarkRun
         return BenchmarkRun(
-            manifest=manifest.model_dump(),
+            manifest=manifest,
             result=result,
             run_id=run_id,
             timestamp=start_time.isoformat(),
@@ -2065,6 +2065,26 @@ class BenchmarkHarness:
             
             with execution_lock:  # Acquire lock during execution
                 try:
+                    # Ensure the CUDA primary context exists before any kernels run.
+                    if torch.cuda.is_available():
+                        torch.cuda.init()
+                        try:
+                            target_device = None
+                            if isinstance(self.device, torch.device) and self.device.type == "cuda":
+                                target_device = self.device
+                            if target_device is None:
+                                target_device = torch.device(torch.cuda.current_device())
+                            torch.cuda.set_device(target_device)
+                            # Tiny ops to bind the primary context and initialize cuBLAS handles
+                            torch.empty(1, device=target_device).add_(1)
+                            torch.ones((1, 1), device=target_device).matmul(
+                                torch.ones((1, 1), device=target_device)
+                            )
+                            torch.cuda.synchronize(target_device)
+                        except Exception:
+                            # Best-effort context warm-up; continue even if it fails
+                            pass
+
                     # Apply per-target CLI overrides (e.g., backend selection) before setup.
                     self._apply_target_overrides(benchmark, config)
 
@@ -2196,7 +2216,7 @@ class BenchmarkHarness:
                             profiling_timeout = config.get_effective_timeout('profiling')
                             if PROFILING_RUNNER_AVAILABLE:
                                 try:
-                                    from profiling.profiling_runner import run_profiling_orchestration
+                                    from core.profiling.profiling_runner import run_profiling_orchestration
                                     import time
                                     profiling_start_time = time.time()
                                     
@@ -2599,7 +2619,7 @@ class BenchmarkHarness:
             
             torch_profiler_kwargs = {}
             try:
-                from profiling import profiler_config as profiler_config_mod
+                from core.profiling import profiler_config as profiler_config_mod
                 profiler_cfg = None
                 if hasattr(profiler_config_mod, "build_profiler_config_from_benchmark"):
                     profiler_cfg = profiler_config_mod.build_profiler_config_from_benchmark(config)

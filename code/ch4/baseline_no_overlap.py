@@ -16,7 +16,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 
-from benchmark.gpu_requirements import skip_if_insufficient_gpus
+from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -102,7 +102,7 @@ class BaselineNoOverlapBenchmark(BaseBenchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: DDP training step without overlap."""
-        from profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
@@ -141,7 +141,7 @@ class BaselineNoOverlapBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
-        from benchmark.metrics import compute_memory_transfer_metrics
+        from core.benchmark.metrics import compute_memory_transfer_metrics
         return compute_memory_transfer_metrics(
             bytes_transferred=self._bytes_transferred if hasattr(self, '_bytes_transferred') else float(getattr(self, 'N', 1024) * 4),
             elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),

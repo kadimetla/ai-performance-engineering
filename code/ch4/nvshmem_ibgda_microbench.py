@@ -13,7 +13,7 @@ from typing import Dict, Optional
 import torch
 
 from core.harness.benchmark_harness import BenchmarkConfig
-from benchmark.cuda_binary_benchmark import BinaryRunResult, CudaBinaryBenchmark
+from core.benchmark.cuda_binary_benchmark import BinaryRunResult, CudaBinaryBenchmark
 
 
 def _default_symmetric_size() -> str:

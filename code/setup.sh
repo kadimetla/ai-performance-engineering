@@ -49,9 +49,9 @@
 #
 # After running this script, you can:
 #   - Run examples: python3 ch1/performance_basics.py
-#   - Drive the benchmark suite: python tools/cli/aisp bench run
-#   - Capture peak performance: python benchmark/benchmark_peak.py
-#   - Verify examples: python tools/cli/aisp bench verify
+#   - Drive the benchmark suite: python cli/aisp.py bench run
+#   - Capture peak performance: python core/benchmark/benchmark_peak.py
+#   - Verify examples: python cli/aisp.py bench verify
 #
 
 set -e  # Exit on any error
@@ -126,7 +126,7 @@ fi
 VLLM_WHEEL_PATTERN="${VLLM_WHEEL_PATTERN:-${VLLM_WHEEL_DIR}/vllm-*-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_${VLLM_WHEEL_ARCH}.whl}"
 # =============================================================================
 # DEPENDENCY VERSION PINS (update together, test after changes)
-# Run: python scripts/check_upstream_versions.py --check-te-cutlass
+# Run: python core/scripts/check_upstream_versions.py --check-te-cutlass
 # Source of truth for pinned versions lives here (dependency_versions.json removed)
 # =============================================================================
 #
@@ -142,7 +142,7 @@ VLLM_WHEEL_PATTERN="${VLLM_WHEEL_PATTERN:-${VLLM_WHEEL_DIR}/vllm-*-${PYTHON_ABI_
 #
 # When to remove symlink workaround:
 #   - When TE bundles CUTLASS >= 4.3.0 with SM100a headers
-#   - Run: python scripts/check_upstream_versions.py --check-te-cutlass
+#   - Run: python core/scripts/check_upstream_versions.py --check-te-cutlass
 #   - If "TE main bundles: CUTLASS 4.3.0+" appears, symlink may be removable
 #
 TE_REPO_URL="${TE_REPO_URL:-https://github.com/NVIDIA/TransformerEngine.git}"
@@ -493,7 +493,7 @@ install_proton_cli_stub() {
         return 0
     fi
     local target="/usr/local/bin/proton"
-    install -m 755 "${PROJECT_ROOT}/tools/proton_stub.py" "${target}"
+    install -m 755 "${PROJECT_ROOT}/core/scripts/proton_stub.py" "${target}"
     echo "Installed Proton stub CLI at ${target}"
 }
 
@@ -1151,7 +1151,7 @@ if ! lsmod | grep -q nvidia_fs; then
     modprobe nvidia-fs 2>/dev/null && echo "nvidia-fs module loaded" || {
         echo "Could not load nvidia-fs module (requires root)"
         echo "   Load it manually with: sudo modprobe nvidia-fs"
-        echo "   Or run: sudo tools/setup/load_gds_module.sh"
+        echo "   Or run: sudo core/scripts/setup/load_gds_module.sh"
     }
 else
     echo "nvidia-fs module already loaded"
@@ -1768,11 +1768,11 @@ PY
 
 if [ ! -d "${CUTLASS_SRC_DIR}" ] || [ -z "${CURRENT_CUTLASS_VERSION}" ]; then
     echo "  CUTLASS source missing or unreadable; installing ${CUTLASS_REF}..."
-    CUTLASS_REPO="${CUTLASS_REPO_URL}" CUTLASS_REF="${CUTLASS_REF}" "${PROJECT_ROOT}/scripts/install_cutlass.sh"
+    CUTLASS_REPO="${CUTLASS_REPO_URL}" CUTLASS_REF="${CUTLASS_REF}" "${PROJECT_ROOT}/core/scripts/install_cutlass.sh"
     CURRENT_CUTLASS_VERSION="${CUTLASS_TARGET_VERSION}"
 elif [ "${CURRENT_CUTLASS_VERSION}" != "${CUTLASS_TARGET_VERSION}" ]; then
     echo "  CUTLASS source is ${CURRENT_CUTLASS_VERSION} (target ${CUTLASS_TARGET_VERSION}); reinstalling..."
-    CUTLASS_REPO="${CUTLASS_REPO_URL}" CUTLASS_REF="${CUTLASS_REF}" "${PROJECT_ROOT}/scripts/install_cutlass.sh"
+    CUTLASS_REPO="${CUTLASS_REPO_URL}" CUTLASS_REF="${CUTLASS_REF}" "${PROJECT_ROOT}/core/scripts/install_cutlass.sh"
     CURRENT_CUTLASS_VERSION="${CUTLASS_TARGET_VERSION}"
 else
     echo "  CUTLASS source tree already at ${CURRENT_CUTLASS_VERSION}; keeping."
@@ -1808,7 +1808,7 @@ git -C "${TE_SRC_DIR}" submodule update --init --recursive >/dev/null 2>&1 || tr
 #
 # Without this symlink: Blackwell builds WILL FAIL with "missing header" errors.
 # Verification: make verify-cutlass
-# Check if still needed: python scripts/check_upstream_versions.py --check-te-cutlass
+# Check if still needed: python core/scripts/check_upstream_versions.py --check-te-cutlass
 # =============================================================================
 echo "  CUTLASS version override for SM100a (Blackwell) support:"
 echo "    TE ${TE_VERSION} bundles: CUTLASS ${TE_BUNDLED_CUTLASS_VERSION} (missing SM100a headers)"
@@ -1824,13 +1824,13 @@ ln -s "${CUTLASS_SRC_DIR}" "${TE_SRC_DIR}/3rdparty/cutlass"
 if [ ! -L "${TE_SRC_DIR}/3rdparty/cutlass" ]; then
     echo "ERROR: Failed to create CUTLASS symlink for TransformerEngine"
     echo "       This will cause Blackwell builds to fail!"
-    echo "       Try: ./scripts/fix_cutlass_symlink.sh"
+    echo "       Try: ./core/scripts/fix_cutlass_symlink.sh"
     exit 1
 fi
 if [ ! -f "${TE_SRC_DIR}/3rdparty/cutlass/include/cute/arch/tmem_allocator_sm100.hpp" ]; then
     echo "ERROR: CUTLASS SM100a headers missing after symlink - Blackwell builds will fail"
     echo "       Expected: ${TE_SRC_DIR}/3rdparty/cutlass/include/cute/arch/tmem_allocator_sm100.hpp"
-    echo "       Try: ./scripts/install_cutlass.sh && ./scripts/fix_cutlass_symlink.sh"
+    echo "       Try: ./core/scripts/install_cutlass.sh && ./core/scripts/fix_cutlass_symlink.sh"
     exit 1
 fi
 echo "  ✓ TE CUTLASS symlinked: ${TE_BUNDLED_CUTLASS_VERSION} → ${CUTLASS_TARGET_VERSION} (SM100a ready)"
@@ -1971,7 +1971,7 @@ PY
 # to invoke the probe with elevated privileges.
 echo ""
 echo "Refreshing GPU hardware capability cache..."
-if python3 "${PROJECT_ROOT}/tools/utilities/probe_hardware_capabilities.py" 2>/tmp/probe_hardware.log; then
+if python3 "${PROJECT_ROOT}/core/scripts/utilities/probe_hardware_capabilities.py" 2>/tmp/probe_hardware.log; then
     cat /tmp/probe_hardware.log
 else
     cat /tmp/probe_hardware.log
@@ -2104,7 +2104,7 @@ ensure_te_import_tolerant("transformer_engine")
 ensure_te_import_tolerant("transformer-engine")
 PY
 
-# Install FlashAttention to unlock optimized SDPA paths
+# Install FlashAttention for optimized SDPA paths
 
 echo ""
 echo "Ensuring FlashAttention (flash-attn ${FLASH_ATTN_TAG}) is available..."
@@ -2841,7 +2841,7 @@ if [ $? -eq 0 ]; then
     echo ""
     
     # Detect CUTLASS C++ header location
-    CUTLASS_INCLUDE=$(python3 tools/utilities/detect_cutlass_info.py 2>/dev/null | head -1)
+    CUTLASS_INCLUDE=$(python3 core/scripts/utilities/detect_cutlass_info.py 2>/dev/null | head -1)
     if [ -n "$CUTLASS_INCLUDE" ] && [ -d "$CUTLASS_INCLUDE/include" ]; then
         echo "CUTLASS C++ headers available at: $CUTLASS_INCLUDE/include"
         echo "   Use with: nvcc -I$CUTLASS_INCLUDE/include ..."
@@ -2860,7 +2860,7 @@ fi
 echo ""
 
 echo "Capturing hardware capabilities..."
-if python3 "${PROJECT_ROOT}/tools/utilities/probe_hardware_capabilities.py" 2>/tmp/probe_hardware.log; then
+if python3 "${PROJECT_ROOT}/core/scripts/utilities/probe_hardware_capabilities.py" 2>/tmp/probe_hardware.log; then
     cat /tmp/probe_hardware.log
     echo ""
     echo "Hardware capabilities summary:"
@@ -2916,7 +2916,7 @@ fi
 
 echo ""
 echo "Regenerating CUDA arch detection header..."
-if python3 "$PROJECT_ROOT/tools/utilities/generate_arch_detection_header.py"; then
+if python3 "$PROJECT_ROOT/core/scripts/utilities/generate_arch_detection_header.py"; then
     echo "arch_detection.cuh regenerated from live hardware probe"
 else
     echo "WARNING: Failed to regenerate arch_detection.cuh (continuing with existing header)"
@@ -3109,7 +3109,7 @@ fi
 echo ""
 echo "Running Peak Performance Benchmark..."
 echo "======================================"
-if python3 "$PROJECT_ROOT/benchmark/benchmark_peak.py" --output-dir "$PROJECT_ROOT" 2>&1; then
+if python3 "$PROJECT_ROOT/core/benchmark/benchmark_peak.py" --output-dir "$PROJECT_ROOT" 2>&1; then
     echo "Peak performance benchmark completed successfully"
 else
     echo "ERROR: Peak performance benchmark failed"

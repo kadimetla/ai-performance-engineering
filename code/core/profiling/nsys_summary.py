@@ -3,7 +3,7 @@
 Utility to summarise Nsight Systems reports across the Blackwell codebase.
 
 Example:
-    python tools/nsys_summary.py --glob "output/*.nsys-rep" \
+    python core/profiling/nsys_summary.py --glob "output/*.nsys-rep" \
         --kernel-regex "attn|mma" --top-k 8 --output results/nsys_summary.txt
 """
 

@@ -39,7 +39,7 @@ nsys profile -o async_pipeline python labs/async_input_pipeline/optimized_async_
 ## Configuration
 
 ```python
-from labs.async_input_pipeline.pipeline import PipelineConfig
+from core.common.async_input_pipeline import PipelineConfig
 
 cfg = PipelineConfig(
     batch_size=16,
@@ -65,6 +65,5 @@ In **nsys** profiles:
 - **Ch2**: Memory hierarchy and transfer types
 - **Ch5**: Storage I/O and DataLoader tuning
 - **Ch11**: CUDA streams and async execution
-
 
 

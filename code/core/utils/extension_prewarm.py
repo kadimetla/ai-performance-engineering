@@ -47,7 +47,7 @@ def _get_repo_root() -> Path:
     cwd = Path.cwd()
     repo_root = cwd
     while repo_root.parent != repo_root:
-        if (repo_root / ".git").exists() or (repo_root / "common").exists():
+        if (repo_root / ".git").exists() or (repo_root / "core" / "common").exists():
             break
         repo_root = repo_root.parent
     return repo_root
@@ -108,7 +108,7 @@ def _do_prewarm(verbose: bool = False, parallel: bool = True) -> Dict[str, Tuple
     extensions = [
         ("ch6.cuda_extensions", "ch6.cuda_extensions", False),
         ("ch12.cuda_extensions", "ch12.cuda_extensions", False),
-        ("common.tcgen05", "common.tcgen05", True),  # SM100+ only
+        ("core.common.tcgen05", "core.common.tcgen05", True),  # SM100+ only
     ]
     
     if verbose:
@@ -331,20 +331,20 @@ def health_check(verbose: bool = True) -> bool:
             major, _ = torch.cuda.get_device_capability()
             if major >= 10:
                 try:
-                    from common import tcgen05
+                    from core.common import tcgen05
                     if hasattr(tcgen05, 'load_tiling_extension') or hasattr(tcgen05, '_load_extension'):
                         if verbose:
-                            print(f"  ✓ common.tcgen05")
+                            print(f"  ✓ core.common.tcgen05")
                     else:
                         if verbose:
-                            print(f"  ⚠ common.tcgen05: Module loaded")
+                            print(f"  ⚠ core.common.tcgen05: Module loaded")
                 except Exception as e:
                     if verbose:
-                        print(f"  ✗ common.tcgen05: {e}")
+                        print(f"  ✗ core.common.tcgen05: {e}")
                     all_ok = False
             else:
                 if verbose:
-                    print(f"  ⊘ common.tcgen05 (skipped, requires SM100+)")
+                    print(f"  ⊘ core.common.tcgen05 (skipped, requires SM100+)")
     except Exception as e:
         if verbose:
             print(f"  ⚠ tcgen05 check skipped: {e}")
@@ -413,4 +413,3 @@ if __name__ == "__main__":
     
     else:
         parser.print_help()
-

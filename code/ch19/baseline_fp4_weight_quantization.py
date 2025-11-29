@@ -294,7 +294,7 @@ class BaselineFP4WeightQuantizationBenchmark(BaseBenchmark):
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return baseline FP4 metrics using standard helpers."""
-        from benchmark.metrics import compute_precision_metrics
+        from core.benchmark.metrics import compute_precision_metrics
         
         # Use standard precision metrics
         metrics = compute_precision_metrics(

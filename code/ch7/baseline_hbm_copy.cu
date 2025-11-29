@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "../common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_helpers.cuh"
 
 // Baseline: Scalar copy (very inefficient)
 __global__ void scalar_copy_kernel(float* dst, const float* src, size_t n) {

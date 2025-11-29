@@ -1,5 +1,8 @@
+'use client';
+
 import { useState } from 'react';
 import useSWRMutation from 'swr/mutation';
+import { Timer, Cpu, HardDrive, Network, Zap, RefreshCw, Download } from 'lucide-react';
 
 type Result = Record<string, any> | null;
 
@@ -14,17 +17,17 @@ async function fetchJson(_: string, { arg }: { arg: { url: string } }): Promise<
 
 function ResultCard({ title, result, loading, error }: { title: string; result: Result; loading: boolean; error?: string | null }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4">
+    <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-4">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
-        {loading && <span className="text-xs text-slate-400">Loading…</span>}
+        <h3 className="text-sm font-semibold text-white">{title}</h3>
+        {loading && <span className="text-xs text-accent-primary animate-pulse">Loading…</span>}
       </div>
       {error ? (
-        <pre className="text-xs text-red-300 whitespace-pre-wrap break-all">{error}</pre>
+        <pre className="text-xs text-accent-danger whitespace-pre-wrap break-all">{error}</pre>
       ) : result ? (
-        <pre className="text-xs text-slate-200 whitespace-pre-wrap break-all">{JSON.stringify(result, null, 2)}</pre>
+        <pre className="text-xs text-white/80 whitespace-pre-wrap break-all max-h-48 overflow-auto">{JSON.stringify(result, null, 2)}</pre>
       ) : (
-        <p className="text-xs text-slate-500">No data yet.</p>
+        <p className="text-xs text-white/40">No data yet.</p>
       )}
     </div>
   );
@@ -35,23 +38,23 @@ function MetricsTable({ result }: { result: any }) {
   const metrics = Array.isArray(result.metrics) ? result.metrics : Array.isArray(result) ? result : null;
   if (!metrics) return null;
   return (
-    <div className="overflow-auto rounded border border-slate-800">
-      <table className="min-w-full text-xs text-left text-slate-200">
-        <thead className="bg-slate-800 text-slate-300">
+    <div className="overflow-auto rounded-lg border border-white/10">
+      <table className="min-w-full text-xs text-left text-white/80">
+        <thead className="bg-white/5 text-white/60">
           <tr>
-            <th className="px-2 py-1">Name</th>
-            <th className="px-2 py-1">Baseline</th>
-            <th className="px-2 py-1">Optimized</th>
-            <th className="px-2 py-1">Delta</th>
+            <th className="px-3 py-2">Name</th>
+            <th className="px-3 py-2">Baseline</th>
+            <th className="px-3 py-2">Optimized</th>
+            <th className="px-3 py-2">Delta</th>
           </tr>
         </thead>
         <tbody>
           {metrics.map((m: any, idx: number) => (
-            <tr key={idx} className="border-t border-slate-800">
-              <td className="px-2 py-1">{m.name || m.metric || m.section || 'metric'}</td>
-              <td className="px-2 py-1">{m.baseline ?? m.base ?? ''}</td>
-              <td className="px-2 py-1">{m.optimized ?? m.opt ?? ''}</td>
-              <td className="px-2 py-1">{m.delta ?? ''}</td>
+            <tr key={idx} className="border-t border-white/5 hover:bg-white/[0.02]">
+              <td className="px-3 py-2 font-medium text-white">{m.name || m.metric || m.section || 'metric'}</td>
+              <td className="px-3 py-2">{m.baseline ?? m.base ?? ''}</td>
+              <td className="px-3 py-2">{m.optimized ?? m.opt ?? ''}</td>
+              <td className="px-3 py-2 text-accent-primary">{m.delta ?? ''}</td>
             </tr>
           ))}
         </tbody>
@@ -60,7 +63,7 @@ function MetricsTable({ result }: { result: any }) {
   );
 }
 
-export default function MicrobenchTab() {
+export function MicrobenchTab() {
   const disk = useSWRMutation('disk', fetchJson);
   const [diskSize, setDiskSize] = useState(256);
   const [diskBlock, setDiskBlock] = useState(1024);
@@ -96,210 +99,281 @@ export default function MicrobenchTab() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold text-slate-100">Microbenchmarks</h2>
-        <p className="text-sm text-slate-400">Quick, lightweight diagnostics (disk, PCIe, memory, tensor cores, SFU, loopback).</p>
+      {/* Header */}
+      <div className="card">
+        <div className="card-header">
+          <div className="flex items-center gap-2">
+            <Timer className="w-5 h-5 text-accent-warning" />
+            <h2 className="text-lg font-semibold text-white">Microbenchmarks</h2>
+          </div>
+        </div>
+        <div className="card-body">
+          <p className="text-sm text-white/60">Quick, lightweight diagnostics for disk, PCIe, memory, tensor cores, SFU, and network loopback.</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="space-y-2">
+        <div className="card">
+          <div className="card-header">
+            <div className="flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-accent-info" />
+              <h3 className="font-medium text-white">Disk I/O</h3>
+            </div>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex flex-wrap gap-2 items-center">
+              <button
+                className="rounded-lg bg-accent-info/20 px-3 py-2 text-sm text-accent-info hover:bg-accent-info/30 transition-colors"
+                onClick={() => disk.trigger({ url: `/api/microbench/disk?file_size_mb=${diskSize}&block_size_kb=${diskBlock}` })}
+              >
+                Run Disk I/O
+              </button>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Size MB <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-16 text-white" type="number" value={diskSize} onChange={(e) => setDiskSize(Number(e.target.value))} />
+              </label>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Block KB <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-16 text-white" type="number" value={diskBlock} onChange={(e) => setDiskBlock(Number(e.target.value))} />
+              </label>
+            </div>
+            <ResultCard title="Disk I/O" result={(disk.data as Result) || null} loading={disk.isMutating} error={(disk.error as any)?.message || null} />
+            <div className="flex items-center gap-2 pt-2 border-t border-white/5">
+              <button
+                className="rounded-lg bg-accent-secondary/20 px-3 py-2 text-sm text-accent-secondary hover:bg-accent-secondary/30 transition-colors flex items-center gap-2"
+                onClick={async () => {
+                  try {
+                    setPdfStatus('Downloading...');
+                    const res = await fetch('/api/export/pdf');
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'benchmark_report.pdf';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    setPdfStatus('Downloaded benchmark_report.pdf');
+                  } catch (e: any) {
+                    setPdfStatus(`Error: ${e.message}`);
+                  }
+                }}
+              >
+                <Download className="w-4 h-4" />
+                Export PDF
+              </button>
+              <span className="text-xs text-white/40">{pdfStatus || 'PDF downloads directly.'}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-accent-primary" />
+              <h3 className="font-medium text-white">PCIe Bandwidth</h3>
+            </div>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex gap-2 items-center">
+              <button
+                className="rounded-lg bg-accent-primary/20 px-3 py-2 text-sm text-accent-primary hover:bg-accent-primary/30 transition-colors"
+                onClick={() => pcie.trigger({ url: `/api/microbench/pcie?size_mb=${pcieSize}&iters=${pcieIters}` })}
+              >
+                Run PCIe H2D/D2H
+              </button>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Size MB <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-16 text-white" type="number" value={pcieSize} onChange={(e) => setPcieSize(Number(e.target.value))} />
+              </label>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Iters <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-14 text-white" type="number" value={pcieIters} onChange={(e) => setPcieIters(Number(e.target.value))} />
+              </label>
+            </div>
+            <ResultCard title="PCIe" result={(pcie.data as Result) || null} loading={pcie.isMutating} error={(pcie.error as any)?.message || null} />
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div className="flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-accent-success" />
+              <h3 className="font-medium text-white">Memory Hierarchy</h3>
+            </div>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex gap-2 items-center">
+              <button
+                className="rounded-lg bg-accent-success/20 px-3 py-2 text-sm text-accent-success hover:bg-accent-success/30 transition-colors"
+                onClick={() => mem.trigger({ url: `/api/microbench/mem?size_mb=${memSize}&stride=${memStride}` })}
+              >
+                Run Memory Stride
+              </button>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Size MB <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-16 text-white" type="number" value={memSize} onChange={(e) => setMemSize(Number(e.target.value))} />
+              </label>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Stride <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-16 text-white" type="number" value={memStride} onChange={(e) => setMemStride(Number(e.target.value))} />
+              </label>
+            </div>
+            <ResultCard title="Memory Hierarchy" result={(mem.data as Result) || null} loading={mem.isMutating} error={(mem.error as any)?.message || null} />
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-accent-warning" />
+              <h3 className="font-medium text-white">Tensor Core</h3>
+            </div>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex gap-2 items-center">
+              <button
+                className="rounded-lg bg-accent-warning/20 px-3 py-2 text-sm text-accent-warning hover:bg-accent-warning/30 transition-colors"
+                onClick={() => tensor.trigger({ url: `/api/microbench/tensor?size=${tensorSize}&precision=${encodeURIComponent(tensorPrecision)}` })}
+              >
+                Run Tensor Core
+              </button>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Size <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-16 text-white" type="number" value={tensorSize} onChange={(e) => setTensorSize(Number(e.target.value))} />
+              </label>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Precision <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-20 text-white" type="text" value={tensorPrecision} onChange={(e) => setTensorPrecision(e.target.value)} />
+              </label>
+            </div>
+            <ResultCard title="Tensor Core" result={(tensor.data as Result) || null} loading={tensor.isMutating} error={(tensor.error as any)?.message || null} />
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-accent-tertiary" />
+              <h3 className="font-medium text-white">SFU (Special Functions)</h3>
+            </div>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex gap-2 items-center">
+              <button
+                className="rounded-lg bg-accent-tertiary/20 px-3 py-2 text-sm text-accent-tertiary hover:bg-accent-tertiary/30 transition-colors"
+                onClick={() => sfu.trigger({ url: `/api/microbench/sfu?elements=${sfuElems}` })}
+              >
+                Run SFU
+              </button>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Elements <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-24 text-white" type="number" value={sfuElems} onChange={(e) => setSfuElems(Number(e.target.value))} />
+              </label>
+            </div>
+            <ResultCard title="SFU" result={(sfu.data as Result) || null} loading={sfu.isMutating} error={(sfu.error as any)?.message || null} />
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div className="flex items-center gap-2">
+              <Network className="w-4 h-4 text-accent-info" />
+              <h3 className="font-medium text-white">Network Loopback</h3>
+            </div>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex gap-2 items-center">
+              <button
+                className="rounded-lg bg-accent-info/20 px-3 py-2 text-sm text-accent-info hover:bg-accent-info/30 transition-colors"
+                onClick={() => loop.trigger({ url: `/api/microbench/loopback?size_mb=${loopSize}&port=${loopPort}` })}
+              >
+                Run Loopback
+              </button>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Size MB <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-16 text-white" type="number" value={loopSize} onChange={(e) => setLoopSize(Number(e.target.value))} />
+              </label>
+              <label className="text-xs text-white/60 flex items-center gap-1">
+                Port <input className="bg-white/10 border border-white/10 px-2 py-1 rounded-lg w-16 text-white" type="number" value={loopPort} onChange={(e) => setLoopPort(Number(e.target.value))} />
+              </label>
+            </div>
+            <ResultCard title="Loopback" result={(loop.data as Result) || null} loading={loop.isMutating} error={(loop.error as any)?.message || null} />
+          </div>
+        </div>
+      </div>
+
+      {/* Nsight Utilities */}
+      <div className="card">
+        <div className="card-header">
+          <h3 className="font-medium text-white">Nsight Profiling Utilities</h3>
+        </div>
+        <div className="card-body space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="rounded-lg bg-accent-primary/20 px-3 py-2 text-sm text-accent-primary hover:bg-accent-primary/30 transition-colors"
+              onClick={() => nsightAvail.trigger({ url: '/api/nsight/availability' })}
+            >
+              Check Nsight Availability
+            </button>
+            <input
+              className="rounded-lg bg-white/10 border border-white/10 px-3 py-2 text-sm text-white w-64"
+              value={compareDir}
+              onChange={(e) => setCompareDir(e.target.value)}
+              placeholder="Profiles directory"
+            />
+            <button
+              className="rounded-lg bg-accent-secondary/20 px-3 py-2 text-sm text-accent-secondary hover:bg-accent-secondary/30 transition-colors"
+              onClick={() => compareNsys.trigger({ url: `/api/nsight/compare/nsys?dir=${encodeURIComponent(compareDir)}` })}
+            >
+              Compare Nsight Systems
+            </button>
+            <button
+              className="rounded-lg bg-accent-warning/20 px-3 py-2 text-sm text-accent-warning hover:bg-accent-warning/30 transition-colors"
+              onClick={() => compareNcu.trigger({ url: `/api/nsight/compare/ncu?dir=${encodeURIComponent(compareDir)}` })}
+            >
+              Compare Nsight Compute
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <ResultCard title="Nsight Availability" result={(nsightAvail.data as Result) || null} loading={nsightAvail.isMutating} error={(nsightAvail.error as any)?.message || null} />
+            <div className="space-y-2">
+              <ResultCard title="Nsight Systems Compare" result={(compareNsys.data as Result) || null} loading={compareNsys.isMutating} error={(compareNsys.error as any)?.message || null} />
+              <MetricsTable result={compareNsys.data} />
+            </div>
+            <div className="space-y-2">
+              <ResultCard title="Nsight Compute Compare" result={(compareNcu.data as Result) || null} loading={compareNcu.isMutating} error={(compareNcu.error as any)?.message || null} />
+              <MetricsTable result={compareNcu.data} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Exports */}
+      <div className="card">
+        <div className="card-header">
+          <h3 className="font-medium text-white">Data Exports</h3>
+        </div>
+        <div className="card-body space-y-4">
           <div className="flex flex-wrap gap-2 items-center">
             <button
-              className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-              onClick={() => disk.trigger({ url: `/api/microbench/disk?file_size_mb=${diskSize}&block_size_kb=${diskBlock}` })}
+              className="rounded-lg bg-accent-success/20 px-3 py-2 text-sm text-accent-success hover:bg-accent-success/30 transition-colors flex items-center gap-2"
+              onClick={() => exportCsv.trigger({ url: `/api/export/csv?detailed=${detailedCsv ? 1 : 0}` })}
             >
-              Run Disk I/O
+              <Download className="w-4 h-4" />
+              Export CSV{detailedCsv ? ' (Detailed)' : ''}
             </button>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Size MB <input className="bg-slate-800 px-2 py-1 rounded w-16" type="number" value={diskSize} onChange={(e) => setDiskSize(Number(e.target.value))} />
+            <label className="flex items-center gap-2 text-sm text-white/80">
+              <input type="checkbox" checked={detailedCsv} onChange={(e) => setDetailedCsv(e.target.checked)} className="accent-accent-primary" />
+              Detailed
             </label>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Block KB <input className="bg-slate-800 px-2 py-1 rounded w-16" type="number" value={diskBlock} onChange={(e) => setDiskBlock(Number(e.target.value))} />
-            </label>
-          </div>
-          <ResultCard title="Disk I/O" result={(disk.data as Result) || null} loading={disk.isMutating} error={(disk.error as any)?.message || null} />
-          <div className="flex items-center gap-2">
             <button
-              className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-              onClick={async () => {
-                try {
-                  setPdfStatus('Downloading...');
-                  const res = await fetch('/api/export/pdf');
-                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                  const blob = await res.blob();
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = 'benchmark_report.pdf';
-                  a.click();
-                  URL.revokeObjectURL(url);
-                  setPdfStatus('Downloaded benchmark_report.pdf');
-                } catch (e: any) {
-                  setPdfStatus(`Error: ${e.message}`);
-                }
-              }}
+              className="rounded-lg bg-accent-info/20 px-3 py-2 text-sm text-accent-info hover:bg-accent-info/30 transition-colors flex items-center gap-2"
+              onClick={() => exportHtml.trigger({ url: '/api/export/html' })}
             >
-              Export PDF
+              <Download className="w-4 h-4" />
+              Export HTML
             </button>
-            <span className="text-xs text-slate-400">{pdfStatus || 'PDF downloads directly.'}</span>
+            <span className="text-xs text-white/40">PDF export downloads directly from server (not previewed).</span>
           </div>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex gap-2 items-center">
-            <button
-              className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-              onClick={() => pcie.trigger({ url: `/api/microbench/pcie?size_mb=${pcieSize}&iters=${pcieIters}` })}
-            >
-              Run PCIe H2D/D2H
-            </button>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Size MB <input className="bg-slate-800 px-2 py-1 rounded w-16" type="number" value={pcieSize} onChange={(e) => setPcieSize(Number(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Iters <input className="bg-slate-800 px-2 py-1 rounded w-14" type="number" value={pcieIters} onChange={(e) => setPcieIters(Number(e.target.value))} />
-            </label>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <ResultCard title="CSV Export" result={(exportCsv.data as Result) || null} loading={exportCsv.isMutating} error={(exportCsv.error as any)?.message || null} />
+            <ResultCard title="HTML Export" result={(exportHtml.data as Result) || null} loading={exportHtml.isMutating} error={(exportHtml.error as any)?.message || null} />
           </div>
-          <ResultCard title="PCIe" result={(pcie.data as Result) || null} loading={pcie.isMutating} error={(pcie.error as any)?.message || null} />
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex gap-2 items-center">
-            <button
-              className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-              onClick={() => mem.trigger({ url: `/api/microbench/mem?size_mb=${memSize}&stride=${memStride}` })}
-            >
-              Run Memory Stride
-            </button>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Size MB <input className="bg-slate-800 px-2 py-1 rounded w-16" type="number" value={memSize} onChange={(e) => setMemSize(Number(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Stride <input className="bg-slate-800 px-2 py-1 rounded w-16" type="number" value={memStride} onChange={(e) => setMemStride(Number(e.target.value))} />
-            </label>
-          </div>
-          <ResultCard title="Memory Hierarchy" result={(mem.data as Result) || null} loading={mem.isMutating} error={(mem.error as any)?.message || null} />
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex gap-2 items-center">
-            <button
-              className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-              onClick={() => tensor.trigger({ url: `/api/microbench/tensor?size=${tensorSize}&precision=${encodeURIComponent(tensorPrecision)}` })}
-            >
-              Run Tensor Core
-            </button>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Size <input className="bg-slate-800 px-2 py-1 rounded w-16" type="number" value={tensorSize} onChange={(e) => setTensorSize(Number(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Precision <input className="bg-slate-800 px-2 py-1 rounded w-20" type="text" value={tensorPrecision} onChange={(e) => setTensorPrecision(e.target.value)} />
-            </label>
-          </div>
-          <ResultCard title="Tensor Core" result={(tensor.data as Result) || null} loading={tensor.isMutating} error={(tensor.error as any)?.message || null} />
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex gap-2 items-center">
-            <button
-              className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-              onClick={() => sfu.trigger({ url: `/api/microbench/sfu?elements=${sfuElems}` })}
-            >
-              Run SFU
-            </button>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Elements <input className="bg-slate-800 px-2 py-1 rounded w-24" type="number" value={sfuElems} onChange={(e) => setSfuElems(Number(e.target.value))} />
-            </label>
-          </div>
-          <ResultCard title="SFU" result={(sfu.data as Result) || null} loading={sfu.isMutating} error={(sfu.error as any)?.message || null} />
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex gap-2 items-center">
-            <button
-              className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-              onClick={() => loop.trigger({ url: `/api/microbench/loopback?size_mb=${loopSize}&port=${loopPort}` })}
-            >
-              Run Loopback
-            </button>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Size MB <input className="bg-slate-800 px-2 py-1 rounded w-16" type="number" value={loopSize} onChange={(e) => setLoopSize(Number(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-300 flex items-center gap-1">
-              Port <input className="bg-slate-800 px-2 py-1 rounded w-16" type="number" value={loopPort} onChange={(e) => setLoopPort(Number(e.target.value))} />
-            </label>
-          </div>
-          <ResultCard title="Loopback" result={(loop.data as Result) || null} loading={loop.isMutating} error={(loop.error as any)?.message || null} />
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-slate-100">Nsight Utilities</h3>
-        <div className="flex flex-wrap gap-2">
-          <button
-            className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-            onClick={() => nsightAvail.trigger({ url: '/api/nsight/availability' })}
-          >
-            Check Nsight Availability
-          </button>
-          <input
-            className="rounded bg-slate-800 px-2 py-2 text-sm text-slate-100 w-64"
-            value={compareDir}
-            onChange={(e) => setCompareDir(e.target.value)}
-            placeholder="Profiles dir"
-          />
-          <button
-            className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-            onClick={() => compareNsys.trigger({ url: `/api/nsight/compare/nsys?dir=${encodeURIComponent(compareDir)}` })}
-          >
-            Compare Nsight Systems
-          </button>
-          <button
-            className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-            onClick={() => compareNcu.trigger({ url: `/api/nsight/compare/ncu?dir=${encodeURIComponent(compareDir)}` })}
-          >
-            Compare Nsight Compute
-          </button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <ResultCard title="Nsight Availability" result={(nsightAvail.data as Result) || null} loading={nsightAvail.isMutating} error={(nsightAvail.error as any)?.message || null} />
-          <div className="space-y-2">
-            <ResultCard title="Nsight Systems Compare" result={(compareNsys.data as Result) || null} loading={compareNsys.isMutating} error={(compareNsys.error as any)?.message || null} />
-            <MetricsTable result={compareNsys.data} />
-          </div>
-          <div className="space-y-2">
-            <ResultCard title="Nsight Compute Compare" result={(compareNcu.data as Result) || null} loading={compareNcu.isMutating} error={(compareNcu.error as any)?.message || null} />
-            <MetricsTable result={compareNcu.data} />
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-slate-100">Exports</h3>
-        <div className="flex flex-wrap gap-2 items-center">
-          <button
-            className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-            onClick={() => exportCsv.trigger({ url: `/api/export/csv?detailed=${detailedCsv ? 1 : 0}` })}
-          >
-            Export CSV{detailedCsv ? ' (Detailed)' : ''}
-          </button>
-          <label className="flex items-center gap-2 text-sm text-slate-200">
-            <input type="checkbox" checked={detailedCsv} onChange={(e) => setDetailedCsv(e.target.checked)} />
-            Detailed
-          </label>
-          <button
-            className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700"
-            onClick={() => exportHtml.trigger({ url: '/api/export/html' })}
-          >
-            Export HTML
-          </button>
-          <span className="text-xs text-slate-400">PDF export downloads directly from server (not previewed).</span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <ResultCard title="CSV Export" result={(exportCsv.data as Result) || null} loading={exportCsv.isMutating} error={(exportCsv.error as any)?.message || null} />
-          <ResultCard title="HTML Export" result={(exportHtml.data as Result) || null} loading={exportHtml.isMutating} error={(exportHtml.error as any)?.message || null} />
         </div>
       </div>
     </div>
   );
 }
+
+export default MicrobenchTab;

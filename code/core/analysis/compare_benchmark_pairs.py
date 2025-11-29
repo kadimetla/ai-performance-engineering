@@ -1,8 +1,8 @@
 """Generic baseline/optimized comparator using discovery + harness.
 
 Example:
-  python tools/analysis/compare_benchmark_pairs.py --chapter labs/moe_parallelism
-  python tools/analysis/compare_benchmark_pairs.py --chapter ch15 --targets expert_parallelism
+  python core/analysis/compare_benchmark_pairs.py --chapter labs/moe_parallelism
+  python core/analysis/compare_benchmark_pairs.py --chapter ch15 --targets expert_parallelism
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from core.discovery import discover_benchmarks, normalize_chapter_token
 from core.harness.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
-from labs.moe_parallelism.plan import PlanEvaluator
+from core.common.moe_parallelism_plan import PlanEvaluator
 
 
 def _load_pairs(chapter_slug: str) -> List[Tuple[Path, Path, str]]:

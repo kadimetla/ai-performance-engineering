@@ -11,10 +11,15 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
+import json
 from pathlib import Path
 from enum import Enum
 from types import SimpleNamespace
 from typing import List, Optional
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from core.plugins.loader import load_plugin_apps
 try:
@@ -30,11 +35,6 @@ try:
     import typer
 except ImportError:  # pragma: no cover - Typer required for the CLI
     typer = None  # type: ignore
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 
 # =============================================================================
 # ENV LOADING (single implementation)
@@ -200,11 +200,19 @@ if typer:
         ctx: typer.Context,
         verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
         json_output: bool = typer.Option(False, "--json", help="Output as JSON when supported"),
+        dynamo_logs: bool = typer.Option(
+            False,
+            "--dynamo-logs/--no-dynamo-logs",
+            help="Enable TorchDynamo/TORCH_LOGS output (disabled by default for cleaner CLI)",
+        ),
     ) -> None:
         """Default: launch the benchmark TUI when no subcommand is provided."""
         ctx.obj = {"verbose": verbose, "json_output": json_output}
+        if not dynamo_logs:
+            for key in ["TORCH_LOGS", "TORCH_COMPILE_DEBUG"]:
+                os.environ.pop(key, None)
         if ctx.invoked_subcommand is None:
-            from tools.cli.tui import run_tui
+            from cli.tui import run_tui
             try:
                 run_tui()
             except Exception as exc:  # pragma: no cover - curses may fail in CI
@@ -221,27 +229,32 @@ if typer:
 
     @system_app.command("status", help="Show comprehensive system status")
     def system_status(ctx: typer.Context) -> None:
-        from tools.cli.commands import system as system_cmds
+        from cli.commands import system as system_cmds
         _run(system_cmds.system_status, ctx)
 
     @system_app.command("gpu", help="GPU information and control")
     def system_gpu(ctx: typer.Context) -> None:
-        from tools.cli.commands import system as system_cmds
+        from cli.commands import system as system_cmds
         _run(system_cmds.gpu_info, ctx)
 
     @system_app.command("env", help="Environment variables and paths")
     def system_env(ctx: typer.Context) -> None:
-        from tools.cli.commands import system as system_cmds
+        from cli.commands import system as system_cmds
         _run(system_cmds.show_env, ctx)
 
     @system_app.command("deps", help="Check dependencies and versions")
     def system_deps(ctx: typer.Context) -> None:
-        from tools.cli.commands import system as system_cmds
+        from cli.commands import system as system_cmds
         _run(system_cmds.check_deps, ctx)
+
+    @system_app.command("topo", help="Show GPU/NVLink/PCIe topology (nvidia-smi topo -m)")
+    def system_topo(ctx: typer.Context) -> None:
+        from cli.commands import system as system_cmds
+        _run(system_cmds.topo, ctx)
 
     @system_app.command("preflight", help="Pre-flight checks before optimization")
     def system_preflight(ctx: typer.Context) -> None:
-        from tools.cli.commands import system as system_cmds
+        from cli.commands import system as system_cmds
         _run(system_cmds.preflight, ctx)
 
 
@@ -257,7 +270,7 @@ if typer and EXT_ENABLED and ai_app is not None:
         question: Optional[List[str]] = typer.Argument(None, help="Question to ask"),
         no_book: bool = typer.Option(False, "--no-book", help="Skip book citations"),
     ) -> None:
-        from tools.cli.commands import ai_assistant
+        from cli.commands import ai_assistant
         _run(ai_assistant.ask_question, ctx, question=question, no_book=no_book)
 
     @ai_app.command("explain", help="Explain a concept with book + LLM")
@@ -266,7 +279,7 @@ if typer and EXT_ENABLED and ai_app is not None:
         concept: Optional[str] = typer.Argument(None, help="Concept to explain"),
         no_book: bool = typer.Option(False, "--no-book", help="Skip book citations"),
     ) -> None:
-        from tools.cli.commands import ai_assistant
+        from cli.commands import ai_assistant
         _run(ai_assistant.explain_concept, ctx, concept=concept, no_book=no_book)
 
     @ai_app.command("troubleshoot", help="Diagnose and fix issues")
@@ -275,12 +288,12 @@ if typer and EXT_ENABLED and ai_app is not None:
         issue: Optional[List[str]] = typer.Argument(None, help="Issue description"),
         no_book: bool = typer.Option(False, "--no-book", help="Skip book citations"),
     ) -> None:
-        from tools.cli.commands import ai_assistant
+        from cli.commands import ai_assistant
         _run(ai_assistant.troubleshoot, ctx, issue=issue, no_book=no_book)
 
     @ai_app.command("status", help="Check LLM backend status")
     def ai_status(ctx: typer.Context) -> None:
-        from tools.cli.commands import ai_assistant
+        from cli.commands import ai_assistant
         _run(ai_assistant.llm_status, ctx)
 
 
@@ -304,7 +317,7 @@ if typer and EXT_ENABLED and analyze_app is not None:
             show_choices=True,
         ),
     ) -> None:
-        from tools.cli.commands import analysis
+        from cli.commands import analysis
         _run(analysis.run_profile, ctx, targets=targets, profile=profile)
 
     @analyze_app.command("compare", help="Compare two configurations/runs")
@@ -320,7 +333,7 @@ if typer and EXT_ENABLED and analyze_app is not None:
             None, "--targets", help="Optional example names to compare"
         ),
     ) -> None:
-        from tools.cli.commands import analysis
+        from cli.commands import analysis
         _run(analysis.compare_runs, ctx, chapter=chapter, targets=targets)
 
     @analyze_app.command("diff", help="Differential analysis between baseline/optimized")
@@ -329,12 +342,12 @@ if typer and EXT_ENABLED and analyze_app is not None:
         baseline: Optional[Path] = typer.Argument(None, help="Baseline deep profile JSON"),
         optimized: Optional[Path] = typer.Argument(None, help="Optimized deep profile JSON"),
     ) -> None:
-        from tools.cli.commands import analysis
+        from cli.commands import analysis
         _run(analysis.diff_analysis, ctx, baseline=str(baseline) if baseline else None, optimized=str(optimized) if optimized else None)
 
     @analyze_app.command("roofline", help="Roofline model analysis")
     def analyze_roofline(ctx: typer.Context) -> None:
-        from tools.cli.commands import analysis
+        from cli.commands import analysis
         _run(analysis.roofline, ctx)
 
     @analyze_app.command("bottleneck", help="Identify performance bottlenecks")
@@ -348,7 +361,7 @@ if typer and EXT_ENABLED and analyze_app is not None:
         ),
         limit: int = typer.Option(5, "--limit", help="Limit number of bottlenecks shown"),
     ) -> None:
-        from tools.cli.commands import analysis
+        from cli.commands import analysis
         _run(analysis.bottleneck, ctx, mode=mode, limit=limit)
 
 
@@ -370,22 +383,22 @@ if typer and EXT_ENABLED and optimize_app is not None:
             show_choices=True,
         ),
     ) -> None:
-        from tools.cli.commands import optimization
+        from cli.commands import optimization
         _run(optimization.recommend, ctx, model_size=model_size, gpus=gpus, goal=goal)
 
     @optimize_app.command("auto", help="Auto-optimization with LLM guidance")
     def optimize_auto(ctx: typer.Context) -> None:
-        from tools.cli.commands import optimization
+        from cli.commands import optimization
         _run(optimization.auto_optimize, ctx)
 
     @optimize_app.command("whatif", help="What-if analysis for optimizations")
     def optimize_whatif(ctx: typer.Context) -> None:
-        from tools.cli.commands import optimization
+        from cli.commands import optimization
         _run(optimization.whatif, ctx)
 
     @optimize_app.command("stacking", help="Compound optimization stacking")
     def optimize_stacking(ctx: typer.Context) -> None:
-        from tools.cli.commands import optimization
+        from cli.commands import optimization
         _run(optimization.stacking, ctx)
 
     @optimize_app.command("playbook", help="Pre-built optimization playbooks")
@@ -393,7 +406,7 @@ if typer and EXT_ENABLED and optimize_app is not None:
         ctx: typer.Context,
         action: str = typer.Argument("list", help='Playbook name or "list"'),
     ) -> None:
-        from tools.cli.commands import optimization
+        from cli.commands import optimization
         _run(optimization.playbook, ctx, action=action)
 
 
@@ -410,12 +423,12 @@ if typer and EXT_ENABLED and distributed_app is not None:
         gpus: int = typer.Option(8, "--gpus", help="Number of GPUs"),
         nodes: int = typer.Option(1, "--nodes", help="Number of nodes"),
     ) -> None:
-        from tools.cli.commands import distributed
+        from cli.commands import distributed
         _run(distributed.plan_parallelism, ctx, model_size=model_size, gpus=gpus, nodes=nodes)
 
     @distributed_app.command("topology", help="Analyze GPU topology")
     def distributed_topology(ctx: typer.Context) -> None:
-        from tools.cli.commands import distributed
+        from cli.commands import distributed
         _run(distributed.topology, ctx)
 
     @distributed_app.command("nccl", help="NCCL tuning recommendations")
@@ -425,7 +438,7 @@ if typer and EXT_ENABLED and distributed_app is not None:
         gpus: int = typer.Option(8, "--gpus", help="GPUs per node"),
         diagnose: bool = typer.Option(False, "--diagnose", help="Include diagnostic checks"),
     ) -> None:
-        from tools.cli.commands import distributed
+        from cli.commands import distributed
         _run(distributed.nccl_tuning, ctx, nodes=nodes, gpus=gpus, diagnose=diagnose)
 
     @distributed_app.command("zero", help="ZeRO/FSDP configuration")
@@ -434,7 +447,7 @@ if typer and EXT_ENABLED and distributed_app is not None:
         model_size: float = typer.Option(70.0, "--model-size", help="Model size in billions"),
         gpus: int = typer.Option(8, "--gpus", help="Number of GPUs"),
     ) -> None:
-        from tools.cli.commands import distributed
+        from cli.commands import distributed
         _run(distributed.zero_config, ctx, model_size=model_size, gpus=gpus)
 
 
@@ -455,7 +468,7 @@ if typer and EXT_ENABLED and inference_app is not None:
             show_choices=True,
         ),
     ) -> None:
-        from tools.cli.commands import inference
+        from cli.commands import inference
         _run(inference.vllm_config, ctx, model=model, target=target)
 
     @inference_app.command("quantize", help="Quantization recommendations")
@@ -466,7 +479,7 @@ if typer and EXT_ENABLED and inference_app is not None:
             None, "--target-memory", help="Target memory per GPU (GB)"
         ),
     ) -> None:
-        from tools.cli.commands import inference
+        from cli.commands import inference
         _run(inference.quantize, ctx, model_size=model_size, target_memory=target_memory)
 
     @inference_app.command("deploy", help="Deployment configuration")
@@ -475,7 +488,7 @@ if typer and EXT_ENABLED and inference_app is not None:
         model: str = typer.Option("meta-llama/Llama-2-70b-hf", "--model", help="Model name"),
         target: str = typer.Option("vllm", "--target", help="Backend target (vllm/tensorrt/triton)"),
     ) -> None:
-        from tools.cli.commands import inference
+        from cli.commands import inference
         _run(inference.deploy_config, ctx, model=model, target=target)
 
     @inference_app.command("serve", help="Start inference server")
@@ -484,7 +497,7 @@ if typer and EXT_ENABLED and inference_app is not None:
         model: str = typer.Option("meta-llama/Llama-2-70b-hf", "--model", help="Model name"),
         gpus: int = typer.Option(1, "--gpus", help="Tensor parallel size"),
     ) -> None:
-        from tools.cli.commands import inference
+        from cli.commands import inference
         _run(inference.serve, ctx, model=model, gpus=gpus)
 
 
@@ -496,17 +509,17 @@ if typer and EXT_ENABLED and training_app is not None:
 
     @training_app.command("rl", help="RL/RLHF optimization")
     def training_rl(ctx: typer.Context) -> None:
-        from tools.cli.commands import training
+        from cli.commands import training
         _run(training.rl, ctx)
 
     @training_app.command("checkpoint", help="Checkpointing strategy")
     def training_checkpoint(ctx: typer.Context) -> None:
-        from tools.cli.commands import training
+        from cli.commands import training
         _run(training.checkpointing, ctx)
 
     @training_app.command("gradient", help="Gradient optimization")
     def training_gradient(ctx: typer.Context) -> None:
-        from tools.cli.commands import training
+        from cli.commands import training
         _run(training.gradient, ctx)
 
 
@@ -518,17 +531,17 @@ if typer and EXT_ENABLED and monitor_app is not None:
 
     @monitor_app.command("live", help="Real-time GPU monitoring")
     def monitor_live(ctx: typer.Context) -> None:
-        from tools.cli.commands import monitoring
+        from cli.commands import monitoring
         _run(monitoring.live_monitor, ctx)
 
     @monitor_app.command("regression", help="Detect performance regressions")
     def monitor_regression(ctx: typer.Context) -> None:
-        from tools.cli.commands import monitoring
+        from cli.commands import monitoring
         _run(monitoring.regression, ctx)
 
     @monitor_app.command("metrics", help="Collect and display metrics")
     def monitor_metrics(ctx: typer.Context) -> None:
-        from tools.cli.commands import monitoring
+        from cli.commands import monitoring
         _run(monitoring.metrics, ctx)
 
 
@@ -549,17 +562,17 @@ if typer and EXT_ENABLED and report_app is not None:
             show_choices=True,
         ),
     ) -> None:
-        from tools.cli.commands import reports
+        from cli.commands import reports
         _run(reports.generate_report, ctx, output=str(output) if output else None, format=fmt)
 
     @report_app.command("history", help="View optimization history")
     def report_history(ctx: typer.Context) -> None:
-        from tools.cli.commands import reports
+        from cli.commands import reports
         _run(reports.show_history, ctx)
 
     @report_app.command("roi", help="Calculate ROI of optimizations")
     def report_roi(ctx: typer.Context) -> None:
-        from tools.cli.commands import reports
+        from cli.commands import reports
         _run(reports.calculate_roi, ctx)
 
     @report_app.command("export", help="Export results to various formats")
@@ -573,7 +586,7 @@ if typer and EXT_ENABLED and report_app is not None:
         ),
         output: Optional[Path] = typer.Option(None, "--output", help="Output file"),
     ) -> None:
-        from tools.cli.commands import reports
+        from cli.commands import reports
         _run(reports.export, ctx, format=fmt, output=str(output) if output else None)
 
 
@@ -589,7 +602,7 @@ if typer and EXT_ENABLED and profile_app is not None:
         file: Optional[Path] = typer.Argument(None, help="Profile file"),
         output: str = typer.Option("flame.html", "--output", "-o", help="Output file"),
     ) -> None:
-        from tools.cli.commands import profiling
+        from cli.commands import profiling
         _run(profiling.flame, ctx, file=str(file) if file else None, output=output)
 
     @profile_app.command("memory", help="Memory timeline analysis")
@@ -598,7 +611,7 @@ if typer and EXT_ENABLED and profile_app is not None:
         file: Optional[Path] = typer.Argument(None, help="Profile file"),
         output: Optional[str] = typer.Option(None, "--output", "-o", help="Optional path to write JSON timeline"),
     ) -> None:
-        from tools.cli.commands import profiling
+        from cli.commands import profiling
         _run(profiling.memory, ctx, file=str(file) if file else None, output=output)
 
     @profile_app.command("kernels", help="Kernel breakdown analysis")
@@ -606,7 +619,7 @@ if typer and EXT_ENABLED and profile_app is not None:
         ctx: typer.Context,
         file: Optional[Path] = typer.Argument(None, help="Profile file"),
     ) -> None:
-        from tools.cli.commands import profiling
+        from cli.commands import profiling
         _run(profiling.kernels, ctx, file=str(file) if file else None)
 
     @profile_app.command("hta", help="Holistic Trace Analysis")
@@ -614,7 +627,7 @@ if typer and EXT_ENABLED and profile_app is not None:
         ctx: typer.Context,
         file: Optional[Path] = typer.Argument(None, help="Profile file"),
     ) -> None:
-        from tools.cli.commands import profiling
+        from cli.commands import profiling
         _run(profiling.hta, ctx, file=str(file) if file else None)
 
     @profile_app.command("ncu", help="NCU deep dive analysis")
@@ -623,22 +636,22 @@ if typer and EXT_ENABLED and profile_app is not None:
         script: Optional[Path] = typer.Argument(None, help="Script to profile"),
         kernel: Optional[str] = typer.Option(None, "--kernel", help="Specific kernel"),
     ) -> None:
-        from tools.cli.commands import profiling
+        from cli.commands import profiling
         _run(profiling.ncu, ctx, script=str(script) if script else None, kernel=kernel)
 
     @profile_app.command("warp-divergence", help="Warp divergence analysis")
     def profile_warp_divergence(ctx: typer.Context) -> None:
-        from tools.cli.commands import profiling
+        from cli.commands import profiling
         _run(profiling.warp_divergence, ctx)
 
     @profile_app.command("bank-conflicts", help="Bank conflict analysis")
     def profile_bank_conflicts(ctx: typer.Context) -> None:
-        from tools.cli.commands import profiling
+        from cli.commands import profiling
         _run(profiling.bank_conflicts, ctx)
 
     @profile_app.command("occupancy", help="Occupancy analysis")
     def profile_occupancy(ctx: typer.Context) -> None:
-        from tools.cli.commands import profiling
+        from cli.commands import profiling
         _run(profiling.occupancy, ctx)
 
 
@@ -655,7 +668,7 @@ if typer and EXT_ENABLED and hf_app is not None:
         task: Optional[str] = typer.Option(None, "--task", help="Filter by task"),
         limit: int = typer.Option(10, "--limit", help="Max results"),
     ) -> None:
-        from tools.cli.commands import huggingface
+        from cli.commands import huggingface
         _run(huggingface.search, ctx, query=query, task=task, limit=limit)
 
     @hf_app.command("trending", help="Trending models")
@@ -664,7 +677,7 @@ if typer and EXT_ENABLED and hf_app is not None:
         task: str = typer.Option("text-generation", "--task", help="Task type"),
         limit: int = typer.Option(15, "--limit", help="Max results"),
     ) -> None:
-        from tools.cli.commands import huggingface
+        from cli.commands import huggingface
         _run(huggingface.trending, ctx, task=task, limit=limit)
 
     @hf_app.command("model", help="Model information")
@@ -672,7 +685,7 @@ if typer and EXT_ENABLED and hf_app is not None:
         ctx: typer.Context,
         model: Optional[str] = typer.Argument(None, help="Model ID"),
     ) -> None:
-        from tools.cli.commands import huggingface
+        from cli.commands import huggingface
         _run(huggingface.model_info, ctx, model=model)
 
     @hf_app.command("config", help="Generate optimal config")
@@ -681,7 +694,7 @@ if typer and EXT_ENABLED and hf_app is not None:
         model: Optional[str] = typer.Argument(None, help="Model ID"),
         gpus: int = typer.Option(1, "--gpus", help="Number of GPUs"),
     ) -> None:
-        from tools.cli.commands import huggingface
+        from cli.commands import huggingface
         _run(huggingface.model_config, ctx, model=model, gpus=gpus)
 
 
@@ -693,12 +706,12 @@ if typer:
 
     @test_app.command("bandwidth", help="GPU memory bandwidth test")
     def test_bandwidth(ctx: typer.Context) -> None:
-        from tools.cli.commands import tests as test_cmds
+        from cli.commands import tests as test_cmds
         _run(test_cmds.gpu_bandwidth, ctx)
 
     @test_app.command("network", help="Network throughput test")
     def test_network(ctx: typer.Context) -> None:
-        from tools.cli.commands import tests as test_cmds
+        from cli.commands import tests as test_cmds
         _run(test_cmds.network_test, ctx)
 
     @test_app.command("warmup", help="Warmup/JIT audit")
@@ -707,7 +720,7 @@ if typer:
         script: Optional[Path] = typer.Argument(None, help="Script to analyze"),
         iterations: int = typer.Option(10, "--iterations", help="Iterations"),
     ) -> None:
-        from tools.cli.commands import tests as test_cmds
+        from cli.commands import tests as test_cmds
         _run(test_cmds.warmup_audit, ctx, script=str(script) if script else None, iterations=iterations)
 
     @test_app.command("speed", help="Run speed tests")
@@ -719,14 +732,35 @@ if typer:
             help="Speed test type",
             show_choices=True,
         ),
+        gemm_size: int = typer.Option(512, "--gemm-size", help="Square GEMM size (e.g., 512 => 512x512)"),
+        precision: str = typer.Option("fp16", "--precision", help="Precision for GEMM (fp16/bf16/tf32/fp32/fp8)"),
+        mem_size_mb: int = typer.Option(16, "--mem-size-mb", help="Memory test size (MB)"),
+        mem_stride: int = typer.Option(128, "--mem-stride", help="Memory test stride (bytes)"),
     ) -> None:
-        from tools.cli.commands import tests as test_cmds
-        _run(test_cmds.speedtest, ctx, type=type)
+        from cli.commands import tests as test_cmds
+        _run(
+            test_cmds.speedtest,
+            ctx,
+            type=type,
+            gemm_size=gemm_size,
+            precision=precision,
+            mem_size_mb=mem_size_mb,
+            mem_stride=mem_stride,
+        )
 
     @test_app.command("diagnostics", help="System diagnostics")
     def test_diagnostics(ctx: typer.Context) -> None:
-        from tools.cli.commands import tests as test_cmds
+        from cli.commands import tests as test_cmds
         _run(test_cmds.diagnostics, ctx)
+
+    @test_app.command("roofline", help="Stride sweep ASCII roofline for memory")
+    def test_roofline(
+        ctx: typer.Context,
+        size_mb: int = typer.Option(32, "--size-mb", help="Buffer size (MB)"),
+        strides: Optional[List[int]] = typer.Option(None, "--stride", help="Stride values (repeatable)"),
+    ) -> None:
+        from cli.commands import tests as test_cmds
+        _run(test_cmds.mem_roofline, ctx, size_mb=size_mb, strides=strides)
 
 
 # =============================================================================
@@ -745,7 +779,7 @@ if typer and EXT_ENABLED and cluster_app is not None:
         partition: str = typer.Option("gpu", "--partition", help="SLURM partition"),
         output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file"),
     ) -> None:
-        from tools.cli.commands import cluster
+        from cli.commands import cluster
         _run(
             cluster.slurm_generate,
             ctx,
@@ -764,7 +798,7 @@ if typer and EXT_ENABLED and cluster_app is not None:
         tokens: float = typer.Option(1e12, "--tokens", help="Training tokens"),
         batch_size: int = typer.Option(1024, "--batch-size", help="Batch size"),
     ) -> None:
-        from tools.cli.commands import cluster
+        from cli.commands import cluster
         _run(cluster.cloud_cost, ctx, model_size=model_size, tokens=tokens, batch_size=batch_size)
 
     @cluster_app.command("scaling", help="Predict scaling efficiency")
@@ -774,17 +808,17 @@ if typer and EXT_ENABLED and cluster_app is not None:
         model_size: float = typer.Option(70.0, "--model-size", help="Model size (B)"),
         batch_size: int = typer.Option(32, "--batch-size", help="Batch size"),
     ) -> None:
-        from tools.cli.commands import cluster
+        from cli.commands import cluster
         _run(cluster.scaling_predict, ctx, gpus=gpus, model_size=model_size, batch_size=batch_size)
 
     @cluster_app.command("diagnose", help="Cluster diagnostics")
     def cluster_diagnose(ctx: typer.Context) -> None:
-        from tools.cli.commands import cluster
+        from cli.commands import cluster
         _run(cluster.cluster_diagnose, ctx)
 
     @cluster_app.command("power", help="Power analysis")
     def cluster_power(ctx: typer.Context) -> None:
-        from tools.cli.commands import cluster
+        from cli.commands import cluster
         _run(cluster.power_analysis, ctx)
 
 
@@ -801,7 +835,7 @@ if typer:
         block_size_kb: int = typer.Option(1024, "--block-kb", "-b", help="Block size (KB)"),
         tmp_dir: Optional[Path] = typer.Option(None, "--tmp-dir", help="Temporary directory"),
     ) -> None:
-        from tools.cli.commands import microbench
+        from core.diagnostics import microbench
         _run(
             microbench.disk,
             ctx,
@@ -816,7 +850,7 @@ if typer:
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
         iters: int = typer.Option(10, "--iters", "-i", help="Iterations"),
     ) -> None:
-        from tools.cli.commands import microbench
+        from core.diagnostics import microbench
         _run(microbench.pcie, ctx, size_mb=size_mb, iters=iters)
 
     @microbench_app.command("mem", help="Memory hierarchy stride test")
@@ -825,7 +859,7 @@ if typer:
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Buffer size (MB)"),
         stride: int = typer.Option(128, "--stride", help="Stride (bytes)"),
     ) -> None:
-        from tools.cli.commands import microbench
+        from core.diagnostics import microbench
         _run(microbench.mem_hierarchy, ctx, size_mb=size_mb, stride=stride)
 
     @microbench_app.command("tensor", help="Tensor core throughput")
@@ -834,7 +868,7 @@ if typer:
         size: int = typer.Option(4096, "--size", help="Matrix size"),
         precision: str = typer.Option("fp16", "--precision", help="Precision (fp16/fp32/bf16)"),
     ) -> None:
-        from tools.cli.commands import microbench
+        from core.diagnostics import microbench
         _run(microbench.tensor_core, ctx, size=size, precision=precision)
 
     @microbench_app.command("sfu", help="SFU benchmark")
@@ -842,7 +876,7 @@ if typer:
         ctx: typer.Context,
         elements: int = typer.Option(64 * 1024 * 1024, "--elements", help="Number of elements"),
     ) -> None:
-        from tools.cli.commands import microbench
+        from core.diagnostics import microbench
         _run(microbench.sfu, ctx, elements=elements)
 
     @microbench_app.command("loopback", help="Loopback TCP throughput")
@@ -851,7 +885,7 @@ if typer:
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
         port: int = typer.Option(5789, "--port", help="Port to use"),
     ) -> None:
-        from tools.cli.commands import microbench
+        from core.diagnostics import microbench
         _run(microbench.loopback, ctx, size_mb=size_mb, port=port)
 
     # =============================================================================
@@ -869,6 +903,46 @@ if typer:
         args: List[str] = typer.Argument(None, help="Arguments forwarded to analysis.distributed_analysis"),
     ) -> None:
         _run_module("analysis.distributed_analysis", args or [])
+
+    @ops_app.command("launch-plan", help="Generate torchrun launch plan (dry-run/save).")
+    def ops_launch_plan(
+        ctx: typer.Context,
+        model_params: int = typer.Option(70, "--model-params", help="Model size in billions"),
+        nodes: int = typer.Option(1, "--nodes", help="Nodes"),
+        gpus: int = typer.Option(8, "--gpus", help="GPUs per node"),
+        tp: int = typer.Option(1, "--tp", help="Tensor parallel degree"),
+        pp: int = typer.Option(1, "--pp", help="Pipeline parallel degree"),
+        dp: int = typer.Option(1, "--dp", help="Data parallel degree"),
+        batch_size: int = typer.Option(1, "--batch-size", help="Global batch size"),
+        script: str = typer.Option("train.py", "--script", help="Entry script to launch"),
+        extra_args: Optional[str] = typer.Option(None, "--extra-args", help="Extra args to append to command"),
+        save_plan: Optional[Path] = typer.Option(None, "--save-plan", help="Optional path to save plan JSON"),
+    ) -> None:
+        from core.optimization.parallelism_planner.launch_plan import generate_launch_plan
+
+        try:
+            plan = generate_launch_plan(
+                model_params=model_params,
+                nodes=nodes,
+                gpus_per_node=gpus,
+                tp=tp,
+                pp=pp,
+                dp=dp,
+                batch_size=batch_size,
+                script=script,
+                extra_args=extra_args,
+            )
+        except Exception as exc:
+            typer.echo(f"Failed to build launch plan: {exc}", err=True)
+            raise typer.Exit(code=1)
+
+        typer.echo("\n🧭 Launch Plan")
+        typer.echo(f"Model params: {plan.model_params}B")
+        typer.echo(f"Layout: TP={plan.tp} PP={plan.pp} DP={plan.dp} on {plan.nodes}x{plan.gpus_per_node}")
+        typer.echo(f"Command:\n  {plan.command}")
+        if save_plan:
+            save_plan.write_text(plan.to_json())
+            typer.echo(f"\n💾 Saved plan to {save_plan}")
 
     # =============================================================================
     # Monitoring runners
@@ -900,9 +974,9 @@ if typer:
 
     @monitoring_app.command("microbench", help="Lightweight diagnostics microbenchmarks.")
     def monitoring_microbench(
-        args: List[str] = typer.Argument(None, help="Arguments forwarded to monitoring.microbench"),
+        args: List[str] = typer.Argument(None, help="Arguments forwarded to core.diagnostics.microbench"),
     ) -> None:
-        _run_module("monitoring.microbench", args or [])
+        _run_module("core.diagnostics.microbench", args or [])
 
 
 # =============================================================================
@@ -913,8 +987,8 @@ if typer:
 
     # Bench integration (core)
     try:
-        from cli import bench as bench_cli
-        BENCH_APP = bench_cli.app if getattr(bench_cli, "TYPER_AVAILABLE", False) else None
+        from core.benchmark import bench_commands
+        BENCH_APP = bench_commands.app if getattr(bench_commands, "TYPER_AVAILABLE", False) else None
     except Exception:
         BENCH_APP = None
 
@@ -938,7 +1012,7 @@ if typer:
             ctx: typer.Context,
             data_file: Optional[Path] = typer.Option(None, "--data-file", "-d", help="Path to benchmark_test_results.json"),
         ) -> None:
-            from tools.cli.tui import run_tui
+            from cli.tui import run_tui
             try:
                 run_tui(str(data_file) if data_file else None)
             except Exception as exc:  # pragma: no cover - curses may fail in CI

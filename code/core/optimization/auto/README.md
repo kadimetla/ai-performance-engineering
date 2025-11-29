@@ -233,7 +233,7 @@ python -m core.optimization.auto model.py --verbose 2>&1 | tee optimize.log
 ## Architecture
 
 ```
-tools/optimize/
+core/optimization/auto/
 ├── __init__.py          # Public API exports
 ├── __main__.py          # CLI entry point
 ├── optimizer.py         # Core AutoOptimizer class

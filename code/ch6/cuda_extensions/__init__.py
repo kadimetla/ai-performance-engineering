@@ -3,14 +3,14 @@
 from pathlib import Path
 
 from core.utils.extension_loader_template import load_cuda_extension_v2
-from profiling.nvtx_stub import ensure_nvtx_stub
+from core.profiling.nvtx_stub import ensure_nvtx_stub
 
 NVTX_CFLAG = "-DENABLE_NVTX_PROFILING"
 _NVTX_STUB_LIB = ensure_nvtx_stub()
 NVTX_LDFLAGS = [f"-L{_NVTX_STUB_LIB.parent}", "-lnvToolsExt"]
 
 _EXTENSION_DIR = Path(__file__).parent
-_COMMON_HEADERS = _EXTENSION_DIR.parent.parent / "common" / "headers"
+_COMMON_HEADERS = _EXTENSION_DIR.parent.parent / "core" / "common" / "headers"
 
 
 def _cuda_flags() -> list[str]:
