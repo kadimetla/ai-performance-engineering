@@ -5,24 +5,24 @@
       "metadata": {
         "best_optimization": "optimized_async_input_pipeline",
         "best_optimization_file": "optimized_async_input_pipeline.py",
-        "best_optimization_speedup": 23.934553196009585,
-        "best_optimization_time_ms": 2.0604159832000732,
-        "git_commit": "2e62787eff329e2d792c1e48583eace9d4ddad8e",
-        "updated_at": "2025-11-29T17:20:47.611367"
+        "best_optimization_speedup": 19.36556022110514,
+        "best_optimization_time_ms": 1.7711360454559326,
+        "git_commit": "e8993ab84e58041adddcd3a6607cf5771f2c3064",
+        "updated_at": "2025-12-04T02:39:20.290901"
       },
       "metrics": {
-        "baseline_p75_ms": 49.92940902709961,
-        "baseline_throughput.latency_ms": 49.92940902709961,
-        "baseline_throughput.requests_per_s": 20.27775003796122,
-        "baseline_throughput.samples_per_s": 2595.552004859036,
-        "baseline_time_ms": 49.92940902709961,
-        "best_optimized_p75_ms": 0.19446399807929993,
-        "best_optimized_speedup": 5223.1106027175865,
-        "best_optimized_throughput.latency_ms": 0.19446399807929993,
-        "best_optimized_throughput.requests_per_s": 5142.340021170463,
-        "best_optimized_throughput.samples_per_s": 658219.5227098193,
-        "best_optimized_time_ms": 0.19446399807929993,
-        "best_speedup": 5223.1106027175865
+        "baseline_p75_ms": 34.299041748046875,
+        "baseline_throughput.latency_ms": 34.299041748046875,
+        "baseline_throughput.requests_per_s": 29.15533347391386,
+        "baseline_throughput.samples_per_s": 3731.882684660974,
+        "baseline_time_ms": 34.299041748046875,
+        "best_optimized_p75_ms": 1.7711360454559326,
+        "best_optimized_speedup": 19.36556022110514,
+        "best_optimized_throughput.latency_ms": 1.7711360454559326,
+        "best_optimized_throughput.requests_per_s": 564.6093661554814,
+        "best_optimized_throughput.samples_per_s": 72269.99886790162,
+        "best_optimized_time_ms": 1.7711360454559326,
+        "best_speedup": 19.36556022110514
       },
       "type": "python"
     }
