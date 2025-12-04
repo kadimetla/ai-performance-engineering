@@ -81,6 +81,14 @@ class BaselineMatmulBenchmark(BaseBenchmark):
             return "Matrices not initialized"
         return None
 
+    def get_output_for_verification(self) -> Optional[torch.Tensor]:
+        """Expose the output tensor so optimized path can be compared."""
+        return self.C
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        # Allow looser tolerance because optimized path uses lower precision.
+        return (5e-2, 5.0)
+
 
 def get_benchmark() -> BaselineMatmulBenchmark:
     """Factory function for benchmark discovery."""

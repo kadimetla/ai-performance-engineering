@@ -14,6 +14,14 @@ from typing import Dict, Any, List, Optional
 import sys
 from pathlib import Path
 
+# Ensure the hack/numba stub is importable before vLLM touches numba.
+repo_root = Path(__file__).resolve().parents[1]
+hack_path = repo_root / "hack"
+if str(hack_path) not in sys.path:
+    sys.path.insert(0, str(hack_path))
+# Import numba (will resolve to hack/numba) so vLLM sees a compatible module.
+import numba  # noqa: F401
+
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -22,6 +30,7 @@ from core.harness.benchmark_harness import (
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    ExecutionMode,
     WorkloadMetadata,
 )
 from core.utils.logger import get_logger
@@ -174,6 +183,68 @@ def run_benchmark(
         "model": model_name,
         "optimizations": "cuda_graphs+prefix_caching+chunked_prefill+fp8_kv",
     }
+
+
+class OptimizedVLLMV1IntegrationBenchmark(BaseBenchmark):
+    """Benchmark wrapper for the optimized vLLM path."""
+
+    def __init__(self):
+        super().__init__()
+        self.runner = OptimizedVLLMV1Integration()
+        self._metrics: Dict[str, Any] = {}
+
+    def setup(self):
+        self.runner.setup()
+        self._metrics = {}
+
+    def benchmark_fn(self) -> None:
+        """Entry point used by the harness warmup/iteration loops."""
+        self._metrics = self.run()
+        self._synchronize()
+
+    def run(self) -> Dict[str, Any]:
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        metrics = self.runner.run()
+        torch.cuda.synchronize()
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        self._metrics = {"latency_ms": elapsed_ms, **metrics}
+        return self._metrics
+
+    def teardown(self) -> None:
+        self.runner.cleanup()
+        super().teardown()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(
+            iterations=1,
+            warmup=0,
+            use_subprocess=False,
+            execution_mode=ExecutionMode.THREAD,
+            warmup_timeout_seconds=300,
+            measurement_timeout_seconds=900,
+        )
+
+    def get_workload_metadata(self) -> WorkloadMetadata | None:
+        return WorkloadMetadata(
+            requests_per_iteration=8.0,
+            tokens_per_iteration=float(8 * 128),
+        )
+
+    def get_custom_metrics(self) -> Dict[str, Any]:
+        return self._metrics
+
+    def get_input_signature(self) -> Dict[str, Any]:
+        return {
+            "batch_size": 8,
+            "max_tokens": 128,
+            "model_name": "facebook/opt-125m",
+            "enable_chunked_prefill": True,
+        }
+
+
+def get_benchmark() -> BaseBenchmark:
+    return OptimizedVLLMV1IntegrationBenchmark()
 
 
 if __name__ == "__main__":

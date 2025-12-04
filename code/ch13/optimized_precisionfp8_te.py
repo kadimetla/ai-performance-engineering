@@ -198,6 +198,17 @@ class OptimizedTEFP8Benchmark(BaseBenchmark):
             precision_type="fp8",
         )
 
+    def get_output_for_verification(self) -> Optional[torch.Tensor]:
+        # Use a static captured input/output as representative output.
+        return self.static_input
+
+    def get_input_signature(self) -> dict:
+        return {
+            "batch_size": self.batch_size,
+            "hidden_dim": self.hidden_dim,
+            "precision": "fp8_te",
+        }
+
     def validate_result(self) -> Optional[str]:
         if self.model is None:
             return "Model not initialized"

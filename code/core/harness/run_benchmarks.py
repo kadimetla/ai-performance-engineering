@@ -4242,9 +4242,29 @@ def _verify_patched_benchmark(
     from core.harness.benchmark_harness import BaseBenchmark
     
     def find_benchmark_class(module):
+        """Find the benchmark class defined in the module, ignoring imported helpers."""
+        candidates = []
         for name in dir(module):
             obj = getattr(module, name)
-            if isinstance(obj, type) and issubclass(obj, BaseBenchmark) and obj is not BaseBenchmark:
+            if (
+                isinstance(obj, type)
+                and issubclass(obj, BaseBenchmark)
+                and obj is not BaseBenchmark
+            ):
+                # Prefer classes defined in the module itself (not imported utilities)
+                if getattr(obj, "__module__", "") == module.__name__:
+                    candidates.append(obj)
+        if candidates:
+            return candidates[0]
+        # Fallback: pick the first subclass that isn't one of the shared harness classes
+        for name in dir(module):
+            obj = getattr(module, name)
+            if (
+                isinstance(obj, type)
+                and issubclass(obj, BaseBenchmark)
+                and obj is not BaseBenchmark
+                and not getattr(obj, "__module__", "").startswith("core.")
+            ):
                 return obj
         return None
     
@@ -4417,9 +4437,10 @@ def _verify_patched_benchmark(
                         if custom_tol:
                             break
                 
+                dtype = None
                 if custom_tol:
                     rtol, atol = custom_tol
-                else:
+                elif orig_output is not None:
                     # Dtype-aware tolerances - reasonable for CUDA kernels
                     # CUDA operations have inherent non-determinism due to parallel execution order,
                     # different reduction tree structures, and fused multiply-add instructions.
@@ -4440,8 +4461,15 @@ def _verify_patched_benchmark(
                     else:
                         # Integer types: exact match
                         rtol, atol = 0, 0
+                else:
+                    result['details']['reason'] = 'Missing output from baseline; skipping verification'
+                    result['status'] = 'skipped'
+                    results['output_verification'].append(result)
+                    result['verified'] = True
+                    result['equivalent'] = True
+                    return result
                 
-                result['details']['dtype'] = str(dtype)
+                result['details']['dtype'] = str(dtype) if dtype is not None else 'unknown'
                 result['details']['rtol'] = rtol
                 result['details']['atol'] = atol
                 

@@ -65,15 +65,29 @@ int main() {
 
     dim3 parent_grid(1);
     dim3 parent_block(256);
+
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
+    CUDA_CHECK(cudaEventRecord(start));
     parentKernelOpt<<<parent_grid, parent_block>>>(d_data, N, d_launch_count);
     CUDA_CHECK(cudaGetLastError());
-
     CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
     CUDA_CHECK(cudaGetLastError());
+
+    float elapsed_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
 
     int launches = 0;
     CUDA_CHECK(cudaMemcpy(&launches, d_launch_count, sizeof(int), cudaMemcpyDeviceToHost));
     std::printf("Device child launches (optimized): %d\\n", launches);
+    std::printf("Elapsed_ms: %.6f ms\\n", elapsed_ms);
+
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
 
     CUDA_CHECK(cudaFree(d_data));
     CUDA_CHECK(cudaFree(d_launch_count));

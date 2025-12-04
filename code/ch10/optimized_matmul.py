@@ -116,6 +116,14 @@ class OptimizedTensorCoreBenchmark(BaseBenchmark):
             return "Matrix B contains non-finite values"
         return None
 
+    def get_output_for_verification(self) -> Optional[torch.Tensor]:
+        """Expose output so we can compare vs baseline."""
+        return self.C
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        # Optimized path uses BF16; allow relaxed tolerance vs FP32 baseline.
+        return (5e-2, 5.0)
+
 
 def get_benchmark() -> OptimizedTensorCoreBenchmark:
     """Factory function for harness discovery."""

@@ -80,7 +80,7 @@ int main() {
     int launches = 0;
     CUDA_CHECK(cudaMemcpy(&launches, d_launch_count, sizeof(int), cudaMemcpyDeviceToHost));
     std::printf("Device child launches (baseline): %d\n", launches);
-    std::printf("Elapsed_ms: %.6f\n", elapsed_ms);
+    std::printf("Elapsed_ms: %.6f ms\n", elapsed_ms);
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

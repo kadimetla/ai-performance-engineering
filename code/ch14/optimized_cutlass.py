@@ -120,6 +120,15 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
             enable_memory_tracking=False,
             enable_profiling=False,
         )
+
+    def get_input_signature(self) -> dict:
+        """Report workload parameters for verification."""
+        return {
+            "m": self.m,
+            "n": self.n,
+            "k": self.k,
+            "precision": "fp16_cutlass",
+        }
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
@@ -136,6 +145,17 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
         if self.A is None or self.B is None or self.C is None:
             return "Matrices not initialized"
         return None
+
+    def get_output_for_verification(self) -> Optional[torch.Tensor]:
+        return self.C
+
+    def get_input_signature(self) -> dict:
+        return {
+            "m": self.m,
+            "n": self.n,
+            "k": self.k,
+            "precision": "fp16_cutlass",
+        }
 
     def get_output_tolerance(self) -> tuple[float, float]:
         # Allow small numerical drift vs baseline blocked matmul.

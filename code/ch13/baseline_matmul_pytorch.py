@@ -87,6 +87,19 @@ class BaselineMatmulPyTorchBenchmark(BaseBenchmark):
         del self.A, self.B, self.C, self.bias
         torch.cuda.empty_cache()
     
+    def get_output_for_verification(self) -> Optional[torch.Tensor]:
+        """Return computed output for cross-checking with optimized version."""
+        return self.C
+
+    def get_input_signature(self) -> dict:
+        """Describe the inputs so the harness can validate equivalence."""
+        return {
+            "m": self.m,
+            "n": self.n,
+            "k": self.k,
+            "precision": "fp16_cutlass",
+        }
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(

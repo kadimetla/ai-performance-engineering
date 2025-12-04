@@ -171,11 +171,6 @@ def _entry_to_capabilities(entry: Dict[str, Any]) -> HardwareCapabilities:
     )
     tma_supported_flag = bool(entry.get("tma", {}).get("supported", False))
     tma_compiler_supported_flag = bool(entry.get("tma", {}).get("compiler_support", False))
-    if tma_supported_flag and not tma_compiler_supported_flag:
-        # Older cache entries recorded hardware-level support even when the
-        # current toolchain rejects TMA (e.g. GB10 / sm_121). Clamp the value
-        # so logs, guards, and human-readable reports stay consistent.
-        tma_supported_flag = False
     return HardwareCapabilities(
         key=entry["key"],
         name=entry.get("name", entry["key"]),

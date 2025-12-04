@@ -51,6 +51,9 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
         self.batch_size = 4
         self.vocab_size = 32000
         self.hidden_size = 4096
+        self.num_draft_tokens = 8
+        self.num_sequences = 10
+        self.num_draft_models = 3
         batch_size = 4
         seq_len = 10
         tokens = batch_size * (seq_len + self.max_length)
@@ -65,6 +68,9 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
             "batch_size": self.batch_size,
             "vocab_size": self.vocab_size,
             "hidden_size": self.hidden_size,
+            "num_draft_tokens": self.num_draft_tokens,
+            "num_sequences": self.num_sequences,
+            "num_draft_models": self.num_draft_models,
         }
 
     def setup(self) -> None:

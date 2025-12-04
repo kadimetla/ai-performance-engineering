@@ -18,7 +18,12 @@ import time
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.harness.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from core.harness.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkHarness,
+    BenchmarkConfig,
+    BenchmarkMode,
+)
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -265,6 +270,38 @@ def run_benchmark(
         "mean_time_ms": result.timing.mean_ms,
         **metrics,
     }
+
+
+class OptimizedSpeculativeDecodingMultiDraftBenchmark(BaseBenchmark):
+    """Harness wrapper to align inputs with the baseline benchmark."""
+
+    def __init__(self):
+        super().__init__()
+        self._metrics: Dict[str, Any] = {}
+
+    def benchmark_fn(self) -> None:
+        self._metrics = run_benchmark()
+        self._synchronize()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=1, warmup=0)
+
+    def get_input_signature(self) -> Dict[str, Any]:
+        return {
+            "batch_size": 4,
+            "vocab_size": 32000,
+            "hidden_size": 4096,
+            "num_draft_tokens": 8,
+            "num_sequences": 10,
+            "num_draft_models": 3,
+        }
+
+    def get_custom_metrics(self) -> Dict[str, Any]:
+        return self._metrics
+
+
+def get_benchmark():
+    return OptimizedSpeculativeDecodingMultiDraftBenchmark()
 
 
 if __name__ == "__main__":

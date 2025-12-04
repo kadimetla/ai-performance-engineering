@@ -13,10 +13,24 @@ from typing import Dict, Any, List, Optional
 import sys
 from pathlib import Path
 
+# Ensure the hack/numba stub is importable before vLLM touches numba.
+repo_root = Path(__file__).resolve().parents[1]
+hack_path = repo_root / "hack"
+if str(hack_path) not in sys.path:
+    sys.path.insert(0, str(hack_path))
+# Import numba (will resolve to hack/numba) so vLLM sees a compatible module.
+import numba  # noqa: F401
+
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from core.harness.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkHarness,
+    BenchmarkConfig,
+    BenchmarkMode,
+    ExecutionMode,
+)
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +80,7 @@ class BaselineVLLMV1Integration:
                     model=self.model_name,
                     enforce_eager=True,  # Disable CUDA graphs (baseline)
                     enable_prefix_caching=False,  # Disable prefix caching
+                    enable_chunked_prefill=True,
                     gpu_memory_utilization=0.7,  # Lower to avoid OOM during engine init
                     dtype="bfloat16",
                     tensor_parallel_size=1,  # Single GPU to avoid coordination issues
@@ -154,8 +169,8 @@ def run_benchmark(
     benchmark.setup()
     
     config = BenchmarkConfig(
-        iterations=3,
-        warmup=5,
+        iterations=1,
+        warmup=0,
         profile_mode=profile,
     )
     
@@ -190,10 +205,23 @@ class BaselineVLLMV1IntegrationBenchmark(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         # Run once; inner harness handles iterations/warmup.
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(
+            iterations=1,
+            warmup=0,
+            use_subprocess=False,
+            execution_mode=ExecutionMode.THREAD,
+        )
 
     def get_custom_metrics(self) -> Dict[str, Any]:
         return self._metrics
+
+    def get_input_signature(self) -> Dict[str, Any]:
+        return {
+            "batch_size": 8,
+            "max_tokens": 128,
+            "model_name": "facebook/opt-125m",
+            "enable_chunked_prefill": True,
+        }
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -37,7 +37,7 @@ class BaselineSpeculativeDecoding:
         batch_size: int = 4,
         vocab_size: int = 32000,
         hidden_size: int = 4096,
-        num_draft_tokens: int = 4,  # Used to match token count with optimized
+        num_draft_tokens: int = 8,  # Used to match token count with optimized
         num_sequences: int = 10,
     ):
         self.batch_size = batch_size
@@ -128,6 +128,15 @@ class BaselineSpeculativeDecoding:
             "tokens_generated": tokens_generated,
             "target_forward_passes": tokens_generated,
         }
+
+    def get_input_signature(self) -> Dict[str, Any]:
+        return {
+            "batch_size": self.batch_size,
+            "vocab_size": self.vocab_size,
+            "hidden_size": self.hidden_size,
+            "num_draft_tokens": self.num_draft_tokens,
+            "num_sequences": self.num_sequences,
+        }
     
     def cleanup(self):
         """Clean up resources."""
@@ -139,7 +148,7 @@ def run_benchmark(
     batch_size: int = 4,
     vocab_size: int = 32000,
     hidden_size: int = 4096,
-    num_draft_tokens: int = 4,
+    num_draft_tokens: int = 8,
     num_sequences: int = 10,
     profile: str = "none",
     **kwargs
@@ -194,6 +203,17 @@ class BaselineSpeculativeDecodingBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Dict[str, Any]:
         return self._metrics
+
+    def get_input_signature(self) -> Dict[str, Any]:
+        # Keep signature aligned with optimized variants for verification
+        return {
+            "batch_size": 4,
+            "vocab_size": 32000,
+            "hidden_size": 4096,
+            "num_draft_tokens": 8,
+            "num_sequences": 10,
+            "num_draft_models": 3,
+        }
 
 
 def get_benchmark() -> BaseBenchmark:

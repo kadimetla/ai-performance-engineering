@@ -49,8 +49,9 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
         self.vocab_size = 32000  # Must match baseline for input verification
         self.hidden_size = 4096
         self.seq_len = 32
-        self.speculative_k = 4  # Verify K tokens at once
+        self.speculative_k = 8  # Verify K tokens at once
         self.num_iterations = 10
+        self.num_draft_models = 3
         
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -103,6 +104,9 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
             "batch_size": self.batch_size,
             "vocab_size": self.vocab_size,
             "hidden_size": self.hidden_size,
+            "num_draft_tokens": self.speculative_k,
+            "num_sequences": self.num_iterations,
+            "num_draft_models": self.num_draft_models,
         }
     
     def benchmark_fn(self) -> None:

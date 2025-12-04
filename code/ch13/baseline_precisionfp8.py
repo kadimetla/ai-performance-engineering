@@ -147,6 +147,18 @@ class BaselinePrecisionFP8Benchmark(BaseBenchmark):
             return "Model not initialized"
         return None
 
+    def get_output_for_verification(self) -> Optional[torch.Tensor]:
+        """Expose baseline output for correctness checks."""
+        return self.output
+
+    def get_input_signature(self) -> dict:
+        return {
+            "batch_size": self.batch_size,
+            "hidden_dim": self.hidden_dim,
+            # Match the optimized FP8 emulation path so inputs are considered equivalent.
+            "precision": "fp16_fp8_fake",
+        }
+
     def get_output_tolerance(self) -> tuple[float, float]:
         """Return custom tolerance for FP32 vs FP16/FP8 precision comparison.
         

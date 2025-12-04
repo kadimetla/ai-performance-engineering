@@ -162,6 +162,52 @@
       },
       "type": "cuda"
     },
+    "dynamic_parallelism_device": {
+      "example": "dynamic_parallelism_device",
+      "metadata": {
+        "best_optimization": "optimized_dynamic_parallelism_device",
+        "best_optimization_file": "optimized_dynamic_parallelism_device.py",
+        "best_optimization_speedup": 16.905657366712468,
+        "best_optimization_time_ms": 4.215648,
+        "git_commit": "d72c274a660dcd9f17e7eafa91e5e804afb3789f",
+        "updated_at": "2025-12-04T19:17:30.771821"
+      },
+      "metrics": {
+        "baseline_p75_ms": 70.48909,
+        "baseline_throughput.latency_ms": 71.26830066666668,
+        "baseline_throughput.requests_per_s": 14.031483712192902,
+        "baseline_time_ms": 71.26830066666668,
+        "best_optimized_p75_ms": 4.116544,
+        "best_optimized_speedup": 16.905657366712468,
+        "best_optimized_throughput.latency_ms": 4.215648,
+        "best_optimized_throughput.requests_per_s": 237.21145598493993,
+        "best_optimized_time_ms": 4.215648,
+        "best_speedup": 16.905657366712468
+      },
+      "type": "python"
+    },
+    "dynamic_parallelism_device_cuda": {
+      "example": "dynamic_parallelism_device",
+      "metadata": {
+        "best_optimization": "optimized_dynamic_parallelism_device",
+        "best_optimization_file": "optimized_dynamic_parallelism_device.cu",
+        "best_optimization_speedup": 17.296789809570438,
+        "best_optimization_time_ms": 4.030186666666667,
+        "git_commit": "d72c274a660dcd9f17e7eafa91e5e804afb3789f",
+        "updated_at": "2025-12-04T19:19:17.638526"
+      },
+      "metrics": {
+        "baseline_p75_ms": 69.838882,
+        "baseline_p90_ms": 69.838882,
+        "baseline_time_ms": 69.70929166666666,
+        "best_optimized_p75_ms": 4.035904,
+        "best_optimized_p90_ms": 4.035904,
+        "best_optimized_speedup": 17.296789809570438,
+        "best_optimized_time_ms": 4.030186666666667,
+        "best_speedup": 17.296789809570438
+      },
+      "type": "cuda"
+    },
     "dynamic_parallelism_host_cuda": {
       "example": "dynamic_parallelism_host",
       "metadata": {
@@ -216,20 +262,20 @@
       "metadata": {
         "best_optimization": "optimized_graph_bandwidth",
         "best_optimization_file": "optimized_graph_bandwidth.cu",
-        "best_optimization_speedup": 4.603689770012025,
-        "best_optimization_time_ms": 10.245173333333334,
-        "git_commit": "5776a7be68bba8a10e104c9576bb8238f6e3bbcc",
-        "updated_at": "2025-12-04T09:10:29.816578"
+        "best_optimization_speedup": 3.3999046940056785,
+        "best_optimization_time_ms": 10.244896,
+        "git_commit": "d72c274a660dcd9f17e7eafa91e5e804afb3789f",
+        "updated_at": "2025-12-04T21:38:47.240240"
       },
       "metrics": {
-        "baseline_p75_ms": 47.420544,
-        "baseline_p90_ms": 47.420544,
+        "baseline_p75_ms": 34.93808,
+        "baseline_p90_ms": 34.93808,
         "baseline_time_ms": 37.821953,
         "best_optimized_p75_ms": 10.244064,
         "best_optimized_p90_ms": 10.244064,
-        "best_optimized_speedup": 4.603689770012025,
+        "best_optimized_speedup": 3.3999046940056785,
         "best_optimized_time_ms": 10.244213333333333,
-        "best_speedup": 4.603689770012025
+        "best_speedup": 3.3999046940056785
       },
       "type": "cuda"
     },

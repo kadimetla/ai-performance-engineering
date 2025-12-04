@@ -108,6 +108,15 @@ class BaselineCutlassBenchmark(BaseBenchmark):
             enable_memory_tracking=False,
             enable_profiling=False,
         )
+
+    def get_input_signature(self) -> dict:
+        """Ensure workload parity with the optimized CUTLASS path."""
+        return {
+            "m": self.m,
+            "n": self.n,
+            "k": self.k,
+            "precision": "fp16_cutlass",
+        }
     
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
