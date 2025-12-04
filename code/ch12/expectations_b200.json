@@ -216,20 +216,20 @@
       "metadata": {
         "best_optimization": "optimized_graph_bandwidth",
         "best_optimization_file": "optimized_graph_bandwidth.cu",
-        "best_optimization_speedup": 3.525429673467688,
-        "best_optimization_time_ms": 10.244213333333333,
-        "git_commit": "e8993ab84e58041adddcd3a6607cf5771f2c3064",
-        "updated_at": "2025-12-04T02:16:32.602190"
+        "best_optimization_speedup": 4.603689770012025,
+        "best_optimization_time_ms": 10.245173333333334,
+        "git_commit": "5776a7be68bba8a10e104c9576bb8238f6e3bbcc",
+        "updated_at": "2025-12-04T09:10:29.816578"
       },
       "metrics": {
-        "baseline_p75_ms": 37.261986,
-        "baseline_p90_ms": 37.261986,
+        "baseline_p75_ms": 47.420544,
+        "baseline_p90_ms": 47.420544,
         "baseline_time_ms": 37.821953,
         "best_optimized_p75_ms": 10.244064,
         "best_optimized_p90_ms": 10.244064,
-        "best_optimized_speedup": 3.525429673467688,
+        "best_optimized_speedup": 4.603689770012025,
         "best_optimized_time_ms": 10.244213333333333,
-        "best_speedup": 3.525429673467688
+        "best_speedup": 4.603689770012025
       },
       "type": "cuda"
     },

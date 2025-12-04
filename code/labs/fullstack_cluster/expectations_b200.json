@@ -33,17 +33,17 @@
       "metadata": {
         "best_optimization": "optimized_moe_readiness",
         "best_optimization_file": "optimized_moe_readiness.py",
-        "best_optimization_speedup": 0.9398820390758124,
-        "best_optimization_time_ms": 6263.026714324951,
-        "git_commit": "e8993ab84e58041adddcd3a6607cf5771f2c3064",
-        "updated_at": "2025-12-04T02:44:57.408365"
+        "best_optimization_speedup": 0.9697259843641397,
+        "best_optimization_time_ms": 6158.896684646606,
+        "git_commit": "5776a7be68bba8a10e104c9576bb8238f6e3bbcc",
+        "updated_at": "2025-12-04T09:43:00.323871"
       },
       "metrics": {
         "baseline_p75_ms": 5886.5063190460205,
         "baseline_time_ms": 5886.5063190460205,
-        "best_optimized_p75_ms": 8242.315769195557,
+        "best_optimized_p75_ms": 6158.896684646606,
         "best_optimized_speedup": 0.9398820390758124,
-        "best_optimized_time_ms": 8242.315769195557,
+        "best_optimized_time_ms": 6158.896684646606,
         "best_speedup": 1.0
       },
       "type": "python"
