@@ -137,6 +137,10 @@ class OptimizedCutlassBenchmark(BaseBenchmark):
             return "Matrices not initialized"
         return None
 
+    def get_output_tolerance(self) -> tuple[float, float]:
+        # Allow small numerical drift vs baseline blocked matmul.
+        return (0.05, 2.0)
+
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""

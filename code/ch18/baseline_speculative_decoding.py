@@ -18,7 +18,7 @@ import time
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.harness.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkConfig, BenchmarkMode
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -175,6 +175,29 @@ def run_benchmark(
         "mean_time_ms": result.timing.mean_ms,
         **metrics,
     }
+
+
+class BaselineSpeculativeDecodingBenchmark(BaseBenchmark):
+    """Harness wrapper to expose the baseline decode loop."""
+
+    def __init__(self):
+        super().__init__()
+        self._metrics: Dict[str, Any] = {}
+
+    def benchmark_fn(self) -> None:
+        self._metrics = run_benchmark()
+        self._synchronize()
+
+    def get_config(self) -> BenchmarkConfig:
+        # Single iteration; run_benchmark internally uses its own harness timing.
+        return BenchmarkConfig(iterations=1, warmup=0)
+
+    def get_custom_metrics(self) -> Dict[str, Any]:
+        return self._metrics
+
+
+def get_benchmark() -> BaseBenchmark:
+    return BaselineSpeculativeDecodingBenchmark()
 
 
 if __name__ == "__main__":

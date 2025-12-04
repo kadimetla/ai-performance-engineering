@@ -226,6 +226,33 @@ def run_benchmark(
     }
 
 
+class BaselineContextParallelismBenchmark(BaseBenchmark):
+    """Harness-friendly wrapper around the standalone baseline runner."""
+
+    def __init__(self):
+        super().__init__()
+        self._metrics: Dict[str, Any] = {}
+
+    def setup(self) -> None:  # noqa: D401 - harness hook
+        # All initialization happens inside run_benchmark; nothing to do here.
+        torch.cuda.empty_cache()
+
+    def benchmark_fn(self) -> None:
+        # Use default shapes for a minimal single-GPU check.
+        self._metrics = run_benchmark()
+        self._synchronize()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=1, warmup=0)
+
+    def get_custom_metrics(self) -> Optional[Dict[str, Any]]:
+        return self._metrics
+
+
+def get_benchmark() -> BaseBenchmark:
+    return BaselineContextParallelismBenchmark()
+
+
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
     benchmark_main(get_benchmark)

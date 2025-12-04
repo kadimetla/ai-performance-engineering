@@ -53,14 +53,14 @@ class MoEJourneyBenchmark(BaseBenchmark):
     
     # Model configuration - Llama-7B like dimensions for realistic GPU utilization!
     VOCAB_SIZE = 32000
-    HIDDEN_SIZE = 4096       # Llama-7B: 4096
-    INTERMEDIATE_SIZE = 11008  # Llama-7B: 11008
+    HIDDEN_SIZE = 512        # aggressively trimmed for single-GPU demos
+    INTERMEDIATE_SIZE = 2048  # scale down to avoid OOM
     NUM_LAYERS = 1           # Just 1 layer for benchmarking MoE
     NUM_HEADS = 32
-    NUM_EXPERTS = 8
+    NUM_EXPERTS = 4
     NUM_EXPERTS_PER_TOK = 2
-    BATCH_SIZE = 16   # 16x512 = 8K tokens
-    SEQ_LEN = 512
+    BATCH_SIZE = 4    # lighter workload to keep footprint manageable
+    SEQ_LEN = 128
     
     WARMUP = 3
     ITERATIONS = 10
@@ -266,4 +266,3 @@ if __name__ == "__main__":
     import sys
     level = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     run_level(level)
-

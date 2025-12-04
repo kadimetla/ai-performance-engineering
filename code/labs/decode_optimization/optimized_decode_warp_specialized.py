@@ -12,7 +12,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from labs.decode_optimization.decode_common import DecodeBenchmark, DecodeConfig  # noqa: E402
+from labs.decode_optimization.decode_common import (  # noqa: E402
+    DecodeBenchmark,
+    DecodeConfig,
+    attach_benchmark_metadata,
+)
 from labs.decode_optimization.triton_fused_decode import fused_decode_mlp  # noqa: E402
 
 
@@ -163,7 +167,8 @@ def get_benchmark() -> TritonFusedDecodeBenchmark:
         use_torch_compile=False,
         label="optimized_decode_warp_specialized",
     )
-    return TritonFusedDecodeBenchmark(cfg)
+    bench = TritonFusedDecodeBenchmark(cfg)
+    return attach_benchmark_metadata(bench, __file__)
 
 
 if __name__ == "__main__":

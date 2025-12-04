@@ -80,7 +80,7 @@ class OptimizedPersistentDecodeCUDABenchmark(BaseBenchmark):
             raise RuntimeError("SKIPPED: persistent_decode_ext not initialized")
         
         # Call the extension's forward pass
-        self._ext.persistent_decode_forward(
+        self._ext.persistent_decode(
             self.inputs.q,
             self.inputs.k,
             self.inputs.v,

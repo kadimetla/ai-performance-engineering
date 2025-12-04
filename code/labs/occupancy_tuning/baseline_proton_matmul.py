@@ -41,7 +41,6 @@ class BaselineProtonMatmul(TritonMatmulProtonBenchmark):
             size=size,
             iterations=10,
             warmup=5,
-            use_compile=False,  # Avoid torch.compile issues with Triton
         )
 
 

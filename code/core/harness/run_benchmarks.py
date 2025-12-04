@@ -216,8 +216,8 @@ INFORMATIONAL_BENCHMARKS: Dict[str, Set[str]] = {
 }
 
 # Note: The following legacy paths were previously under tools/ and are now in monitoring/ or core/ subpackages:
-# - ch02/uma_memory_reporting -> monitoring/diagnostics/uma_memory/
-# - speculative_decode/spec_config_sweep -> core/analysis/speculative_decode/ (shared helpers only)
+# - ch02/uma_memory_reporting -> labs/uma_memory/ (UMA reporting diagnostics)
+# - speculative_decode/spec_config_sweep -> ch18/speculative_decode/ (shared helpers only)
 # - occupancy_tuning/proton_* harness wrappers live in labs/occupancy_tuning; shared Triton schedules remain in core/profiling/occupancy_tuning/
 
 def format_time_ms(time_ms: float) -> str:

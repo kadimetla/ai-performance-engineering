@@ -187,6 +187,11 @@ class Llama31_8B_Optimization:
         del self.input
         torch.cuda.empty_cache()
 
+    # Harness adapter
+    def teardown(self):
+        """Alias required by harness callers."""
+        self.cleanup()
+
 
 def run_benchmark(
     batch_size: int = 1,

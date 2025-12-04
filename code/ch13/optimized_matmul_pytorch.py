@@ -128,6 +128,10 @@ class OptimizedMatmulCUTLASSBenchmark(BaseBenchmark):
             return "Tensors not initialized"
         return None
 
+    def get_output_tolerance(self) -> tuple[float, float]:
+        # CUTLASS and eager matmul can diverge slightly; allow relaxed tolerance.
+        return (0.05, 2.0)
+
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""

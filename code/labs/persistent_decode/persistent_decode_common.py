@@ -90,8 +90,30 @@ class DecodeInputs:
     work_counter: torch.Tensor
 
 
-def build_inputs(device: torch.device) -> DecodeInputs:
-    batch, seq_len, head_dim = resolve_shapes()
+def build_inputs(
+    batch: int | torch.device | None = None,
+    seq_len: int | None = None,
+    head_dim: int | None = None,
+    device: torch.device | None = None,
+) -> DecodeInputs:
+    """
+    Construct input tensors for the persistent decode extension.
+
+    Backwards compatible with previous signature:
+    - build_inputs(device)
+    - build_inputs(batch, seq_len, head_dim, device)
+    """
+    # Signature shim: if the first arg is a device, treat it as `device` only.
+    if isinstance(batch, torch.device):
+        device = batch
+        batch = None
+    if device is None:
+        device = resolve_device()
+
+    # Default shapes unless explicitly overridden
+    if batch is None or seq_len is None or head_dim is None:
+        batch, seq_len, head_dim = resolve_shapes()
+
     torch.manual_seed(0)
 
     quant = _OPTIONS.quantization.lower()
@@ -106,7 +128,8 @@ def build_inputs(device: torch.device) -> DecodeInputs:
         k = _fake_int4(k)
         v = _fake_int4(v)
 
-    out = torch.zeros_like(q)
+    # Output is aggregated per sequence (batch, head_dim)
+    out = torch.zeros(batch, head_dim, device=device, dtype=dtype)
 
     work_seq_ids = torch.arange(batch, device=device, dtype=torch.int32)
     work_steps = torch.full((batch,), seq_len, device=device, dtype=torch.int32)

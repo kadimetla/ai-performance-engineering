@@ -177,6 +177,29 @@ def run_benchmark(
     }
 
 
+class BaselineVLLMV1IntegrationBenchmark(BaseBenchmark):
+    """Harness wrapper for the baseline vLLM integration."""
+
+    def __init__(self):
+        super().__init__()
+        self._metrics: Dict[str, Any] = {}
+
+    def benchmark_fn(self) -> None:
+        self._metrics = run_benchmark()
+        self._synchronize()
+
+    def get_config(self) -> BenchmarkConfig:
+        # Run once; inner harness handles iterations/warmup.
+        return BenchmarkConfig(iterations=1, warmup=0)
+
+    def get_custom_metrics(self) -> Dict[str, Any]:
+        return self._metrics
+
+
+def get_benchmark() -> BaseBenchmark:
+    return BaselineVLLMV1IntegrationBenchmark()
+
+
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
     benchmark_main(get_benchmark)
