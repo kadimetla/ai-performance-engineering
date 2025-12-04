@@ -188,6 +188,7 @@ TORCH_SM_ARCH_LIST_VALUE="sm_100;sm_103;sm_121;sm_122"
 CUTLASS_NVCC_ARCHS_VALUE_DEFAULT="100;103;121;122"
 CUTLASS_NVCC_ARCHS_VALUE="${CUTLASS_NVCC_ARCHS_VALUE_DEFAULT}"
 PYTORCH_CU130_INDEX="https://download.pytorch.org/whl/cu130"
+GPU_CLOCK_SERVICE_PATH="/etc/systemd/system/gpu-clock-pin.service"
 echo "Project root: $PROJECT_ROOT"
 cd "$PROJECT_ROOT"
 
@@ -235,8 +236,56 @@ lock_gpu_clocks_if_supported() {
     fi
 }
 
+install_gpu_clock_service() {
+    # Install a systemd unit to reapply clock locks on boot.
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "systemctl not available; skipping GPU clock service install."
+        return
+    fi
+
+    cat > "${GPU_CLOCK_SERVICE_PATH}" <<'EOF'
+[Unit]
+Description=Pin GPU clocks for stability
+After=multi-user.target
+ConditionPathExists=/usr/bin/nvidia-smi
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -lc '\
+  sm=$(nvidia-smi --query-gpu=clocks.max.sm --format=csv,noheader | head -n1 | awk "{print \$1}") || exit 0; \
+  mem=$(nvidia-smi --query-gpu=clocks.max.mem --format=csv,noheader | head -n1 | awk "{print \$1}") || exit 0; \
+  nvidia-smi -pm 1 || true; \
+  nvidia-smi -lgc $${sm},$${sm} || true; \
+  nvidia-smi -ac $${mem},$${sm} || true; \
+  nvidia-smi --lock-memory-clocks-deferred=$${mem} || true; \
+'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload || true
+    systemctl enable --now gpu-clock-pin.service || true
+}
+
+apply_deferred_memory_lock_now() {
+    # Try to apply a deferred memory clock lock without a reboot.
+    # This is best-effort and will fail if GPU reset isn't supported or processes are running.
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        return
+    fi
+    if nvidia-smi --gpu-reset >/dev/null 2>&1; then
+        echo "Applied deferred memory clock lock via nvidia-smi --gpu-reset."
+    else
+        echo "INFO: Could not trigger deferred memory lock without reboot; it will apply on next driver reload/boot."
+    fi
+}
+
 # Lock GPU clocks (best-effort) to reduce perf variance; safe to skip if unsupported.
 lock_gpu_clocks_if_supported
+install_gpu_clock_service
+apply_deferred_memory_lock_now
 
 pip_cmd() {
     if [ -z "${PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES:-}" ]; then
