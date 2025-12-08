@@ -53,6 +53,7 @@ flake8==7.3.0
 mypy==1.18.2
 pre-commit==4.0.1
 pytest==8.3.4
+hypothesis==6.148.2  # Property-based testing for benchmark integrity tests
 pyyaml==6.0.2
 pydantic==2.9.0
 pydantic-core==2.23.2  # Required by pydantic 2.9.0

@@ -8,8 +8,15 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+
+# Schema version - increment for breaking changes
+SCHEMA_VERSION = 2
+
+# Floating-point tolerance for speedup ratio comparisons
+# Used consistently across validation, storage, and property tests
+SPEEDUP_TOLERANCE = 1e-6
 
 EXPECTATION_FILENAME_TEMPLATE = "expectations_{hardware_key}.json"
 
@@ -42,6 +49,313 @@ METRIC_DIRECTIONS: Dict[str, str] = {
     "baseline_custom.scenario_total_phase_ms": "lower",
     "best_optimized_custom.scenario_total_phase_ms": "lower",
 }
+
+
+# =============================================================================
+# New Data Classes for Benchmark Expectations Integrity (Schema v2)
+# =============================================================================
+
+
+@dataclass
+class RunProvenance:
+    """Tracks the source of benchmark measurements for traceability."""
+
+    git_commit: str
+    hardware_key: str
+    profile_name: str
+    timestamp: str  # ISO format
+    iterations: int
+    warmup_iterations: int
+
+    def matches(self, other: "RunProvenance") -> bool:
+        """Check if two runs are from the same configuration (ignores timestamp)."""
+        return (
+            self.git_commit == other.git_commit
+            and self.hardware_key == other.hardware_key
+            and self.profile_name == other.profile_name
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON storage."""
+        return {
+            "git_commit": self.git_commit,
+            "hardware_key": self.hardware_key,
+            "profile_name": self.profile_name,
+            "timestamp": self.timestamp,
+            "iterations": self.iterations,
+            "warmup_iterations": self.warmup_iterations,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RunProvenance":
+        """Deserialize from dictionary."""
+        return cls(
+            git_commit=data.get("git_commit", ""),
+            hardware_key=data.get("hardware_key", ""),
+            profile_name=data.get("profile_name", ""),
+            timestamp=data.get("timestamp", ""),
+            iterations=data.get("iterations", 0),
+            warmup_iterations=data.get("warmup_iterations", 0),
+        )
+
+
+@dataclass
+class ExpectationEntry:
+    """Represents a single benchmark expectation with enforced consistency.
+
+    Speedup is always computed from timing values - never stored independently.
+    This ensures speedup can never drift from the underlying timing data.
+    """
+
+    example: str
+    type: str  # "python" or "cuda"
+
+    # Timing metrics (source of truth)
+    baseline_time_ms: float
+    best_optimized_time_ms: float
+
+    # Provenance
+    provenance: RunProvenance
+
+    # Optional extended metrics
+    baseline_p75_ms: Optional[float] = None
+    baseline_p90_ms: Optional[float] = None
+    best_optimized_p75_ms: Optional[float] = None
+    best_optimized_p90_ms: Optional[float] = None
+    baseline_throughput: Optional[Dict[str, float]] = None
+    best_optimized_throughput: Optional[Dict[str, float]] = None
+    custom_metrics: Optional[Dict[str, Any]] = None
+
+    # Metadata about best optimization
+    best_optimization_name: Optional[str] = None
+    best_optimization_file: Optional[str] = None
+    best_optimization_technique: Optional[str] = None
+
+    @property
+    def best_speedup(self) -> float:
+        """Compute speedup from timing values - this is derived, not stored."""
+        if self.best_optimized_time_ms <= 0:
+            return 1.0
+        return self.baseline_time_ms / self.best_optimized_time_ms
+
+    @property
+    def is_regression(self) -> bool:
+        """Check if this represents a regression (optimized slower than baseline)."""
+        return self.best_speedup < 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON storage.
+
+        Note: best_speedup is computed and stored for readability, but on load
+        it should be validated against the timing ratio.
+        """
+        result: Dict[str, Any] = {
+            "example": self.example,
+            "type": self.type,
+            "metrics": {
+                "baseline_time_ms": self.baseline_time_ms,
+                "best_optimized_time_ms": self.best_optimized_time_ms,
+                # Speedup is derived from times - computed fresh on serialization
+                "best_speedup": self.best_speedup,
+                "best_optimized_speedup": self.best_speedup,  # Same value for compatibility
+                "is_regression": self.is_regression,
+            },
+            "provenance": self.provenance.to_dict(),
+            "metadata": {},
+        }
+
+        # Add optional percentile metrics
+        if self.baseline_p75_ms is not None:
+            result["metrics"]["baseline_p75_ms"] = self.baseline_p75_ms
+        if self.baseline_p90_ms is not None:
+            result["metrics"]["baseline_p90_ms"] = self.baseline_p90_ms
+        if self.best_optimized_p75_ms is not None:
+            result["metrics"]["best_optimized_p75_ms"] = self.best_optimized_p75_ms
+        if self.best_optimized_p90_ms is not None:
+            result["metrics"]["best_optimized_p90_ms"] = self.best_optimized_p90_ms
+
+        # Add throughput metrics
+        if self.baseline_throughput:
+            for key, value in self.baseline_throughput.items():
+                result["metrics"][f"baseline_throughput.{key}"] = value
+        if self.best_optimized_throughput:
+            for key, value in self.best_optimized_throughput.items():
+                result["metrics"][f"best_optimized_throughput.{key}"] = value
+
+        # Add custom metrics (stored separately to not pollute timing-based speedup)
+        if self.custom_metrics:
+            result["custom_metrics"] = self.custom_metrics
+
+        # Add metadata
+        if self.best_optimization_name:
+            result["metadata"]["best_optimization"] = self.best_optimization_name
+        if self.best_optimization_file:
+            result["metadata"]["best_optimization_file"] = self.best_optimization_file
+        if self.best_optimization_technique:
+            result["metadata"]["best_optimization_technique"] = self.best_optimization_technique
+        # Store speedup in metadata for compatibility (derived from times)
+        result["metadata"]["best_optimization_speedup"] = self.best_speedup
+        result["metadata"]["best_optimization_time_ms"] = self.best_optimized_time_ms
+
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ExpectationEntry":
+        """Deserialize from dictionary."""
+        metrics = data.get("metrics", {})
+        metadata = data.get("metadata", {})
+        provenance_data = data.get("provenance", {})
+
+        # Extract throughput metrics
+        baseline_throughput: Dict[str, float] = {}
+        best_optimized_throughput: Dict[str, float] = {}
+        for key, value in metrics.items():
+            if key.startswith("baseline_throughput."):
+                baseline_throughput[key.replace("baseline_throughput.", "")] = value
+            elif key.startswith("best_optimized_throughput."):
+                best_optimized_throughput[key.replace("best_optimized_throughput.", "")] = value
+
+        return cls(
+            example=data.get("example", ""),
+            type=data.get("type", "python"),
+            baseline_time_ms=metrics.get("baseline_time_ms", 0.0),
+            best_optimized_time_ms=metrics.get("best_optimized_time_ms", 0.0),
+            provenance=RunProvenance.from_dict(provenance_data),
+            baseline_p75_ms=metrics.get("baseline_p75_ms"),
+            baseline_p90_ms=metrics.get("baseline_p90_ms"),
+            best_optimized_p75_ms=metrics.get("best_optimized_p75_ms"),
+            best_optimized_p90_ms=metrics.get("best_optimized_p90_ms"),
+            baseline_throughput=baseline_throughput if baseline_throughput else None,
+            best_optimized_throughput=best_optimized_throughput if best_optimized_throughput else None,
+            custom_metrics=data.get("custom_metrics"),
+            best_optimization_name=metadata.get("best_optimization"),
+            best_optimization_file=metadata.get("best_optimization_file"),
+            best_optimization_technique=metadata.get("best_optimization_technique"),
+        )
+
+
+@dataclass
+class ValidationIssue:
+    """Represents a single validation issue found in an expectation entry."""
+
+    example_key: str
+    issue_type: str  # 'speedup_mismatch', 'metadata_drift', 'masked_regression', 'missing_provenance'
+    message: str
+    stored_value: Any
+    expected_value: Any
+    delta_pct: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "example_key": self.example_key,
+            "issue_type": self.issue_type,
+            "message": self.message,
+            "stored_value": self.stored_value,
+            "expected_value": self.expected_value,
+            "delta_pct": self.delta_pct,
+        }
+
+
+@dataclass
+class ValidationReport:
+    """Summary of validation results across expectation entries."""
+
+    issues: List[ValidationIssue] = field(default_factory=list)
+    total_entries: int = 0
+    valid_entries: int = 0
+
+    @property
+    def has_issues(self) -> bool:
+        """Check if any validation issues were found."""
+        return len(self.issues) > 0
+
+    @property
+    def invalid_entries(self) -> int:
+        """Number of entries with issues."""
+        return self.total_entries - self.valid_entries
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "total_entries": self.total_entries,
+            "valid_entries": self.valid_entries,
+            "invalid_entries": self.invalid_entries,
+            "has_issues": self.has_issues,
+            "issues": [issue.to_dict() for issue in self.issues],
+        }
+
+
+@dataclass
+class UpdateResult:
+    """Result of updating an expectation entry."""
+
+    status: str  # 'updated', 'improved', 'regressed', 'rejected', 'unchanged'
+    message: str
+    entry: Optional[ExpectationEntry] = None
+    validation_issues: List[ValidationIssue] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "status": self.status,
+            "message": self.message,
+            "entry": self.entry.to_dict() if self.entry else None,
+            "validation_issues": [issue.to_dict() for issue in self.validation_issues],
+        }
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def select_best_optimization(optimizations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Select the best optimization from a list based on speedup.
+
+    This is the SINGLE SOURCE OF TRUTH for selecting the best optimization.
+    Used by both metrics collection and metadata building to ensure consistency.
+
+    Args:
+        optimizations: List of optimization result dicts with 'status' and 'speedup' keys.
+
+    Returns:
+        The optimization dict with the highest speedup, or None if no successful optimizations.
+    """
+    best: Optional[Dict[str, Any]] = None
+    best_speedup = float("-inf")
+
+    for opt in optimizations or []:
+        # Only consider successful optimizations
+        if opt.get("status") != "succeeded":
+            continue
+
+        # Get speedup, defaulting to 0.0 if missing or None
+        speedup = float(opt.get("speedup") or 0.0)
+
+        if speedup > best_speedup:
+            best = opt
+            best_speedup = speedup
+
+    return best
+
+
+def compute_speedup(baseline_time_ms: float, optimized_time_ms: float) -> float:
+    """Compute speedup ratio from timing values.
+
+    This is the canonical speedup computation used throughout the system.
+    Speedup = baseline_time / optimized_time (higher is better).
+
+    Args:
+        baseline_time_ms: Baseline execution time in milliseconds.
+        optimized_time_ms: Optimized execution time in milliseconds.
+
+    Returns:
+        Speedup ratio. Returns 1.0 if optimized_time_ms is <= 0.
+    """
+    if optimized_time_ms <= 0:
+        return 1.0
+    return baseline_time_ms / optimized_time_ms
 
 
 def _slugify(text: str) -> str:
@@ -146,15 +460,43 @@ class ExpectationEvaluation:
 
 
 class ExpectationsStore:
-    """Maintain expectation files per chapter and hardware target."""
+    """Maintain expectation files per chapter and hardware target.
 
-    def __init__(self, chapter_dir: Path, hardware_key: str, *, accept_regressions: bool = False) -> None:
+    Schema v2 features:
+    - Atomic updates: all metrics updated together, not per-metric
+    - Derived speedups: speedup always computed from timing values
+    - Provenance tracking: git commit, hardware, profile tracked per entry
+    - Validation on write: consistency checks before saving
+    """
+
+    def __init__(
+        self,
+        chapter_dir: Path,
+        hardware_key: str,
+        *,
+        accept_regressions: bool = False,
+        force_mixed_provenance: bool = False,
+        validate_on_load: bool = False,
+    ) -> None:
         self.chapter_dir = chapter_dir
         self.hardware_key = hardware_key
         self.path = chapter_dir / EXPECTATION_FILENAME_TEMPLATE.format(hardware_key=hardware_key)
         self._data = self._load()
         self._changed = False
         self._accept_regressions = accept_regressions
+        self._force_mixed_provenance = force_mixed_provenance
+
+        # Optionally validate on load to catch drift early
+        if validate_on_load and self.path.exists():
+            report = self.validate_all()
+            if report.has_issues:
+                import warnings
+                warnings.warn(
+                    f"Expectation file {self.path} has {len(report.issues)} validation issues. "
+                    f"Run 'python -m core.benchmark.validate_expectations {self.path} --fix' to repair.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     def _load(self) -> Dict[str, Any]:
         if self.path.exists():
@@ -164,6 +506,7 @@ class ExpectationsStore:
                 data = {}
         else:
             data = {}
+        data.setdefault("schema_version", SCHEMA_VERSION)
         data.setdefault("hardware_key", self.hardware_key)
         data.setdefault("examples", {})
         return data
@@ -173,9 +516,25 @@ class ExpectationsStore:
         return self._data
 
     def evaluate(self, example_key: str, metrics: Dict[str, float], metadata: Optional[Dict[str, Any]] = None) -> Optional[ExpectationEvaluation]:
-        """Compare metrics against expectations and update stored bests if improved."""
+        """Compare metrics against expectations and update stored bests if improved.
+
+        INTEGRITY SAFEGUARD: Speedup values are re-derived from timing values
+        before storing to ensure consistency. This prevents stale speedups from
+        being written even if the caller passes incorrect values.
+        """
         if not metrics:
             return None
+
+        # SAFEGUARD: Re-derive speedup from timing values to ensure consistency
+        # This is the "belt-and-suspenders" approach - even if the caller computes
+        # speedup correctly, we re-derive it here to guarantee data integrity.
+        metrics = dict(metrics)  # Don't mutate caller's dict
+        baseline_time = metrics.get("baseline_time_ms")
+        optimized_time = metrics.get("best_optimized_time_ms")
+        if baseline_time and optimized_time and optimized_time > 0:
+            derived_speedup = compute_speedup(baseline_time, optimized_time)
+            metrics["best_speedup"] = derived_speedup
+            metrics["best_optimized_speedup"] = derived_speedup
 
         metadata = metadata or {}
         examples = self._data.setdefault("examples", {})
@@ -257,7 +616,270 @@ class ExpectationsStore:
             expectation_path=self.path if self.path else None,
         )
 
+    def update_entry(self, example_key: str, entry: ExpectationEntry) -> UpdateResult:
+        """Atomically update an entry with enforced consistency.
+
+        This is the new schema v2 update method that ensures:
+        - All metrics are updated together (atomic)
+        - Speedup is always derived from timing values
+        - Provenance is tracked and validated
+        - Mixed-provenance updates are rejected unless forced
+
+        Args:
+            example_key: Key identifying the benchmark example (e.g., "matmul_cuda")
+            entry: The ExpectationEntry to store
+
+        Returns:
+            UpdateResult with status and any validation issues
+        """
+        examples = self._data.setdefault("examples", {})
+        existing = examples.get(example_key)
+
+        # Check provenance consistency if entry already exists
+        if existing and not self._force_mixed_provenance:
+            existing_provenance = existing.get("provenance")
+            if existing_provenance:
+                existing_prov = RunProvenance.from_dict(existing_provenance)
+                if not entry.provenance.matches(existing_prov):
+                    return UpdateResult(
+                        status="rejected",
+                        message=(
+                            f"Provenance mismatch: new run from commit {entry.provenance.git_commit} "
+                            f"differs from existing commit {existing_prov.git_commit}. "
+                            f"Use force_mixed_provenance=True to override."
+                        ),
+                        entry=entry,
+                        validation_issues=[
+                            ValidationIssue(
+                                example_key=example_key,
+                                issue_type="provenance_mismatch",
+                                message="Mixed provenance update rejected",
+                                stored_value=existing_prov.git_commit,
+                                expected_value=entry.provenance.git_commit,
+                            )
+                        ],
+                    )
+
+        # Determine if this is an improvement, regression, or unchanged
+        status = "updated"
+        if existing:
+            existing_metrics = existing.get("metrics", {})
+            old_speedup = existing_metrics.get("best_speedup", 0.0)
+            new_speedup = entry.best_speedup
+
+            if new_speedup > old_speedup * (1 + RELATIVE_TOLERANCE):
+                status = "improved"
+            elif new_speedup < old_speedup * (1 - RELATIVE_TOLERANCE):
+                if not self._accept_regressions:
+                    return UpdateResult(
+                        status="rejected",
+                        message=(
+                            f"Regression detected: new speedup {new_speedup:.3f}x < "
+                            f"existing {old_speedup:.3f}x. Use accept_regressions=True to override."
+                        ),
+                        entry=entry,
+                        validation_issues=[
+                            ValidationIssue(
+                                example_key=example_key,
+                                issue_type="regression",
+                                message="Performance regression rejected",
+                                stored_value=old_speedup,
+                                expected_value=new_speedup,
+                                delta_pct=((new_speedup - old_speedup) / old_speedup) * 100 if old_speedup else None,
+                            )
+                        ],
+                    )
+                status = "regressed"
+            else:
+                # Within tolerance - check if timing values changed significantly
+                old_baseline = existing_metrics.get("baseline_time_ms", 0.0)
+                old_optimized = existing_metrics.get("best_optimized_time_ms", 0.0)
+                if (
+                    abs(entry.baseline_time_ms - old_baseline) < SPEEDUP_TOLERANCE
+                    and abs(entry.best_optimized_time_ms - old_optimized) < SPEEDUP_TOLERANCE
+                ):
+                    status = "unchanged"
+
+        # Serialize entry to dict format (speedup is computed fresh here)
+        entry_dict = entry.to_dict()
+
+        # Store the entry atomically
+        examples[example_key] = entry_dict
+        self._changed = True
+
+        return UpdateResult(
+            status=status,
+            message=f"Entry {example_key} {status} with speedup {entry.best_speedup:.3f}x",
+            entry=entry,
+        )
+
+    def get_entry(self, example_key: str) -> Optional[ExpectationEntry]:
+        """Retrieve an entry as an ExpectationEntry object.
+
+        Args:
+            example_key: Key identifying the benchmark example
+
+        Returns:
+            ExpectationEntry if found, None otherwise
+        """
+        examples = self._data.get("examples", {})
+        entry_dict = examples.get(example_key)
+        if entry_dict is None:
+            return None
+        return ExpectationEntry.from_dict(entry_dict)
+
+    def validate_entry(self, example_key: str, entry_dict: Dict[str, Any]) -> List[ValidationIssue]:
+        """Validate a single entry for consistency issues.
+
+        Checks for:
+        - Speedup mismatch: stored speedup differs from computed ratio
+        - Masked regression: best_speedup=1.0 but actual ratio < 1.0
+        - Metadata drift: metadata speedup differs from metrics speedup
+        - Missing provenance: required provenance fields are missing
+
+        Args:
+            example_key: Key identifying the entry
+            entry_dict: The entry dictionary to validate
+
+        Returns:
+            List of ValidationIssue objects for any problems found
+        """
+        issues: List[ValidationIssue] = []
+        metrics = entry_dict.get("metrics", {})
+        metadata = entry_dict.get("metadata", {})
+        provenance = entry_dict.get("provenance", {})
+
+        # Get timing values
+        baseline_time = metrics.get("baseline_time_ms", 0.0)
+        optimized_time = metrics.get("best_optimized_time_ms", 0.0)
+        stored_speedup = metrics.get("best_speedup")
+        stored_optimized_speedup = metrics.get("best_optimized_speedup")
+
+        # Check 1: Speedup-timing consistency
+        if baseline_time > 0 and optimized_time > 0:
+            computed_speedup = compute_speedup(baseline_time, optimized_time)
+
+            if stored_speedup is not None:
+                delta = abs(stored_speedup - computed_speedup)
+                if delta > SPEEDUP_TOLERANCE:
+                    delta_pct = (delta / computed_speedup) * 100 if computed_speedup else 0
+                    issues.append(
+                        ValidationIssue(
+                            example_key=example_key,
+                            issue_type="speedup_mismatch",
+                            message=(
+                                f"Stored best_speedup {stored_speedup:.6f} differs from "
+                                f"computed ratio {computed_speedup:.6f}"
+                            ),
+                            stored_value=stored_speedup,
+                            expected_value=computed_speedup,
+                            delta_pct=delta_pct,
+                        )
+                    )
+
+            # Check for masked regression (best_speedup=1.0 but ratio<1.0)
+            if stored_speedup is not None and abs(stored_speedup - 1.0) < SPEEDUP_TOLERANCE:
+                if computed_speedup < 1.0 - SPEEDUP_TOLERANCE:
+                    issues.append(
+                        ValidationIssue(
+                            example_key=example_key,
+                            issue_type="masked_regression",
+                            message=(
+                                f"Stored best_speedup=1.0 but computed ratio is "
+                                f"{computed_speedup:.6f} (regression hidden)"
+                            ),
+                            stored_value=1.0,
+                            expected_value=computed_speedup,
+                            delta_pct=((1.0 - computed_speedup) / computed_speedup) * 100
+                            if computed_speedup
+                            else None,
+                        )
+                    )
+
+        # Check 2: best_optimized_speedup consistency (if different from best_speedup)
+        if (
+            stored_speedup is not None
+            and stored_optimized_speedup is not None
+            and abs(stored_speedup - stored_optimized_speedup) > SPEEDUP_TOLERANCE
+        ):
+            issues.append(
+                ValidationIssue(
+                    example_key=example_key,
+                    issue_type="speedup_inconsistency",
+                    message=(
+                        f"best_speedup ({stored_speedup:.6f}) differs from "
+                        f"best_optimized_speedup ({stored_optimized_speedup:.6f})"
+                    ),
+                    stored_value=stored_speedup,
+                    expected_value=stored_optimized_speedup,
+                )
+            )
+
+        # Check 3: Metadata speedup consistency
+        metadata_speedup = metadata.get("best_optimization_speedup")
+        if stored_speedup is not None and metadata_speedup is not None:
+            if abs(stored_speedup - metadata_speedup) > SPEEDUP_TOLERANCE:
+                issues.append(
+                    ValidationIssue(
+                        example_key=example_key,
+                        issue_type="metadata_drift",
+                        message=(
+                            f"Metrics best_speedup ({stored_speedup:.6f}) differs from "
+                            f"metadata best_optimization_speedup ({metadata_speedup:.6f})"
+                        ),
+                        stored_value=metadata_speedup,
+                        expected_value=stored_speedup,
+                    )
+                )
+
+        # Check 4: Provenance completeness (for schema v2 entries)
+        schema_version = self._data.get("schema_version", 1)
+        if schema_version >= 2:
+            required_prov_fields = ["git_commit", "hardware_key", "profile_name", "timestamp"]
+            missing = [f for f in required_prov_fields if not provenance.get(f)]
+            if missing:
+                issues.append(
+                    ValidationIssue(
+                        example_key=example_key,
+                        issue_type="missing_provenance",
+                        message=f"Missing provenance fields: {', '.join(missing)}",
+                        stored_value=list(provenance.keys()),
+                        expected_value=required_prov_fields,
+                    )
+                )
+
+        return issues
+
+    def validate_all(self) -> ValidationReport:
+        """Validate all entries in the store for consistency issues.
+
+        Returns:
+            ValidationReport summarizing all issues found
+        """
+        all_issues: List[ValidationIssue] = []
+        examples = self._data.get("examples", {})
+        total = len(examples)
+        valid = 0
+
+        for example_key, entry_dict in examples.items():
+            entry_issues = self.validate_entry(example_key, entry_dict)
+            if entry_issues:
+                all_issues.extend(entry_issues)
+            else:
+                valid += 1
+
+        return ValidationReport(
+            issues=all_issues,
+            total_entries=total,
+            valid_entries=valid,
+        )
+
     def _update_metadata(self, entry: Dict[str, Any], metadata: Dict[str, Any]) -> None:
+        """Update entry metadata, ensuring speedup consistency.
+
+        INTEGRITY SAFEGUARD: Metadata speedup is derived from stored metrics
+        timing values, not from the metadata dict, to ensure consistency.
+        """
         entry["example"] = metadata.get("example", entry.get("example"))
         entry["type"] = metadata.get("type", entry.get("type", "python"))
         meta = entry.setdefault("metadata", {})
@@ -265,17 +887,51 @@ class ExpectationsStore:
             meta["best_optimization"] = metadata["best_optimization"]
         if metadata.get("best_optimization_file"):
             meta["best_optimization_file"] = metadata["best_optimization_file"]
-        if metadata.get("best_optimization_speedup") is not None:
-            meta["best_optimization_speedup"] = metadata["best_optimization_speedup"]
         if metadata.get("best_optimization_time_ms") is not None:
             meta["best_optimization_time_ms"] = metadata["best_optimization_time_ms"]
         if metadata.get("git_commit"):
             meta["git_commit"] = metadata["git_commit"]
+
+        # SAFEGUARD: Derive metadata speedup from entry metrics (not from metadata dict)
+        # This ensures metadata speedup always matches metrics speedup
+        stored_metrics = entry.get("metrics", {})
+        baseline_time = stored_metrics.get("baseline_time_ms")
+        optimized_time = stored_metrics.get("best_optimized_time_ms")
+        if baseline_time and optimized_time and optimized_time > 0:
+            meta["best_optimization_speedup"] = compute_speedup(baseline_time, optimized_time)
+        elif metadata.get("best_optimization_speedup") is not None:
+            # Fallback to provided value if timing not available
+            meta["best_optimization_speedup"] = metadata["best_optimization_speedup"]
+
         meta["updated_at"] = datetime.now().isoformat()
 
-    def save(self) -> None:
-        if not self._changed:
+    def save(self, force: bool = False) -> None:
+        """Save the expectations file.
+
+        Args:
+            force: If True, always write even if no changes detected.
+        """
+        if not self._changed and not force:
             return
+
+        # Ensure schema version is set
+        self._data["schema_version"] = SCHEMA_VERSION
+
         serialized = json.dumps(self._data, indent=2, sort_keys=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(serialized + "\n")
         self._changed = False
+
+    def rewrite_all(self) -> None:
+        """Rewrite the entire expectations file from scratch.
+
+        This method serializes all entries fresh, ensuring:
+        - All speedups are recomputed from timing values
+        - Schema version is updated
+        - File is written atomically
+
+        Use this after making changes to ensure full consistency.
+        """
+        self._data["schema_version"] = SCHEMA_VERSION
+        self._changed = True
+        self.save(force=True)

@@ -13,6 +13,7 @@ third_party/te_sm100a_env.sh
 report.html
 mcp_tools_test_report.md
 core/artifacts/ 
+.hypothesis/
 config/.env
 config/.env.local
 benchmark_test_results.json

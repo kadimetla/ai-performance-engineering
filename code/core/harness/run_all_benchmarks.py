@@ -67,8 +67,12 @@ except ImportError:  # pragma: no cover - optional dependency during docs builds
 from core.benchmark.timing_parser import parse_kernel_time_ms
 from core.benchmark.expectations import (
     ExpectationsStore,
+    ExpectationEntry,
+    RunProvenance,
     METRIC_DIRECTIONS,
     detect_expectation_key,
+    select_best_optimization,
+    compute_speedup,
 )
 from core.discovery import chapter_slug, resolve_target_chapters
 
@@ -403,9 +407,17 @@ def _capture_custom_metrics(metrics: Dict[str, float], prefix: str, payload: Opt
 
 
 def collect_expectation_metrics(result_entry: Dict[str, Any]) -> Tuple[Dict[str, float], Optional[Dict[str, Any]]]:
+    """Collect metrics for expectation tracking.
+
+    Uses select_best_optimization() as single source of truth for selecting
+    the best optimization. Speedup is derived from timing values, not stored
+    independently.
+    """
     metrics: Dict[str, float] = {}
-    _capture_metric(metrics, "best_speedup", result_entry.get("best_speedup"))
-    _capture_metric(metrics, "baseline_time_ms", result_entry.get("baseline_time_ms"))
+
+    # Capture baseline metrics
+    baseline_time = result_entry.get("baseline_time_ms")
+    _capture_metric(metrics, "baseline_time_ms", baseline_time)
     _capture_metric(metrics, "baseline_p75_ms", result_entry.get("baseline_p75_ms"))
     _capture_metric(metrics, "baseline_p90_ms", result_entry.get("baseline_p90_ms"))
 
@@ -415,14 +427,28 @@ def collect_expectation_metrics(result_entry: Dict[str, Any]) -> Tuple[Dict[str,
     baseline_custom = result_entry.get("baseline_custom_metrics")
     _capture_custom_metrics(metrics, "baseline_custom", baseline_custom)
 
-    best_opt = find_best_optimization_entry(result_entry.get("optimizations", []))
+    # Use single source of truth for selecting best optimization
+    best_opt = select_best_optimization(result_entry.get("optimizations", []))
     if best_opt:
-        _capture_metric(metrics, "best_optimized_time_ms", best_opt.get("time_ms"))
-        _capture_metric(metrics, "best_optimized_speedup", best_opt.get("speedup"))
+        optimized_time = best_opt.get("time_ms")
+        _capture_metric(metrics, "best_optimized_time_ms", optimized_time)
         _capture_metric(metrics, "best_optimized_p75_ms", best_opt.get("p75_ms"))
         _capture_metric(metrics, "best_optimized_p90_ms", best_opt.get("p90_ms"))
         _capture_payload(metrics, "best_optimized_throughput", best_opt.get("throughput"))
         _capture_custom_metrics(metrics, "best_optimized_custom", best_opt.get("custom_metrics"))
+
+        # Derive speedup from timing values (not from stored value)
+        if baseline_time and optimized_time and optimized_time > 0:
+            derived_speedup = compute_speedup(baseline_time, optimized_time)
+            _capture_metric(metrics, "best_speedup", derived_speedup)
+            _capture_metric(metrics, "best_optimized_speedup", derived_speedup)
+        else:
+            # Fall back to stored speedup if timing not available
+            _capture_metric(metrics, "best_speedup", best_opt.get("speedup"))
+            _capture_metric(metrics, "best_optimized_speedup", best_opt.get("speedup"))
+    else:
+        # No successful optimization - use result_entry's best_speedup (likely 1.0)
+        _capture_metric(metrics, "best_speedup", result_entry.get("best_speedup"))
 
     return metrics, best_opt
 
@@ -432,6 +458,11 @@ def build_expectation_metadata(
     best_opt: Optional[Dict[str, Any]],
     git_commit: Optional[str],
 ) -> Dict[str, Any]:
+    """Build metadata for expectation tracking.
+
+    Ensures metadata speedup matches metrics speedup by deriving from timing
+    values rather than using stored speedup.
+    """
     metadata: Dict[str, Any] = {
         "example": result_entry.get("example"),
         "type": result_entry.get("type", "python"),
@@ -441,8 +472,15 @@ def build_expectation_metadata(
     if best_opt:
         metadata["best_optimization"] = best_opt.get("technique") or best_opt.get("file")
         metadata["best_optimization_file"] = best_opt.get("file")
-        metadata["best_optimization_speedup"] = best_opt.get("speedup")
         metadata["best_optimization_time_ms"] = best_opt.get("time_ms")
+
+        # Derive speedup from timing values for consistency with metrics
+        baseline_time = result_entry.get("baseline_time_ms")
+        optimized_time = best_opt.get("time_ms")
+        if baseline_time and optimized_time and optimized_time > 0:
+            metadata["best_optimization_speedup"] = compute_speedup(baseline_time, optimized_time)
+        else:
+            metadata["best_optimization_speedup"] = best_opt.get("speedup")
     return metadata
 
 
@@ -501,6 +539,13 @@ def log_expectation_evaluation(
     evaluation: Optional[Any],
     repo_root: Path,
 ) -> None:
+    """Log expectation evaluation results with enhanced regression display.
+
+    Shows:
+    - Metric comparison table with status indicators
+    - Visual indicators for regressions (⚠️) and improvements (🚀)
+    - Actual speedup values (never clamped)
+    """
     if evaluation is None:
         return
     rel_path = None
@@ -527,6 +572,16 @@ def log_expectation_evaluation(
             pct_str = f"{delta_pct:+.2f}%"
         elif delta_pct is not None and math.isinf(delta_pct):
             pct_str = "+inf%" if delta_pct > 0 else "-inf%"
+
+        # Enhanced status display with visual indicators
+        status = comp.get("status", "")
+        if status == "regressed":
+            status = "⚠️ regressed"
+        elif status == "improved":
+            status = "🚀 improved"
+        elif status == "met":
+            status = "✓ met"
+
         rows.append(
             {
                 "Metric": comp.get("metric", ""),
@@ -534,7 +589,7 @@ def log_expectation_evaluation(
                 "Expected": _format_metric_value(comp.get("expected")),
                 "Delta": _format_metric_value(comp.get("delta")),
                 "Δ%": pct_str,
-                "Status": comp.get("status", ""),
+                "Status": status,
             }
         )
     widths = {header: len(header) for header in headers}
@@ -548,6 +603,11 @@ def log_expectation_evaluation(
     for row in rows:
         line = " | ".join(row.get(header, "").ljust(widths[header]) for header in headers)
         logger.info(f"      {line}")
+
+    # Show regression summary if any regressions detected
+    if evaluation.regressed:
+        regression_count = len(evaluation.regressions)
+        logger.warning(f"      ⚠️ {regression_count} metric(s) regressed from expected values")
 
 
 def reset_cuda_state():
@@ -2516,14 +2576,17 @@ def _test_chapter_impl(
                             except Exception:
                                 optimized_custom_metrics = {}
                     optimized_time = optimized_timing.mean_ms if optimized_timing else 0.0
+                    # Speedup is always derived from timing values (schema v2 integrity)
                     speedup = baseline_time / optimized_time if optimized_time > 0 else 1.0
+
+                    # Track scenario speedup separately in custom_metrics (not replacing timing speedup)
                     scenario_speedup = None
                     b_phase = (result_entry.get('baseline_custom_metrics') or {}).get("scenario_total_phase_ms")
                     o_phase = optimized_custom_metrics.get("scenario_total_phase_ms")
                     if b_phase and o_phase and o_phase > 0:
                         scenario_speedup = b_phase / o_phase
-                        if scenario_speedup > speedup:
-                            speedup = scenario_speedup
+                        # Store as custom metric, don't override timing-based speedup
+                        optimized_custom_metrics["custom_speedup"] = scenario_speedup
                     
                     # Enhanced metrics display with emojis and formatting
                     emoji = "🚀" if speedup > 1.0 else "⚠️" if speedup < 1.0 else "="
@@ -2821,16 +2884,8 @@ def _test_chapter_impl(
                 if evaluation:
                     result_entry['expectation'] = evaluation.to_dict()
                 log_expectation_evaluation(logger, evaluation, repo_root)
-                # Enforce minimum 1.05x speedup for any successful optimization (coerce upward if needed)
-                if best_opt and isinstance(best_opt, dict) and best_opt.get("status") == "succeeded":
-                    speedup = best_opt.get("speedup", 0.0) or 0.0
-                    if speedup < 1.05:
-                        logger.warning(
-                            "    ⚠️ Speedup %.3fx below 1.05x expectation floor; clamping reported speedup to 1.05x to keep the optimization bar high.",
-                            speedup,
-                        )
-                        best_opt["speedup"] = 1.05
-                        result_entry["best_speedup"] = 1.05
+                # NOTE: 1.05x speedup clamping removed for data integrity (schema v2).
+                # Actual speedup values are now preserved, including regressions < 1.0.
                 if evaluation and evaluation.regressed:
                     regression_metrics = None
                     if best_opt and isinstance(best_opt, dict):
