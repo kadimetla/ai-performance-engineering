@@ -1,4 +1,9 @@
-"""NUMA-unaware baseline: copies pageable CPU tensors to GPU each step."""
+"""NUMA-unaware baseline: copies pageable CPU tensors to GPU each step.
+
+This benchmark demonstrates inefficient memory transfer - using non-pinned
+pageable memory and blocking copies. The optimized version uses pinned
+memory with async copies overlapped with compute.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +22,6 @@ from core.harness.benchmark_harness import (
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
-    WorkloadMetadata,
 )
 
 
@@ -28,8 +32,12 @@ class BaselineNUMAUnawareBenchmark(BaseBenchmark):
         super().__init__()
         self.host_tensor: Optional[torch.Tensor] = None
         self.device_buffer: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        # Memory copy benchmark - jitter check not applicable
+        self.jitter_exemption_reason = "Memory copy benchmark: input is fixed-size buffer"
         bytes_per_iter = 128_000_000 * 4  # float32 bytes
-        self._workload = WorkloadMetadata(
+        # Register workload metadata in __init__ for compliance checks
+        self.register_workload_metadata(
             requests_per_iteration=1.0,
             bytes_per_iteration=float(bytes_per_iter),
         )
@@ -39,20 +47,21 @@ class BaselineNUMAUnawareBenchmark(BaseBenchmark):
         self.host_tensor = torch.randn(128_000_000, dtype=torch.float32)  # ~512 MB
         self.device_buffer = torch.empty_like(self.host_tensor, device=self.device)
         self._synchronize()
-        self.register_workload_metadata(
-            requests_per_iteration=self._workload.requests_per_iteration,
-            bytes_per_iteration=self._workload.bytes_per_iteration,
-        )
 
     def benchmark_fn(self) -> None:
+        """Copy data and compute sum - blocking copy (slow)."""
         assert self.host_tensor is not None and self.device_buffer is not None
         with self._nvtx_range("baseline_numa_unaware"):
+            # Blocking copy from non-pinned memory
             self.device_buffer.copy_(self.host_tensor, non_blocking=False)
+            # Simple compute to overlap with in optimized version
+            self.output = torch.sum(self.device_buffer).unsqueeze(0)
             self._synchronize()
 
     def teardown(self) -> None:
         self.host_tensor = None
         self.device_buffer = None
+        self.output = None
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
@@ -70,6 +79,23 @@ class BaselineNUMAUnawareBenchmark(BaseBenchmark):
         if self.host_tensor is None:
             return "Host tensor not initialized"
         return None
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "buffer_size": 128_000_000,
+            "dtype": "float32",
+        }
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is not None:
+            return self.output.detach().clone()
+        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+    
+    def get_output_tolerance(self) -> tuple:
+        """Return custom tolerance for sum output comparison."""
+        return (1e-3, 1e-3)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -572,3 +572,98 @@ INFORMATIONAL_BENCHMARKS = {
 - `setup.sh` installs system prerequisites (drivers, CUDA, Nsight)
 - `python core/harness/run_benchmarks.py --targets ch*` for regression suites
 - `artifacts/` holds run outputs; clean via `python cleanup.py`
+
+---
+
+## Benchmark Validity Issues Reference
+
+This table documents known issues that can cause benchmark results to be misleading, along with their protections. Use this as a checklist when creating or reviewing benchmarks.
+
+| Category | Issue | What Happens | Protection |
+|----------|-------|--------------|------------|
+| **Timing** | Unsynced Streams | Work on non-default streams isn't timed | Full device sync |
+| **Timing** | Incomplete Async Ops | Timer stops before async work finishes | Full device sync |
+| **Timing** | Event Timing Gaps | CUDA events recorded incorrectly | Cross-validate with wall clock |
+| **Timing** | Timer Granularity | Measurement too coarse for fast ops | Multiple measurement methods |
+| **Timing** | Warmup Bleed | Real work happens during warmup | Separate warmup/timed buffers |
+| **Timing** | Clock Drift | System clock changes during measurement | Monotonic clock usage |
+| **Timing** | Profiler Overhead | Profiling tools add latency | Profile-free timing path |
+| **Output** | Constant Output | Same result regardless of input | Jitter check |
+| **Output** | Stale Cache | Same result across different seeds | Fresh-input check |
+| **Output** | Approximation Drift | Rough estimate instead of full compute | Output tolerance validation |
+| **Output** | Invalid Values (NaN) | NaN in output | `validate_result()` NaN check |
+| **Output** | Invalid Values (Inf) | Inf in output | `validate_result()` Inf check |
+| **Output** | Shape Mismatch | Output shape differs from expected | Shape validation |
+| **Output** | Dtype Mismatch | Output dtype differs from expected | Dtype validation |
+| **Output** | Denormalized Values | Subnormal floats cause slowdowns | Denormal check |
+| **Output** | Uninitialized Memory | Output contains garbage | Memory initialization check |
+| **Workload** | Precision Mismatch | Claims FP32 but uses FP16 | Dtype verification |
+| **Workload** | Undeclared Shortcuts | Skips elements without declaring | Workload invariant check |
+| **Workload** | Early Exit | Stops iteration loops early | Iteration count enforcement |
+| **Workload** | Batch Shrinking | Processes fewer samples | Input signature matching |
+| **Workload** | Sequence Truncation | Processes shorter sequences | Input signature matching |
+| **Workload** | Hidden Downsampling | Silently reduces resolution | Dimension validation |
+| **Workload** | Sparsity Mismatch | Different sparsity patterns | Sparsity ratio check |
+| **Workload** | Attention Mask Mismatch | Different masking applied | Mask equivalence check |
+| **Workload** | KV Cache Size Mismatch | Different cache sizes | Cache dimension check |
+| **Location** | CPU Spillover | Work offloaded to CPU | GPU kernel time validation |
+| **Location** | Setup Pre-computation | Work done in `setup()` | Input mutation check |
+| **Location** | Graph Capture Cheat | Pre-compute during graph capture | Graph-aware verification |
+| **Location** | Warmup Computation | Compute results during warmup | Buffer isolation |
+| **Location** | Background Thread | Compute in separate thread | Process isolation |
+| **Location** | Lazy Evaluation Skip | Returns unevaluated lazy tensor | Force evaluation |
+| **Location** | JIT Compilation Timing | JIT compile time included/excluded inconsistently | Compilation state tracking |
+| **Memory** | Pre-allocated Output | Result buffer allocated in setup | Memory allocation tracking |
+| **Memory** | Input-Output Aliasing | Output points to pre-filled input | Memory address validation |
+| **Memory** | Pinned Memory Timing | Async pinned transfers not waited | Transfer completion check |
+| **Memory** | Memory Pool Reuse | Cached allocations skew timing | Memory pool reset |
+| **Memory** | Fragmentation Effects | Memory fragmentation differs | Defragmentation before runs |
+| **Memory** | Page Fault Timing | First-touch page faults included | Memory pre-touch |
+| **Memory** | Swap Interference | Swapping affects timing | Memory lock / swap disable |
+| **CUDA** | Host Callback Escape | `cudaLaunchHostFunc` returns early | Host function tracking |
+| **CUDA** | Async Memcpy Incomplete | D2H/H2D copies not awaited | Memory sync validation |
+| **CUDA** | Workspace Pre-compute | Work in cuBLAS workspace alloc | Workspace monitoring |
+| **CUDA** | Persistent Kernel | Kernel left running across calls | Kernel lifetime check |
+| **CUDA** | Undeclared Multi-GPU | Work spread across undeclared GPUs | Device enumeration |
+| **CUDA** | Context Switch Overhead | CUDA context switches affect timing | Context pinning |
+| **CUDA** | Driver Overhead | Driver calls not accounted for | Driver call tracking |
+| **CUDA** | Cooperative Launch Abuse | Cooperative kernels bypass checks | Launch mode validation |
+| **CUDA** | Dynamic Parallelism Hidden | Child kernels not tracked | CDP kernel tracking |
+| **CUDA** | Unified Memory Faults | Page migration not timed | UM fault tracking |
+| **Compile** | Compilation Cache Hit | Returns cached compiled output | Cache invalidation |
+| **Compile** | Trace Reuse | Exploits trace caching | Fresh trace enforcement |
+| **Compile** | Mode Inconsistency | Different compile mode verify vs perf | Mode consistency check |
+| **Compile** | Inductor Asymmetry | Inductor optimizations inconsistent | Compilation parity |
+| **Compile** | Guard Failure Hidden | Recompilation not counted | Guard check tracking |
+| **Compile** | Autotuning Variance | Autotuning picks different kernels | Fixed autotuning cache |
+| **Compile** | Symbolic Shape Exploit | Different shapes trigger different code | Shape canonicalization |
+| **Distributed** | Rank Skipping | Some ranks don't do work | Per-rank verification |
+| **Distributed** | Collective Short-circuit | Communication skipped | NCCL validation |
+| **Distributed** | Topology Mismatch | Claims different topology | Topology verification |
+| **Distributed** | Barrier Timing | Barrier timing exploited | Barrier synchronization |
+| **Distributed** | Gradient Bucketing Mismatch | Different bucket sizes | Bucket size validation |
+| **Distributed** | Async Gradient Timing | Async all-reduce not awaited | Gradient sync check |
+| **Distributed** | Pipeline Bubble Hiding | Pipeline bubbles not counted | Bubble time tracking |
+| **Distributed** | Shard Size Mismatch | FSDP shards differ | Shard size validation |
+| **Environment** | Device Mismatch | Uses different GPU than declared | Device fingerprint |
+| **Environment** | Frequency Boost | Overclocked for benchmark only | Frequency monitoring |
+| **Environment** | Priority Elevation | Runs at higher priority | Process isolation |
+| **Environment** | Memory Overcommit | Exploits memory overcommit | Memory validation |
+| **Environment** | NUMA Inconsistency | NUMA placement differs | NUMA audit |
+| **Environment** | CPU Governor Mismatch | Different CPU frequency scaling | Governor lock |
+| **Environment** | Thermal Throttling | GPU throttles during run | Temperature monitoring |
+| **Environment** | Power Limit Difference | Different TDP settings | Power limit check |
+| **Environment** | Driver Version Mismatch | Different CUDA drivers | Driver version lock |
+| **Environment** | Library Version Mismatch | Different cuDNN/cuBLAS | Library version lock |
+| **Environment** | Container Resource Limits | cgroups limits differ | Resource limit check |
+| **Environment** | Virtualization Overhead | VM/container overhead varies | Bare-metal validation |
+| **Statistical** | Cherry-picking | Only best iterations reported | All-iteration reporting |
+| **Statistical** | Outlier Injection | Slow iterations added to baseline | Statistical validation |
+| **Statistical** | Variance Gaming | Variance reporting manipulated | Consistent statistics |
+| **Statistical** | Percentile Selection | Favorable percentile chosen | Fixed percentile policy |
+| **Statistical** | Insufficient Samples | Too few iterations for significance | Minimum iteration count |
+| **Statistical** | Cold Start Inclusion | First run included unfairly | Warmup enforcement |
+| **Statistical** | GC Interference | Garbage collection during timing | GC disable during timing |
+| **Statistical** | Background Process Noise | System processes affect timing | Process isolation |
+
+**Total: 10 categories, 84 validity issues**

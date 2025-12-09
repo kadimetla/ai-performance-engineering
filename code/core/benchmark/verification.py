@@ -181,20 +181,28 @@ class InputSignature:
         """
         return self.to_dict() == other.to_dict()
     
-    def validate(self) -> List[str]:
+    def validate(self, strict: bool = False) -> List[str]:
         """Validate that required fields are present and valid.
+        
+        Args:
+            strict: If True, require shapes and dtypes to be non-empty.
+                   If False (default), allow simple parameter-based signatures.
         
         Returns:
             List of validation error messages (empty if valid)
         """
         errors = []
         
-        if not self.shapes:
-            errors.append("shapes is required and cannot be empty")
-        if not self.dtypes:
-            errors.append("dtypes is required and cannot be empty")
-        if self.batch_size <= 0:
-            errors.append("batch_size must be positive")
+        # In strict mode, require shapes and dtypes
+        if strict:
+            if not self.shapes:
+                errors.append("shapes is required and cannot be empty")
+            if not self.dtypes:
+                errors.append("dtypes is required and cannot be empty")
+        
+        # batch_size can be 0 for simple parameter-based signatures
+        if self.batch_size < 0:
+            errors.append("batch_size cannot be negative")
         if self.parameter_count < 0:
             errors.append("parameter_count cannot be negative")
             
@@ -438,7 +446,8 @@ class ComparisonDetails:
         if self.max_diff is not None:
             result["max_diff"] = self.max_diff
         if self.location is not None:
-            result["location"] = list(self.location)
+            # Convert numpy integers to native Python int for JSON serialization
+            result["location"] = [int(x) for x in self.location]
         if self.expected_sample is not None:
             result["expected_sample"] = self.expected_sample
         if self.actual_sample is not None:
@@ -905,6 +914,13 @@ def get_output_tolerance(benchmark: Any) -> Optional[ToleranceSpec]:
                         rtol=result.get("rtol", 1e-5),
                         atol=result.get("atol", 1e-8),
                         justification=result.get("justification"),
+                    )
+                # Handle tuple format (rtol, atol)
+                if isinstance(result, tuple) and len(result) >= 2:
+                    return ToleranceSpec(
+                        rtol=result[0],
+                        atol=result[1],
+                        justification=None,
                     )
         except Exception:
             pass

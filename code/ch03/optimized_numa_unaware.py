@@ -1,4 +1,8 @@
-"""NUMA-aware optimization: pinned memory + async copies overlapped with compute."""
+"""NUMA-aware optimization: pinned memory + async copies overlapped with compute.
+
+This benchmark demonstrates efficient memory transfer - using pinned memory
+with async copies and double-buffering to overlap data transfer with compute.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,6 @@ from core.harness.benchmark_harness import (
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
-    WorkloadMetadata,
 )
 
 
@@ -31,30 +34,32 @@ class OptimizedNUMAAwareBenchmark(BaseBenchmark):
         self.copy_stream = torch.cuda.Stream()
         self.cur_slot = 0
         self.next_slot = 1
-        self.iteration = 0
-        bytes_per_iter = 128_000_000 * 2  # float16 bytes
-        self._workload = WorkloadMetadata(
+        self.output: Optional[torch.Tensor] = None
+        # Memory copy benchmark - jitter check not applicable
+        self.jitter_exemption_reason = "Memory copy benchmark: input is fixed-size buffer"
+        bytes_per_iter = 128_000_000 * 4  # float32 bytes (same as baseline)
+        # Register workload metadata in __init__ for compliance checks
+        self.register_workload_metadata(
             requests_per_iteration=1.0,
             bytes_per_iteration=float(bytes_per_iter),
         )
 
     def setup(self) -> None:
         torch.manual_seed(9)
-        self.host_tensor = torch.randn(128_000_000, dtype=torch.float16, pin_memory=True)
+        # Pinned memory for efficient async H2D transfer (the optimization)
+        self.host_tensor = torch.randn(128_000_000, dtype=torch.float32, pin_memory=True)
+        # Double-buffering for overlapping copy with compute
         self.device_buffers = [
             torch.empty_like(self.host_tensor, device=self.device),
             torch.empty_like(self.host_tensor, device=self.device),
         ]
         self.cur_slot = 0
         self.next_slot = 1
+        # Prefetch first buffer
         self._start_copy(self.cur_slot)
         torch.cuda.current_stream().wait_stream(self.copy_stream)
+        # Start prefetching second buffer
         self._start_copy(self.next_slot)
-        self.iteration = 0
-        self.register_workload_metadata(
-            requests_per_iteration=self._workload.requests_per_iteration,
-            bytes_per_iteration=self._workload.bytes_per_iteration,
-        )
 
     def _start_copy(self, slot: int) -> None:
         assert self.host_tensor is not None
@@ -62,19 +67,23 @@ class OptimizedNUMAAwareBenchmark(BaseBenchmark):
             self.device_buffers[slot].copy_(self.host_tensor, non_blocking=True)
 
     def benchmark_fn(self) -> None:
+        """Copy data and compute sum - async copy overlapped with compute."""
         assert self.host_tensor is not None
+        # Wait for current buffer to be ready
         torch.cuda.current_stream().wait_stream(self.copy_stream)
         with self._nvtx_range("optimized_numa"):
-            _ = torch.sum(self.device_buffers[self.cur_slot])
-        self.host_tensor.add_(1e-4)
+            # Compute on ready buffer while next is being copied
+            self.output = torch.sum(self.device_buffers[self.cur_slot]).unsqueeze(0)
+        # Start copy for current slot (will be ready next iteration)
         self._start_copy(self.cur_slot)
+        # Swap slots
         self.cur_slot, self.next_slot = self.next_slot, self.cur_slot
-        self.iteration += 1
         self._synchronize()
 
     def teardown(self) -> None:
         self.host_tensor = None
         self.device_buffers = []
+        self.output = None
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
@@ -92,6 +101,23 @@ class OptimizedNUMAAwareBenchmark(BaseBenchmark):
         if self.host_tensor is None:
             return "Host tensor not initialized"
         return None
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "buffer_size": 128_000_000,
+            "dtype": "float32",
+        }
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is not None:
+            return self.output.detach().clone()
+        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+    
+    def get_output_tolerance(self) -> tuple:
+        """Return custom tolerance for sum output comparison."""
+        return (1e-3, 1e-3)
 
 
 def get_benchmark() -> BaseBenchmark:

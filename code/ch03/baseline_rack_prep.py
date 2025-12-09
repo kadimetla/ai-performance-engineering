@@ -37,8 +37,10 @@ class BaselineRackPrepBenchmark(BaseBenchmark):
         self.device_batch: Optional[torch.Tensor] = None
         self.norm: Optional[nn.Module] = None
         self.nic_snapshot: List[NICInfo] = []
+        self.output: Optional[torch.Tensor] = None
         bytes_per_iter = self.seq_len * self.hidden_size * 4  # float32 bytes
-        self._workload = WorkloadMetadata(
+        # Register workload metadata in __init__ for compliance checks
+        self.register_workload_metadata(
             requests_per_iteration=1.0,
             bytes_per_iteration=float(bytes_per_iter),
         )
@@ -49,10 +51,6 @@ class BaselineRackPrepBenchmark(BaseBenchmark):
         self.host_batch = torch.randn(self.seq_len, self.hidden_size, dtype=torch.float32)
         self.device_batch = torch.empty_like(self.host_batch, device=self.device)
         self.norm = nn.LayerNorm(self.hidden_size, device=self.device)
-        self.register_workload_metadata(
-            requests_per_iteration=self._workload.requests_per_iteration,
-            bytes_per_iteration=self._workload.bytes_per_iteration,
-        )
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -60,7 +58,7 @@ class BaselineRackPrepBenchmark(BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("baseline_rack_prep", enable=enable_nvtx):
             self.device_batch.copy_(self.host_batch, non_blocking=False)
-            _ = self.norm(self.device_batch)
+            self.output = self.norm(self.device_batch)
             self._synchronize()
 
     def teardown(self) -> None:
@@ -82,6 +80,17 @@ class BaselineRackPrepBenchmark(BaseBenchmark):
             return None
         summaries = [f"{n.name}:numa={n.numa_node},cpus={format_cpulist(n.local_cpus)}" for n in self.nic_snapshot]
         return {"nic_layouts": len(self.nic_snapshot), "nic_summary": ";".join(summaries)}
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is not None:
+            return self.output.detach().clone()
+        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+    
+    def get_output_tolerance(self) -> tuple:
+        """Return custom tolerance for LayerNorm output comparison."""
+        return (1e-4, 1e-4)
+
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -21,7 +21,7 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -37,6 +37,7 @@ from core.benchmark.verification import (
     compare_workload_metrics,
     detect_seed_mutation,
     get_enforcement_phase,
+    get_output_tolerance,
     is_verification_enabled,
     get_tolerance_for_dtype,
     select_jitter_dimension,
@@ -85,14 +86,17 @@ class GoldenOutputCache:
     verifying that optimized benchmarks produce equivalent results.
     """
     
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Optional[Union[Path, str]] = None):
         """Initialize the golden output cache.
         
         Args:
             cache_dir: Directory for storing cached outputs.
-                      Defaults to .kiro/verify_cache/golden_outputs
+                      Defaults to artifacts/verify_cache/golden_outputs
         """
-        self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
+        if cache_dir is None:
+            self.cache_dir = DEFAULT_CACHE_DIR
+        else:
+            self.cache_dir = Path(cache_dir) if isinstance(cache_dir, str) else cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
     
     def _get_cache_path(self, signature_hash: str) -> Path:
@@ -207,7 +211,7 @@ class VerifyRunner:
     
     def __init__(
         self,
-        cache_dir: Optional[Path] = None,
+        cache_dir: Optional[Union[Path, str]] = None,
         quarantine_manager: Optional[QuarantineManager] = None,
     ):
         """Initialize the verification runner.
@@ -216,51 +220,80 @@ class VerifyRunner:
             cache_dir: Directory for golden output cache
             quarantine_manager: Manager for quarantine records
         """
-        self.cache = GoldenOutputCache(cache_dir)
+        cache_path = Path(cache_dir) if isinstance(cache_dir, str) else cache_dir
+        self.cache = GoldenOutputCache(cache_path)
         self.quarantine = quarantine_manager or QuarantineManager()
     
     def _extract_output(self, benchmark: Any) -> Dict[str, torch.Tensor]:
-        """Extract named output tensors from a benchmark.
+        """Extract output tensor from benchmark using ONLY get_verify_output().
         
-        Looks for:
-        1. benchmark.output if it's a tensor
-        2. benchmark.outputs if it's a dict
-        3. benchmark.get_output() if it's a method
-        4. benchmark.result if it's a tensor
+        STRICT: No fallbacks, no auto-detection. Every benchmark MUST implement
+        get_verify_output() explicitly.
         
         Args:
             benchmark: The benchmark instance
             
         Returns:
             Dict mapping output names to tensors
+            
+        Raises:
+            NotImplementedError: If benchmark doesn't implement get_verify_output()
+            ValueError: If get_verify_output() returns invalid type
         """
+        # STRICT: Only use get_verify_output() - no fallbacks
+        if not hasattr(benchmark, "get_verify_output"):
+            raise NotImplementedError(
+                f"{benchmark.__class__.__name__} must implement get_verify_output(). "
+                "No fallbacks or auto-detection allowed."
+            )
+        
+        if not callable(benchmark.get_verify_output):
+            raise TypeError(
+                f"{benchmark.__class__.__name__}.get_verify_output must be a method, "
+                f"got {type(benchmark.get_verify_output)}"
+            )
+        
+        # Call get_verify_output() - let NotImplementedError propagate
+        out = benchmark.get_verify_output()
+        
+        # Validate return type
+        if out is None:
+            raise ValueError(
+                f"{benchmark.__class__.__name__}.get_verify_output() returned None. "
+                "Must return a tensor or dict of tensors. "
+                "If this is a throughput-only benchmark, return a checksum tensor."
+            )
+        
         outputs: Dict[str, torch.Tensor] = {}
         
-        # Try different attributes
-        if hasattr(benchmark, "output") and isinstance(benchmark.output, torch.Tensor):
-            outputs["output"] = benchmark.output.detach().clone()
-        elif hasattr(benchmark, "outputs") and isinstance(benchmark.outputs, dict):
-            for k, v in benchmark.outputs.items():
+        if isinstance(out, torch.Tensor):
+            outputs["output"] = out.detach().clone()
+        elif isinstance(out, dict):
+            for k, v in out.items():
                 if isinstance(v, torch.Tensor):
                     outputs[k] = v.detach().clone()
-        elif hasattr(benchmark, "get_output") and callable(benchmark.get_output):
-            try:
-                out = benchmark.get_output()
-                if isinstance(out, torch.Tensor):
-                    outputs["output"] = out.detach().clone()
-                elif isinstance(out, dict):
-                    for k, v in out.items():
-                        if isinstance(v, torch.Tensor):
-                            outputs[k] = v.detach().clone()
-            except Exception:
-                pass
-        elif hasattr(benchmark, "result") and isinstance(benchmark.result, torch.Tensor):
-            outputs["result"] = benchmark.result.detach().clone()
+            if not outputs:
+                raise ValueError(
+                    f"{benchmark.__class__.__name__}.get_verify_output() returned dict "
+                    "with no tensor values."
+                )
+        else:
+            raise TypeError(
+                f"{benchmark.__class__.__name__}.get_verify_output() must return "
+                f"torch.Tensor or Dict[str, torch.Tensor], got {type(out)}"
+            )
         
         return outputs
     
     def _extract_signature(self, benchmark: Any) -> Optional[InputSignature]:
         """Extract input signature from a benchmark.
+        
+        Supports two modes:
+        1. Full InputSignature with shapes/dtypes (rigorous verification)
+        2. Simple parameter-based dict (workload parameter matching)
+        
+        For simple dicts, we create a minimal InputSignature that can be
+        hashed for caching but is validated in non-strict mode.
         
         Args:
             benchmark: The benchmark instance
@@ -301,9 +334,24 @@ class VerifyRunner:
                             shapes["input"] = tuple(val)
                             break
             
+            # For simple parameter-based signatures, create a synthetic shape
+            # from the parameters to enable hashing and comparison
+            if not shapes:
+                # Store all numeric parameters as a synthetic shape for hashing
+                param_values = []
+                for key, val in sorted(sig_dict.items()):
+                    if key in ("batch_size", "parameter_count", "fp16", "bf16", "fp8", "tf32"):
+                        continue  # Skip known fields
+                    if isinstance(val, (int, float)):
+                        param_values.append(int(val))
+                    elif isinstance(val, (list, tuple)) and all(isinstance(x, (int, float)) for x in val):
+                        param_values.extend(int(x) for x in val)
+                if param_values:
+                    shapes["_params"] = tuple(param_values)
+            
             # Infer batch_size
-            batch_size = sig_dict.get("batch_size", 1)
-            if not batch_size and shapes:
+            batch_size = sig_dict.get("batch_size", 0)
+            if not batch_size and shapes and "_params" not in shapes:
                 # Try to get from first dimension of any shape
                 first_shape = next(iter(shapes.values()), ())
                 if first_shape:
@@ -382,6 +430,11 @@ class VerifyRunner:
             exp_tensor = expected[name]
             act_tensor = actual[name]
             
+            # Ensure tensors are on the same device for comparison
+            if exp_tensor.device != act_tensor.device:
+                # Move to actual tensor's device (typically GPU during verification)
+                exp_tensor = exp_tensor.to(act_tensor.device)
+            
             # Check shapes match
             if exp_tensor.shape != act_tensor.shape:
                 return ComparisonDetails(
@@ -416,7 +469,7 @@ class VerifyRunner:
                     max_diff_overall = max_diff
                     max_idx = diff.argmax()
                     flat_idx = max_idx.item()
-                    worst_location = tuple(np.unravel_index(flat_idx, diff.shape))
+                    worst_location = tuple(int(x) for x in np.unravel_index(flat_idx, diff.shape))
                     worst_expected = float(exp_tensor.flatten()[flat_idx])
                     worst_actual = float(act_tensor.flatten()[flat_idx])
                 
@@ -436,7 +489,7 @@ class VerifyRunner:
                     diff = (exp_tensor != act_tensor)
                     max_idx = diff.int().argmax()
                     flat_idx = max_idx.item()
-                    worst_location = tuple(np.unravel_index(flat_idx, diff.shape))
+                    worst_location = tuple(int(x) for x in np.unravel_index(flat_idx, diff.shape))
                     return ComparisonDetails(
                         passed=False,
                         max_diff=float('inf'),
@@ -466,11 +519,19 @@ class VerifyRunner:
         Returns:
             Tuple of (outputs, workload_metrics, seed_info)
         """
-        # Set deterministic seeds
-        seed_info = set_deterministic_seeds(seed)
+        # Set deterministic seeds BEFORE setup
+        # Note: Seeds are re-set AFTER setup to ensure verification seeds
+        # take precedence over any seeds benchmarks may set during setup()
+        # for standalone reproducibility. This is the recommended pattern
+        # per the design doc - benchmarks can set seeds in setup() for
+        # standalone use, and verification re-seeds after.
+        set_deterministic_seeds(seed)
         
-        # Setup and run
+        # Setup (benchmarks may set their own seeds for standalone use)
         benchmark.setup()
+        
+        # Re-set seeds after setup to ensure verification seeds take precedence
+        seed_info = set_deterministic_seeds(seed)
         
         try:
             # Run benchmark function
@@ -625,7 +686,7 @@ class VerifyRunner:
         if signature is None:
             return VerifyResult.fail("Baseline has no valid input signature")
         
-        errors = signature.validate()
+        errors = signature.validate(strict=False)  # Allow simple parameter-based signatures
         if errors:
             return VerifyResult.fail(f"Invalid signature: {errors[0]}")
         
@@ -718,11 +779,16 @@ class VerifyRunner:
             if not outputs:
                 return VerifyResult.fail("Optimized produced no extractable outputs")
             
+            # Get tolerance - config override takes precedence, then benchmark, then dtype default
+            tolerance = config.tolerance_override
+            if tolerance is None:
+                tolerance = get_output_tolerance(optimized)
+            
             # Compare outputs
             comparison = self._compare_outputs(
                 golden.outputs,
                 outputs,
-                config.tolerance_override,
+                tolerance,
             )
             
             if not comparison.passed:

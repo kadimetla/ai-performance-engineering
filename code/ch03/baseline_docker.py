@@ -1,4 +1,8 @@
-"""Docker baseline: host batches copied synchronously each iteration."""
+"""Docker baseline: host batches copied synchronously each iteration.
+
+This benchmark demonstrates inefficient data loading - using non-pinned memory
+and blocking H2D copies. The optimized version uses pinned memory and prefetching.
+"""
 
 from __future__ import annotations
 
@@ -36,6 +40,14 @@ class BaselineDockerBenchmark(BaseBenchmark):
         self.host_batches: List[torch.Tensor] = []
         self.targets: List[torch.Tensor] = []
         self.batch_idx = 0
+        self.output: Optional[torch.Tensor] = None
+        # Training benchmarks don't support jitter check - outputs change due to weight updates
+        self.jitter_exemption_reason = "Training benchmark: outputs change each iteration due to gradient updates"
+        # Register workload metadata in __init__ for compliance checks
+        self.register_workload_metadata(
+            requests_per_iteration=1.0,
+            bytes_per_iteration=float(self.batch_size * self.input_dim * 4),  # float32
+        )
 
     def setup(self) -> None:
         torch.manual_seed(101)
@@ -73,12 +85,16 @@ class BaselineDockerBenchmark(BaseBenchmark):
             self.optimizer.step()
             self.optimizer.zero_grad(set_to_none=True)
             torch.cuda.synchronize()
+        
+        # Store output for verification
+        self.output = out.detach()
 
     def teardown(self) -> None:
         self.model = None
         self.optimizer = None
         self.host_batches = []
         self.targets = []
+        self.output = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -98,6 +114,19 @@ class BaselineDockerBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is not None:
+            return self.output.detach().clone()
+        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+    
+    def get_output_tolerance(self) -> tuple:
+        """Return custom tolerance for training output comparison.
+        
+        Training with SGD has some non-determinism due to CUDA operations.
+        """
+        return (1e-3, 1e-3)
 
 
 def get_benchmark() -> BaseBenchmark:

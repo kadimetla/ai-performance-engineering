@@ -1,10 +1,15 @@
-"""Kubernetes baseline: per-iteration CPU orchestration with new tensors."""
+"""Kubernetes baseline: per-iteration CPU orchestration with blocking data loading.
+
+This benchmark demonstrates inefficient data provisioning - allocating new
+tensors and blocking on H2D copies each iteration. The optimized version
+pre-allocates and prefetches data.
+"""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -18,25 +23,25 @@ from core.harness.benchmark_harness import (
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
-    WorkloadMetadata,
 )
 
 
 class BaselineKubernetesBenchmark(BaseBenchmark):
-    """Allocates new tensors + launches multiple kernels every iteration."""
+    """Loads batches from CPU each iteration with blocking copies."""
 
     def __init__(self):
         super().__init__()
-        self.skip_output_check = True
-        self.skip_input_check = True
-        self.model = nn.Sequential(
-            nn.Linear(1024, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024),
-        ).to(self.device)
+        self.model: Optional[nn.Module] = None
+        self.host_batches: List[torch.Tensor] = []
+        self.target_batches: List[torch.Tensor] = []
+        self.batch_idx = 0
+        self.output: Optional[torch.Tensor] = None
+        # Training benchmarks don't support jitter check - outputs change due to weight updates
+        self.jitter_exemption_reason = "Training benchmark: outputs change each iteration due to gradient updates"
         # Two float32 batches per step: inputs + targets (512x1024 elements each)
         elements = 2 * 512 * 1024
-        self._workload = WorkloadMetadata(
+        # Register workload metadata in __init__ for compliance checks
+        self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(elements),
             bytes_per_iteration=float(elements * 4),
@@ -44,27 +49,51 @@ class BaselineKubernetesBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         torch.manual_seed(314)
+        self.model = nn.Sequential(
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+        ).to(self.device)
+        
+        # Pre-allocate host batches for deterministic verification
+        num_batches = 4
+        for _ in range(num_batches):
+            self.host_batches.append(torch.randn(512, 1024, dtype=torch.float32))
+            self.target_batches.append(torch.randn(512, 1024, dtype=torch.float32))
+        self.batch_idx = 0
         self._synchronize()
-        self.register_workload_metadata(
-            requests_per_iteration=self._workload.requests_per_iteration,
-            tokens_per_iteration=self._workload.tokens_per_iteration,
-            bytes_per_iteration=self._workload.bytes_per_iteration,
-        )
 
     def benchmark_fn(self) -> None:
+        """Training step with blocking data transfer."""
+        assert self.model is not None
+        
+        # Get next batch (round-robin)
+        idx = self.batch_idx % len(self.host_batches)
+        self.batch_idx += 1
+        
         with self._nvtx_range("baseline_kubernetes"):
-            host_data = torch.randn(512, 1024, dtype=torch.float32)
-            host_target = torch.randn(512, 1024, dtype=torch.float32)
-            data = host_data.to(self.device, non_blocking=False)
-            target = host_target.to(self.device, non_blocking=False)
+            # Blocking H2D copy (the slow part)
+            data = self.host_batches[idx].to(self.device, non_blocking=False)
+            target = self.target_batches[idx].to(self.device, non_blocking=False)
             self._synchronize()
+            
+            # Forward
             out = self.model(data)
-            torch.nn.functional.mse_loss(out, target).backward()
+            loss = torch.nn.functional.mse_loss(out, target)
+            loss.backward()
+            
+            # Clear gradients (simulate optimizer step)
             for p in self.model.parameters():
                 p.grad = None
+        
+        self.output = out.detach()
         self._synchronize()
 
     def teardown(self) -> None:
+        self.model = None
+        self.host_batches = []
+        self.target_batches = []
+        self.output = None
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
@@ -79,7 +108,28 @@ class BaselineKubernetesBenchmark(BaseBenchmark):
         )
 
     def validate_result(self) -> Optional[str]:
+        if self.model is None:
+            return "Model not initialized"
         return None
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch_size": 512,
+            "input_dim": 1024,
+            "hidden_dim": 1024,
+            "output_dim": 1024,
+        }
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is not None:
+            return self.output.detach().clone()
+        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+    
+    def get_output_tolerance(self) -> tuple:
+        """Return custom tolerance for training output comparison."""
+        return (1e-3, 1e-3)
 
 
 def get_benchmark() -> BaseBenchmark:

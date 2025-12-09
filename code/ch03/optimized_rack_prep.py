@@ -66,8 +66,10 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
         self.affinity_snippet: List[str] = []
         self.apply_actions: List[str] = []
         self.verify_report: Optional[dict] = None
-        bytes_per_iter = self.seq_len * self.hidden_size * 2  # float16 bytes
-        self._workload = WorkloadMetadata(
+        self.output: Optional[torch.Tensor] = None
+        bytes_per_iter = self.seq_len * self.hidden_size * 4  # float32 bytes (matches baseline)
+        # Register workload metadata in __init__ for compliance checks
+        self.register_workload_metadata(
             requests_per_iteration=1.0,
             bytes_per_iteration=float(bytes_per_iter),
         )
@@ -100,24 +102,22 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
                 self.apply_actions.extend(_apply_affinity(primary_nic, target_cpus))
                 self.verify_report = _verify_affinity(primary_nic, target_cpus)
 
+        # Use pinned memory for efficient async H2D (the optimization)
+        # Same dtype as baseline (float32) for fair verification comparison
         self.host_buffers = [
-            torch.randn(self.seq_len, self.hidden_size, dtype=torch.float16, pin_memory=True),
-            torch.randn(self.seq_len, self.hidden_size, dtype=torch.float16, pin_memory=True),
+            torch.randn(self.seq_len, self.hidden_size, dtype=torch.float32, pin_memory=True),
+            torch.randn(self.seq_len, self.hidden_size, dtype=torch.float32, pin_memory=True),
         ]
         self.device_buffers = [
             torch.empty_like(self.host_buffers[0], device=self.device),
             torch.empty_like(self.host_buffers[0], device=self.device),
         ]
-        self.norm = nn.LayerNorm(self.hidden_size, device=self.device, dtype=torch.float16)
+        self.norm = nn.LayerNorm(self.hidden_size, device=self.device, dtype=torch.float32)
         self.cur_slot = 0
         self.next_slot = 1
         self._start_copy(self.cur_slot)
         torch.cuda.current_stream().wait_stream(self.copy_stream)
         self._start_copy(self.next_slot)
-        self.register_workload_metadata(
-            requests_per_iteration=self._workload.requests_per_iteration,
-            bytes_per_iteration=self._workload.bytes_per_iteration,
-        )
 
     def _start_copy(self, slot: int) -> None:
         with torch.cuda.stream(self.copy_stream):
@@ -128,7 +128,7 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(self.get_config())
         torch.cuda.current_stream().wait_stream(self.copy_stream)
         with nvtx_range("optimized_rack_prep", enable=enable_nvtx):
-            _ = self.norm(self.device_buffers[self.cur_slot])
+            self.output = self.norm(self.device_buffers[self.cur_slot])
         self._start_copy(self.cur_slot)
         self.cur_slot, self.next_slot = self.next_slot, self.cur_slot
         self._synchronize()
@@ -168,6 +168,17 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
         self.apply_affinity = bool(opts.apply)
         self.reserve_cores = max(0, int(opts.reserve))
         self.preferred_nics = [n for n in (opts.nic or []) if n]
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is not None:
+            return self.output.detach().clone()
+        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+    
+    def get_output_tolerance(self) -> tuple:
+        """Return custom tolerance for LayerNorm output comparison."""
+        return (1e-4, 1e-4)
+
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -1,4 +1,9 @@
-"""Docker optimization: pinned-memory prefetch + compute/copy overlap."""
+"""Docker optimization: pinned-memory prefetch + compute/copy overlap.
+
+This benchmark demonstrates efficient data loading - using pinned memory
+and prefetching with double-buffering. Uses the same model architecture
+as baseline for fair verification comparison.
+"""
 
 from __future__ import annotations
 
@@ -56,7 +61,7 @@ class Prefetcher:
 
 
 class OptimizedDockerBenchmark(BaseBenchmark):
-    """Pinned memory prefetch with half-precision training."""
+    """Pinned memory prefetch with same model as baseline for fair comparison."""
 
     def __init__(self):
         super().__init__()
@@ -65,6 +70,9 @@ class OptimizedDockerBenchmark(BaseBenchmark):
         self.host_batches: List[torch.Tensor] = []
         self.targets: List[torch.Tensor] = []
         self.prefetcher: Optional[Prefetcher] = None
+        self.output: Optional[torch.Tensor] = None
+        # Training benchmarks don't support jitter check - outputs change due to weight updates
+        self.jitter_exemption_reason = "Training benchmark: outputs change each iteration due to gradient updates"
         # Larger transfers to make H2D optimization measurable on high-bandwidth GPUs
         # The prefetcher benefit is proportional to (H2D time / compute time)
         from core.benchmark.smoke import is_smoke_mode
@@ -74,20 +82,27 @@ class OptimizedDockerBenchmark(BaseBenchmark):
         self.output_dim = 1024 if low_mem else 2048
         self.batch_size = 512 if low_mem else 1024  # Large batch = significant H2D
         self.num_batches = 4 if low_mem else 8
+        # Register workload metadata in __init__ for compliance checks
+        self.register_workload_metadata(
+            requests_per_iteration=1.0,
+            bytes_per_iteration=float(self.batch_size * self.input_dim * 4),  # float32
+        )
 
     def setup(self) -> None:
         torch.manual_seed(101)
         log_allocator_guidance("ch03/optimized_docker", optimized=True)
+        # Use same model architecture as baseline for fair comparison
         self.model = nn.Sequential(
             nn.Linear(self.input_dim, self.hidden_dim),
-            nn.GELU(),
+            nn.ReLU(),  # Same activation as baseline
             nn.Linear(self.hidden_dim, self.output_dim),
-        ).to(self.device).half()
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-2, momentum=0.9)
+        ).to(self.device)
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-2)
 
+        # Use pinned memory for efficient async H2D transfer (the optimization)
         for _ in range(self.num_batches):
-            self.host_batches.append(torch.randn(self.batch_size, self.input_dim, dtype=torch.float16, pin_memory=True))
-            self.targets.append(torch.randn(self.batch_size, self.output_dim, dtype=torch.float16, pin_memory=True))
+            self.host_batches.append(torch.randn(self.batch_size, self.input_dim, dtype=torch.float32, pin_memory=True))
+            self.targets.append(torch.randn(self.batch_size, self.output_dim, dtype=torch.float32, pin_memory=True))
         self.prefetcher = Prefetcher(self.device, self.host_batches, self.targets)
         torch.cuda.synchronize()
 
@@ -110,6 +125,9 @@ class OptimizedDockerBenchmark(BaseBenchmark):
             loss.backward()
             self.optimizer.step()
             torch.cuda.synchronize()
+        
+        # Store output for verification
+        self.output = out.detach()
 
     def teardown(self) -> None:
         self.model = None
@@ -117,6 +135,7 @@ class OptimizedDockerBenchmark(BaseBenchmark):
         self.host_batches = []
         self.targets = []
         self.prefetcher = None
+        self.output = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -134,6 +153,19 @@ class OptimizedDockerBenchmark(BaseBenchmark):
         if self.prefetcher is None:
             return "Prefetcher not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is not None:
+            return self.output.detach().clone()
+        return torch.tensor([0.0], dtype=torch.float32, device=self.device)
+    
+    def get_output_tolerance(self) -> tuple:
+        """Return custom tolerance for training output comparison.
+        
+        Training with SGD has some non-determinism due to CUDA operations.
+        """
+        return (1e-3, 1e-3)
 
 
 def get_benchmark() -> BaseBenchmark:
