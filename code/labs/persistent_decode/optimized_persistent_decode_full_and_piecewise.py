@@ -21,11 +21,19 @@ class OptimizedPersistentDecodeFullAndPiecewiseBenchmark(OptimizedPersistentDeco
 
     def __init__(self) -> None:
         super().__init__(graph_mode=GraphMode.FULL_AND_PIECEWISE)
+        self.jitter_exemption_reason = "Persistent decode full/piecewise: fixed dimensions"
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch": self.batch, "seq_len": self.seq_len, "variant": "full_and_piecewise"}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

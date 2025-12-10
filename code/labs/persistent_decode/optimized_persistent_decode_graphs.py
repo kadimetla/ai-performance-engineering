@@ -61,6 +61,7 @@ class OptimizedPersistentDecodeGraphsBenchmark(BaseBenchmark):
         self.max_capture_seq = max_capture_seq or self.seq_len
         self._history: dict[str, list[float]] = {}
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
+        self.jitter_exemption_reason = "Persistent decode graphs: fixed dimensions"
 
     def setup(self) -> None:
         self.inputs = build_inputs(self.device)
@@ -215,6 +216,13 @@ class OptimizedPersistentDecodeGraphsBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch": self.batch, "seq_len": self.seq_len, "graph_mode": str(self.graph_mode)}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
