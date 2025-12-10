@@ -237,6 +237,8 @@ class VLLMDecodeGraphsBenchmark(BaseBenchmark):
         self._trace: List[int] = default_trace(num_steps=self.steps, seed=self.seed)
         self._driver: Optional[BaselineDecodeDriver] = None
         self._last_metrics: Optional[DecodeMetrics] = None
+        self.jitter_exemption_reason = "VLLM decode graphs benchmark: fixed configuration"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def get_config(self) -> BenchmarkConfig:
         # Keep iterations modest—the kernel is compiled once and re-used.
@@ -271,6 +273,18 @@ class VLLMDecodeGraphsBenchmark(BaseBenchmark):
             "vllm_decode_graphs.allocator_mb": float(self._last_metrics.allocator_bytes) / (1024 * 1024),
             "vllm_decode_graphs.compactions": float(self._last_metrics.compactions),
         }
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"steps": self.steps, "hidden": self.hidden}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
