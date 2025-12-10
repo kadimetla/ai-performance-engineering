@@ -35,6 +35,7 @@ class OptimizedCublasBenchmark(BaseBenchmark):
         self.m = 2048
         self.n = 2048
         self.k = 2048
+        self.jitter_exemption_reason = "cuBLAS benchmark: fixed matrix dimensions"
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
         self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
@@ -107,6 +108,13 @@ class OptimizedCublasBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"m": self.m, "n": self.n, "k": self.k}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

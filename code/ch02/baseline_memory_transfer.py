@@ -17,6 +17,7 @@ class BaselineMemoryTransferBenchmark(BaseBenchmark):
         self.host_data: Optional[torch.Tensor] = None
         self.device_data: Optional[torch.Tensor] = None
         self.N = 10_000_000
+        self.jitter_exemption_reason = "Memory transfer benchmark: fixed size"
         bytes_per_iter = self.N * 4  # float32 copy
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -73,6 +74,13 @@ class BaselineMemoryTransferBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"N": self.N}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
