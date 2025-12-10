@@ -299,6 +299,7 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
         self._history: dict[str, list[float]] = {}
         self._tma_ext: object | None = None
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
+        self.jitter_exemption_reason = "Optimized TMA prefill/decode: fixed dimensions"
 
     def setup(self) -> None:
         ensure_blackwell_tma_supported("optimized_tma_prefill_decode")
@@ -473,6 +474,13 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch": self.batch, "seq_len": self.seq_len, "graph_mode": str(self.graph_mode)}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

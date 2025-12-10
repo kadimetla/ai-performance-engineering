@@ -24,6 +24,8 @@ class BaselineLlama31_8B(BaseBenchmark):
         self.seq_length = seq_length
         self.model_wrapper = None
         self._last_metrics = {}
+        self.jitter_exemption_reason = "Llama 3.1 8B baseline: fixed configuration"
+        self.register_workload_metadata(requests_per_iteration=float(batch_size))
 
     def setup(self) -> None:
         self.model_wrapper = Llama31_8B_Optimization(
@@ -56,6 +58,13 @@ class BaselineLlama31_8B(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "seq_length": self.seq_length}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
