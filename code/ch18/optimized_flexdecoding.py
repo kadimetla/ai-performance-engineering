@@ -17,7 +17,6 @@ class OptimizedFlexDecodingBenchmark(FlexDecodingHarness):
 
     def __init__(self) -> None:
         super().__init__(use_flex_attention=True, require_flex=False, decode_tokens=128)
-        self.skip_output_check = True
 
     def setup(self) -> None:
         from ch18 import flexdecoding as flexdemo  # local import to read HAS_FLEX

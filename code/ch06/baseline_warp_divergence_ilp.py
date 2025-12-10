@@ -15,8 +15,6 @@ class BaselineWarpDivergenceILPBenchmark(BaseBenchmark):
     
     def __init__(self):
         super().__init__()
-        self.skip_output_check = True
-        self.skip_input_check = True
         self.input: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self.routing_logits: Optional[torch.Tensor] = None
@@ -28,6 +26,8 @@ class BaselineWarpDivergenceILPBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.branch_iterations),
             tokens_per_iteration=float(self.N * self.branch_iterations),
         )
+        # ILP benchmark: fixed dimensions for measurement
+        self.jitter_exemption_reason = "Warp divergence ILP benchmark: fixed dimensions"
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -72,9 +72,6 @@ class BaselineWarpDivergenceILPBenchmark(BaseBenchmark):
         self.output = None
         torch.cuda.empty_cache()
 
-    def skip_output_verification(self) -> bool:
-        return True
-    
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
@@ -99,11 +96,22 @@ class BaselineWarpDivergenceILPBenchmark(BaseBenchmark):
             return "Output tensor not initialized"
         return None
 
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {"N": self.N, "branch_iterations": self.branch_iterations}
+
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
         if self.output is None:
             raise RuntimeError("Output not available - run benchmark first")
         return self.output
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison.
+        
+        Divergent vs branchless implementations may have slight numerical differences.
+        """
+        return (1e-4, 1e-4)
 
 
 

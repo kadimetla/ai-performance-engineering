@@ -80,10 +80,22 @@ def analyze_benchmark_file(file_path: Path) -> BenchmarkInfo:
         info.errors.append(f"Parse error: {e}")
         return info
     
-    # Base classes that provide get_verify_output()
+    # Base classes that provide get_verify_output() by default
     bases_with_verify_output = {
         "CudaBinaryBenchmark", "OccupancyBinaryBenchmark",
         "NvshmemIbgdaMicrobench",
+    }
+    
+    # Base classes that provide get_input_signature() by default
+    bases_with_input_signature = {
+        "CudaBinaryBenchmark",  # Has default returning _workload_params
+    }
+    
+    # Base classes that inherit get_workload_metadata() from BaseBenchmark
+    # (via register_workload_metadata)
+    bases_with_workload_metadata = {
+        "BaseBenchmark", "CudaBinaryBenchmark", "OccupancyBinaryBenchmark",
+        "LoopUnrollingBenchmarkBase",
     }
     
     # Base classes that are benchmarks (inherit from BaseBenchmark)
@@ -94,7 +106,7 @@ def analyze_benchmark_file(file_path: Path) -> BenchmarkInfo:
         "TilingBenchmarkBaseTCGen05", "BaselineMatmulTCGen05Benchmark",
         "StridedStreamBaseline", "ConcurrentStreamOptimized", "StreamOrderedBase",
         "TorchrunScriptBenchmark", "MoEJourneyBenchmark", "MoEBenchmarkBase",
-        "NvshmemIbgdaMicrobench", "BenchmarkBase",
+        "NvshmemIbgdaMicrobench", "BenchmarkBase", "FlexDecodingHarness",
     }
     
     # Find benchmark class and analyze its methods
@@ -109,6 +121,8 @@ def analyze_benchmark_file(file_path: Path) -> BenchmarkInfo:
             # Also check if it inherits from a known benchmark base
             inherits_from_benchmark = False
             inherits_from_verify_provider = False
+            inherits_from_signature_provider = False
+            inherits_from_workload_provider = False
             for base in node.bases:
                 base_name = None
                 if isinstance(base, ast.Name):
@@ -120,15 +134,33 @@ def analyze_benchmark_file(file_path: Path) -> BenchmarkInfo:
                         inherits_from_benchmark = True
                     if any(b in base_name for b in bases_with_verify_output):
                         inherits_from_verify_provider = True
+                    if any(b in base_name for b in bases_with_input_signature):
+                        inherits_from_signature_provider = True
+                    if any(b in base_name for b in bases_with_workload_metadata):
+                        inherits_from_workload_provider = True
             
             if not has_benchmark_fn and not inherits_from_benchmark:
                 continue
             
             info.benchmark_class = node.name
             
-            # If inherits from a base that provides get_verify_output(), mark it
+            # Mark inherited methods
             if inherits_from_verify_provider:
                 info.has_get_verify_output = True
+            if inherits_from_signature_provider:
+                info.has_get_input_signature = True
+            
+            # Check for register_workload_metadata() calls
+            has_register_workload = False
+            for item in ast.walk(node):
+                if isinstance(item, ast.Call):
+                    if isinstance(item.func, ast.Attribute):
+                        if item.func.attr == "register_workload_metadata":
+                            has_register_workload = True
+                            break
+            
+            if has_register_workload or inherits_from_workload_provider:
+                info.has_get_workload_metadata = True
             
             for item in node.body:
                 if isinstance(item, ast.FunctionDef):
@@ -145,7 +177,21 @@ def analyze_benchmark_file(file_path: Path) -> BenchmarkInfo:
                     elif item.name == "skip_output_verification":
                         info.skip_output_verification = True
                 
-                # Check for skip flag attributes
+                # Check for skip flag attributes in __init__ assignments
+                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                    for stmt in ast.walk(item):
+                        if isinstance(stmt, ast.Assign):
+                            for target in stmt.targets:
+                                if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                                    if target.value.id == "self":
+                                        if target.attr == "skip_output_check":
+                                            info.has_skip_output_check = True
+                                        elif target.attr == "skip_input_check":
+                                            info.has_skip_input_check = True
+                                        elif target.attr == "skip_verification":
+                                            info.has_skip_verification = True
+                
+                # Check for skip flag attributes (class-level)
                 if isinstance(item, ast.Assign):
                     for target in item.targets:
                         if isinstance(target, ast.Name):
@@ -254,8 +300,8 @@ def generate_report(root_dir: Path, chapter: Optional[str] = None) -> Dict[str, 
     return dict(reports)
 
 
-def print_summary(reports: Dict[str, ChapterReport]) -> None:
-    """Print human-readable summary report."""
+def print_summary(reports: Dict[str, ChapterReport]) -> int:
+    """Print human-readable summary report. Returns number of compliance issues."""
     print("=" * 80)
     print("BENCHMARK VERIFICATION COMPLIANCE AUDIT")
     print("=" * 80)
@@ -309,9 +355,9 @@ def print_summary(reports: Dict[str, ChapterReport]) -> None:
         verify_pct = (verify_coverage / chapter_total * 100) if chapter_total > 0 else 0
         print(f"  get_verify_output():   {verify_coverage}/{chapter_total} ({verify_pct:.0f}%) ** STRICT REQUIRED **")
         
-        # Skip flags
+        # Skip flags (now deprecated)
         if report.benchmarks_with_skip_flags:
-            print(f"  Skip flags: {len(report.benchmarks_with_skip_flags)} files")
+            print(f"  ⚠️  DEPRECATED skip flags: {len(report.benchmarks_with_skip_flags)} files")
             for path in report.benchmarks_with_skip_flags:
                 print(f"    - {path}")
     
@@ -325,26 +371,45 @@ def print_summary(reports: Dict[str, ChapterReport]) -> None:
     print(f"  Baseline:  {total_baseline}")
     print(f"  Optimized: {total_optimized}")
     
-    print(f"\nget_input_signature() coverage: {total_with_signature}/{grand_total} "
-          f"({total_with_signature / grand_total * 100:.1f}%)")
-    print(f"validate_result() coverage: {total_with_validate}/{grand_total} "
-          f"({total_with_validate / grand_total * 100:.1f}%)")
-    print(f"get_workload_metadata() coverage: {total_with_workload}/{grand_total} "
-          f"({total_with_workload / grand_total * 100:.1f}%)")
-    print(f"get_verify_output() coverage: {total_with_verify_output}/{grand_total} "
-          f"({total_with_verify_output / grand_total * 100:.1f}%) ** STRICT REQUIRED **")
+    if grand_total > 0:
+        print(f"\nget_input_signature() coverage: {total_with_signature}/{grand_total} "
+              f"({total_with_signature / grand_total * 100:.1f}%)")
+        print(f"validate_result() coverage: {total_with_validate}/{grand_total} "
+              f"({total_with_validate / grand_total * 100:.1f}%)")
+        print(f"get_workload_metadata() coverage: {total_with_workload}/{grand_total} "
+              f"({total_with_workload / grand_total * 100:.1f}%)")
+        print(f"get_verify_output() coverage: {total_with_verify_output}/{grand_total} "
+              f"({total_with_verify_output / grand_total * 100:.1f}%) ** STRICT REQUIRED **")
     
-    # STRICT: Calculate failing benchmarks
+    # Calculate issues
+    issues = 0
+    
+    # STRICT: Missing get_verify_output()
     missing_verify_output = grand_total - total_with_verify_output
     if missing_verify_output > 0:
+        issues += missing_verify_output
         print(f"\n⚠️  STRICT MODE FAILURES: {missing_verify_output} benchmarks MISSING get_verify_output()")
         print("    These benchmarks will FAIL verification until they implement get_verify_output()!")
     
-    print(f"\nBenchmarks with skip flags: {len(all_skip_flags)}")
+    # Deprecated skip flags
     if all_skip_flags:
-        print("  Files with skip flags need migration to remove or justify:")
+        issues += len(all_skip_flags)
+        print(f"\n⚠️  DEPRECATED: {len(all_skip_flags)} files still use deprecated skip flags")
+        print("  These need migration to jitter_exemption_reason or removal:")
         for path in sorted(set(all_skip_flags)):
             print(f"    - {path}")
+    
+    # Missing get_input_signature() (recommended but not strict)
+    missing_signature = grand_total - total_with_signature
+    if missing_signature > 0:
+        print(f"\n📋 RECOMMENDED: {missing_signature} benchmarks missing get_input_signature()")
+    
+    if issues == 0:
+        print("\n✅ All benchmarks are compliant!")
+    else:
+        print(f"\n❌ Total compliance issues: {issues}")
+    
+    return issues
 
 
 def main() -> int:
@@ -366,6 +431,11 @@ def main() -> int:
         default=".",
         help="Root directory (default: current directory)"
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Return non-zero exit code if any compliance issues found"
+    )
     
     args = parser.parse_args()
     root_dir = Path(args.root).resolve()
@@ -385,13 +455,17 @@ def main() -> int:
                 "optimized_with_validate": report.optimized_with_validate,
                 "baseline_with_workload": report.baseline_with_workload,
                 "optimized_with_workload": report.optimized_with_workload,
+                "baseline_with_verify_output": report.baseline_with_verify_output,
+                "optimized_with_verify_output": report.optimized_with_verify_output,
                 "benchmarks_with_skip_flags": report.benchmarks_with_skip_flags,
             }
         print(json.dumps(output, indent=2))
+        return 0
     else:
-        print_summary(reports)
-    
-    return 0
+        issues = print_summary(reports)
+        if args.strict and issues > 0:
+            return min(issues, 255)  # Cap at 255 for shell compatibility
+        return 0
 
 
 if __name__ == "__main__":

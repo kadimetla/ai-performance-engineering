@@ -33,7 +33,6 @@ class BaselineCpuReductionBenchmark(BaseBenchmark):
     
     def __init__(self):
         super().__init__()
-        self.skip_output_check = True
         # Match optimized workload size
         self.batch_size = 1024
         self.hidden_dim = 4096
@@ -49,9 +48,8 @@ class BaselineCpuReductionBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
-
-    def skip_output_verification(self) -> bool:
-        return True
+        # Reduction benchmark: fixed dimensions
+        self.jitter_exemption_reason = "Reduction benchmark: fixed dimensions for measurement"
     
     def setup(self) -> None:
         """Setup: Initialize model."""
@@ -115,13 +113,32 @@ class BaselineCpuReductionBenchmark(BaseBenchmark):
             return "Model not initialized"
         if self.input is None:
             return "Input not initialized"
+        if self.output is None:
+            return "Output not available"
         return None
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch_size": self.batch_size,
+            "hidden_dim": self.hidden_dim,
+            "inner_dim": self.inner_dim,
+            "num_shards": self.num_shards,
+        }
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
         if self.output is None:
             raise RuntimeError("Output not available - run benchmark first")
         return self.output
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison.
+        
+        CPU and GPU reductions may have slight numerical differences due to
+        order of operations (floating point is not associative).
+        """
+        return (1e-4, 1e-4)
 
 
 

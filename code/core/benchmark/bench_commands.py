@@ -1316,6 +1316,133 @@ if TYPER_AVAILABLE:
         path = generate_report(input_path, str(output), format=format, config=cfg)
         typer.echo(f"✅ Report generated: {path}")
 
+    @app.command("verify-report")
+    def verify_report(
+        data_file: Optional[Path] = Option(None, "--data-file", "-d", help="Path to benchmark_test_results.json"),
+        output: Path = Option(Path("verification_report.html"), "--output", "-o", help="Output file (.html or .json)"),
+        format: str = Option("html", "--format", "-f", help="html or json"),
+        gpu: str = Option("", "--gpu", "-g", help="GPU name for theoretical peak (e.g., H100, B200)"),
+        title: str = Option("Benchmark Verification Report", "--title", help="Report title"),
+        quarantine: Optional[Path] = Option(None, "--quarantine", "-q", help="Path to quarantine.json"),
+    ):
+        """Generate verification report with anti-cheat status and theoretical peaks."""
+        try:
+            from core.analysis.reporting.verification_report import generate_verification_report
+        except ImportError as exc:
+            typer.echo(f"Verification report generation unavailable: {exc}", err=True)
+            raise typer.Exit(code=1)
+        
+        input_path = str(data_file) if data_file else "benchmark_test_results.json"
+        fmt = format.lower()
+        if fmt not in ("html", "json"):
+            typer.echo("Format must be html or json", err=True)
+            raise typer.Exit(code=1)
+        
+        try:
+            path = generate_verification_report(
+                input_path,
+                str(output),
+                format=fmt,
+                gpu_name=gpu,
+                title=title,
+                quarantine_path=quarantine,
+            )
+            typer.echo(f"✅ Verification report generated: {path}")
+        except FileNotFoundError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1)
+
+    @app.command("theoretical-peak")
+    def theoretical_peak(
+        gpu: str = Option(..., "--gpu", "-g", help="GPU name (e.g., H100, B200, A100)"),
+        json_output: bool = Option(False, "--json", help="Output as JSON"),
+    ):
+        """Show theoretical peak performance for a GPU."""
+        try:
+            from core.analysis.reporting.verification_report import get_theoretical_peak, GPU_THEORETICAL_PEAKS
+        except ImportError as exc:
+            typer.echo(f"Theoretical peak lookup unavailable: {exc}", err=True)
+            raise typer.Exit(code=1)
+        
+        if gpu.lower() == "list":
+            typer.echo("Available GPUs:")
+            for key in sorted(GPU_THEORETICAL_PEAKS.keys()):
+                p = GPU_THEORETICAL_PEAKS[key]
+                typer.echo(f"  {key}: {p.gpu_name} ({p.architecture})")
+            return
+        
+        peak = get_theoretical_peak(gpu)
+        if not peak:
+            typer.echo(f"GPU '{gpu}' not found. Use --gpu list to see available GPUs.", err=True)
+            raise typer.Exit(code=1)
+        
+        if json_output:
+            import json as json_module
+            typer.echo(json_module.dumps(peak.to_dict(), indent=2))
+        else:
+            typer.echo(f"\n🎯 Theoretical Peak: {peak.gpu_name}")
+            typer.echo(f"   Architecture: {peak.architecture}")
+            typer.echo(f"   SMs: {peak.sm_count}")
+            typer.echo("")
+            typer.echo("   Compute:")
+            typer.echo(f"     FP32:  {peak.fp32_tflops:,.1f} TFLOPS")
+            typer.echo(f"     FP16:  {peak.fp16_tflops:,.1f} TFLOPS")
+            typer.echo(f"     BF16:  {peak.bf16_tflops:,.1f} TFLOPS")
+            if peak.fp8_tflops > 0:
+                typer.echo(f"     FP8:   {peak.fp8_tflops:,.1f} TFLOPS")
+            typer.echo(f"     INT8:  {peak.int8_tops:,.1f} TOPS")
+            typer.echo("")
+            typer.echo("   Memory:")
+            typer.echo(f"     Bandwidth: {peak.memory_bandwidth_gbps:,.0f} GB/s")
+            typer.echo(f"     Size:      {peak.memory_size_gb:.0f} GB")
+            typer.echo(f"     L2 Cache BW: ~{peak.l2_cache_bandwidth_gbps:,.0f} GB/s")
+            typer.echo("")
+            typer.echo(f"   TDP: {peak.tdp_watts:.0f}W")
+
+    @app.command("quarantine-report")
+    def quarantine_report(
+        format: str = Option("text", "--format", "-f", help="text, markdown, or json"),
+        output: Optional[Path] = Option(None, "--output", "-o", help="Output file"),
+        quarantine_file: Optional[Path] = Option(None, "--quarantine-file", help="Path to quarantine.json"),
+    ):
+        """Generate report of quarantined benchmarks."""
+        try:
+            from core.scripts.ci.generate_quarantine_report import (
+                generate_text_report,
+                generate_markdown_report,
+                generate_json_report,
+            )
+            from core.benchmark.quarantine import QuarantineManager
+        except ImportError as exc:
+            typer.echo(f"Quarantine report generation unavailable: {exc}", err=True)
+            raise typer.Exit(code=1)
+        
+        # Initialize quarantine manager
+        if quarantine_file:
+            cache_dir = quarantine_file.parent
+        else:
+            cache_dir = Path("artifacts/verify_cache")
+        
+        manager = QuarantineManager(cache_dir=cache_dir)
+        
+        # Generate report
+        if format == "text":
+            report = generate_text_report(manager)
+        elif format == "markdown":
+            report = generate_markdown_report(manager)
+        elif format == "json":
+            report = generate_json_report(manager)
+        else:
+            typer.echo("Format must be text, markdown, or json", err=True)
+            raise typer.Exit(code=1)
+        
+        # Output
+        if output:
+            output.write_text(report)
+            typer.echo(f"✅ Report written to {output}")
+        else:
+            typer.echo(report)
+
     @app.command("export")
     def export(
         data_file: Optional[Path] = Option(None, "--data-file", "-d", help="Path to benchmark_test_results.json"),

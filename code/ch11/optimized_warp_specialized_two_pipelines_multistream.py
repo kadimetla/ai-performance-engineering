@@ -31,8 +31,6 @@ class OptimizedDualPipelineBenchmark(BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        self.skip_output_check = True
-        self.skip_input_check = True
         self.num_streams = 4
         # Skip on hardware without DSMEM/cluster support to avoid launch failures.
         ensure_dsmem_supported(description="warp-specialized cluster pipelines")

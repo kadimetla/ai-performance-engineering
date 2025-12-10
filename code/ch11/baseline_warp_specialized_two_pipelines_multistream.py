@@ -31,8 +31,6 @@ class BaselineDualPipelineBenchmark(BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        self.skip_output_check = True
-        self.skip_input_check = True
         self.num_streams = 1
         self.tiles = 128
         self.ext = None  # Loaded lazily in setup()

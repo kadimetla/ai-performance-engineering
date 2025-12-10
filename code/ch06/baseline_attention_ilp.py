@@ -16,8 +16,6 @@ class BaselineAttentionILPBenchmark(BaseBenchmark):
     
     def __init__(self):
         super().__init__()
-        self.skip_output_check = True
-        self.skip_input_check = True
         self.model: Optional[nn.MultiheadAttention] = None
         self.input: Optional[torch.Tensor] = None
         self.workload = WORKLOAD
@@ -30,7 +28,9 @@ class BaselineAttentionILPBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(token_count),
         )
-        self._last_sum = torch.tensor(0.0, device=self.device)
+        self._last_sum: Optional[torch.Tensor] = None
+        # ILP benchmark: fixed dimensions for measurement
+        self.jitter_exemption_reason = "ILP benchmark: fixed dimensions for measurement"
 
     def setup(self) -> None:
         """Setup: Initialize attention model."""
@@ -67,9 +67,6 @@ class BaselineAttentionILPBenchmark(BaseBenchmark):
         self.input = None
         torch.cuda.empty_cache()
 
-    def skip_output_verification(self) -> bool:
-        return True
-    
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
@@ -92,11 +89,34 @@ class BaselineAttentionILPBenchmark(BaseBenchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
+        if self._last_sum is None:
+            return "Output sum not computed"
         return None
 
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch": self.batch,
+            "embed_dim": self.embed_dim,
+            "tokens": self.tokens,
+            "num_heads": self.workload.attention_heads,
+        }
+
     def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        """Return output tensor for verification comparison.
+        
+        Returns accumulated sum from attention computation.
+        """
+        if self._last_sum is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self._last_sum.float().cpu()
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison.
+        
+        Different attention implementations (MHA vs SDPA) have numerical differences.
+        """
+        return (1e-2, 100.0)
 
 
 

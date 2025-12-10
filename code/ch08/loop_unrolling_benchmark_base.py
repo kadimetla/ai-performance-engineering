@@ -41,6 +41,8 @@ class LoopUnrollingBenchmarkBase(BaseBenchmark):
         self.inputs: Optional[torch.Tensor] = None
         self.weights: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
+        # Loop unrolling benchmark: fixed dimensions for measurement
+        self.jitter_exemption_reason = "Loop unrolling benchmark: fixed dimensions"
 
     def setup(self) -> None:
         self.extension = load_cuda_extension(
@@ -120,6 +122,24 @@ class LoopUnrollingBenchmarkBase(BaseBenchmark):
         if self.output is None:
             return "Output buffer not initialized"
         return None
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "rows": self.rows,
+            "elements_per_row": self.elements_per_row,
+            "weight_period": self.weight_period,
+        }
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (5e-3, 5e-3)
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return loop unrolling optimization metrics."""

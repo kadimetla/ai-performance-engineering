@@ -260,6 +260,13 @@ aisp_ask(question='Why is my attention kernel slow?')
 | `aisp_benchmark_export` | Export benchmarks to file |
 | `aisp_benchmark_compare_runs` | Compare benchmark runs |
 | `aisp_benchmark_triage` | Analyze results and get recommendations |
+
+### Verification
+| Tool | Description |
+|------|-------------|
+| `verify-report` | Generate detailed verification report (HTML/JSON/Markdown) |
+| `theoretical-peak` | Show theoretical peak performance (B200/H200/H100/A100/L40S) |
+| `quarantine-report` | Generate quarantine status report for non-compliant benchmarks |
 | `aisp_hw_speed` | Run quick GPU speed tests |
 | `aisp_hw_disk` | Disk I/O benchmark |
 | `aisp_hw_pcie` | PCIe H2D/D2H bandwidth test |
@@ -454,6 +461,28 @@ python -m cli.aisp bench scaling
 
 # Full analysis with Pareto frontier
 python -m cli.aisp bench analyze
+```
+
+### Verification Commands
+
+| Command | Description |
+|---------|-------------|
+| `verify-report` | Generate detailed verification report (HTML/JSON/Markdown) |
+| `theoretical-peak` | Show theoretical peak performance for a GPU |
+| `quarantine-report` | Generate quarantine status report |
+
+```bash
+# Generate HTML verification report for H100
+python -m cli.aisp bench verify-report --gpu H100 --format html --output verification.html
+
+# Show theoretical peak performance for different GPUs
+python -m cli.aisp bench theoretical-peak --gpu H100
+python -m cli.aisp bench theoretical-peak --gpu B200
+python -m cli.aisp bench theoretical-peak --gpu A100
+
+# Generate quarantine report showing non-compliant benchmarks
+python -m cli.aisp bench quarantine-report --format markdown
+python -m cli.aisp bench quarantine-report --format json --output quarantine.json
 ```
 
 ### API Endpoints
@@ -757,4 +786,10 @@ All 94 validity protections are implemented in the following modules:
 | `core/benchmark/quarantine.py` | `QuarantineManager` with persistence |
 | `core/benchmark/contract.py` | `BenchmarkContract` enforcement |
 
-**Run `aisp bench verify` to execute verification on any benchmark pair.**
+**Verification Commands:**
+```bash
+aisp bench verify                              # Execute verification on any benchmark pair
+aisp bench verify-report --gpu H100            # Generate detailed verification report
+aisp bench theoretical-peak --gpu H100         # Show theoretical peak performance
+aisp bench quarantine-report --format markdown # View quarantined benchmarks
+```

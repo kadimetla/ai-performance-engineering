@@ -23,8 +23,6 @@ class OptimizedQuantizationILPBenchmark(BaseBenchmark):
     
     def __init__(self):
         super().__init__()
-        self.skip_output_check = True
-        self.skip_input_check = True
         self.input: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self.workload = WORKLOAD
@@ -33,6 +31,8 @@ class OptimizedQuantizationILPBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.N),
         )
+        # ILP benchmark: fixed dimensions for measurement
+        self.jitter_exemption_reason = "Quantization ILP benchmark: fixed dimensions"
     
     def setup(self) -> None:
         """Setup: Initialize FP16 tensors with contiguous memory layout."""
@@ -56,9 +56,6 @@ class OptimizedQuantizationILPBenchmark(BaseBenchmark):
         self.output = None
         torch.cuda.empty_cache()
 
-    def skip_output_verification(self) -> bool:
-        return True
-    
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
@@ -83,11 +80,22 @@ class OptimizedQuantizationILPBenchmark(BaseBenchmark):
             return "Output tensor not initialized"
         return None
 
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {"N": self.N}
+
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
         if self.output is None:
             raise RuntimeError("Output not available - run benchmark first")
-        return self.output
+        return self.output.float()  # Convert to float32 for comparison with baseline
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison.
+        
+        FP16 vs FP32 have precision differences.
+        """
+        return (1e-3, 1e-3)
 
 
 

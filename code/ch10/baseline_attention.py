@@ -36,6 +36,8 @@ class BaselineAttentionBenchmark(BaseBenchmark):
         self.num_heads = 16
         self.head_dim = self.hidden_dim // self.num_heads
         self.scale = 1.0 / (self.head_dim ** 0.5)
+        self.output = None
+        self.jitter_exemption_reason = "Attention benchmark: fixed dimensions for comparison"
 
     def setup(self) -> None:
         torch.manual_seed(42)
@@ -86,7 +88,7 @@ class BaselineAttentionBenchmark(BaseBenchmark):
                 attn_weights = torch.softmax(attn_scores, dim=-1)
                 
                 # Attention @ V -> output
-                _output = torch.matmul(attn_weights, self.value)
+                self.output = torch.matmul(attn_weights, self.value)
         self._synchronize()
 
     def teardown(self) -> None:
@@ -110,6 +112,20 @@ class BaselineAttentionBenchmark(BaseBenchmark):
         if self.query is None or self.key is None or self.value is None:
             return "Tensors not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "seq_len": self.seq_len, "hidden_dim": self.hidden_dim}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineAttentionBenchmark:

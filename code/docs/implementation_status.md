@@ -14,11 +14,11 @@ This document tracks the implementation status of all verification features acro
 |----------|-------------|-----------|----------|
 | Part A (Interface) | 10/11 | 1 | 91% |
 | Part B (Anti-Cheat) | 32/32 | 0 | 100% |
-| Part C (Integration) | 11/12 | 1 | 92% |
-| Triton Best Practices | 14/14 | 0 | 100% |
-| **Total** | **67/69** | **2** | **97%** |
+| Part C (Integration) | 15/15 | 0 | 100% |
+| Triton Best Practices | 17/17 | 0 | 100% |
+| **Total** | **74/75** | **1** | **99%** |
 
-*Updated: December 2025 - Added CUDA-L1 protections, all anti-cheat measures complete*
+*Updated: December 2025 - Added HTML/JSON verification reports, theoretical peak calculations, CLI commands*
 
 ### CUDA-L1 Reward Hacking Cases
 
@@ -158,11 +158,19 @@ All anti-cheat protections have been implemented. The remaining items (batch mig
 | **aisp bench verify subcommand** | `core/benchmark/bench_commands.py` | **IMPLEMENTED** - `@app.command("verify")` |
 | VerifyManifestEntry | `core/benchmark/run_manifest.py` | Already existed in schema |
 
-### 🔲 Remaining
+### ✅ Just Implemented
 
-| Item | Priority | Effort | Description |
-|------|----------|--------|-------------|
-| HTML/JSON report generation | Low | Medium | Detailed verification report |
+| Item | File | Status |
+|------|------|--------|
+| **HTML/JSON verification reports** | `core/analysis/reporting/verification_report.py` | `generate_verification_report()` |
+| **Theoretical peak calculations** | `core/analysis/reporting/verification_report.py` | `GPU_THEORETICAL_PEAKS` (B200/H200/H100/A100/L40S) |
+| **verify-report CLI command** | `core/benchmark/bench_commands.py` | `aisp bench verify-report --gpu H100` |
+| **theoretical-peak CLI command** | `core/benchmark/bench_commands.py` | `aisp bench theoretical-peak --gpu H100` |
+| **quarantine-report CLI command** | `core/benchmark/bench_commands.py` | `aisp bench quarantine-report --format markdown` |
+
+### ✅ All CLI/Harness Integration Complete
+
+All harness and CLI integration items have been implemented.
 
 ---
 
@@ -194,6 +202,8 @@ All anti-cheat protections have been implemented. The remaining items (batch mig
 | **Adaptive iterations** | `benchmark_harness.py` | **IMPLEMENTED** - `adaptive_iterations=True`, `min_total_duration_ms` |
 | **CUDA graph benchmarking** | `benchmark_harness.py` | **IMPLEMENTED** - `enable_cuda_graph=True`, `cuda_graph_warmup_iters` |
 | **Stream usage auditing** | `validity_checks.py` | **IMPLEMENTED** - `StreamAuditor` class, `audit_streams()` context manager |
+| **Theoretical peak calculation** | `verification_report.py` | **IMPLEMENTED** - `GPU_THEORETICAL_PEAKS` for B200/H200/H100/A100/L40S |
+| **HTML/JSON reports** | `verification_report.py` | **IMPLEMENTED** - `VerificationReportGenerator.generate()` |
 
 ---
 
@@ -246,6 +256,7 @@ All anti-cheat protections have been implemented. The remaining items (batch mig
 | Benchmark Harness | `core/harness/benchmark_harness.py` |
 | **Validity Checks** | `core/harness/validity_checks.py` |
 | **L2 Cache Utils** | `core/harness/l2_cache_utils.py` |
+| **Verification Reports** | `core/analysis/reporting/verification_report.py` |
 | CLI Commands | `core/benchmark/bench_commands.py` |
 | Audit Script | `core/scripts/audit_verification_compliance.py` |
 | Migration Script | `core/scripts/migrate_verification_methods.py` |

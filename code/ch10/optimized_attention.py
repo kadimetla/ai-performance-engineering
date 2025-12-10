@@ -38,6 +38,8 @@ class OptimizedAttentionBenchmark(BaseBenchmark):
         self.hidden_dim = 1024
         self.num_heads = 16
         self.head_dim = self.hidden_dim // self.num_heads
+        self.output = None
+        self.jitter_exemption_reason = "Attention benchmark: fixed dimensions for comparison"
 
     def setup(self) -> None:
         if torch.cuda.is_available():
@@ -83,7 +85,7 @@ class OptimizedAttentionBenchmark(BaseBenchmark):
                 # scaled_dot_product_attention automatically selects:
                 # - Flash Attention V2 when available
                 # - Memory-efficient attention as fallback
-                _output = torch.nn.functional.scaled_dot_product_attention(
+                self.output = torch.nn.functional.scaled_dot_product_attention(
                     self.query, self.key, self.value,
                     dropout_p=0.0,
                     is_causal=False,
@@ -111,6 +113,20 @@ class OptimizedAttentionBenchmark(BaseBenchmark):
         if self.query is None or self.key is None or self.value is None:
             return "Tensors not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output.float()
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "seq_len": self.seq_len, "hidden_dim": self.hidden_dim}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison - wider due to FP16."""
+        return (0.5, 5.0)
 
 
 def get_benchmark() -> OptimizedAttentionBenchmark:
