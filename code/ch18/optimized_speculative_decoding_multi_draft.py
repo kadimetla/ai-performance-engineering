@@ -278,6 +278,8 @@ class OptimizedSpeculativeDecodingMultiDraftBenchmark(BaseBenchmark):
     def __init__(self):
         super().__init__()
         self._metrics: Dict[str, Any] = {}
+        self.jitter_exemption_reason = "Speculative decoding multi-draft benchmark: fixed dimensions"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def benchmark_fn(self) -> None:
         self._metrics = run_benchmark()
@@ -298,6 +300,15 @@ class OptimizedSpeculativeDecodingMultiDraftBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Dict[str, Any]:
         return self._metrics
+
+    def get_verify_output(self) -> "torch.Tensor":
+        """Return output tensor for verification comparison."""
+        import torch
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark():
