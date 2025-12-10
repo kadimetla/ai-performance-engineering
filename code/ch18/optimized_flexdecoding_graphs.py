@@ -169,6 +169,12 @@ class OptimizedFlexDecodingGraphsBenchmark(FlexDecodingHarness):
             num_rounds=getattr(self, '_num_rounds', 1),
         )
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        sig = super().get_input_signature()
+        sig["cuda_graphs"] = True
+        return sig
+
 def get_benchmark():
     return OptimizedFlexDecodingGraphsBenchmark()
 

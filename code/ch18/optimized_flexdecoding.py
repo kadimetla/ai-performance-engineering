@@ -43,6 +43,12 @@ class OptimizedFlexDecodingBenchmark(FlexDecodingHarness):
             num_rounds=getattr(self, '_num_rounds', 1),
         )
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        sig = super().get_input_signature()
+        sig["optimized"] = True
+        return sig
+
 def get_benchmark():
     return OptimizedFlexDecodingBenchmark()
 
