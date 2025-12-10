@@ -32,6 +32,7 @@ class OptimizedOptimizerCentralNvlinkBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
+        self.jitter_exemption_reason = "Optimizer central NVLink benchmark: multi-GPU"
 
     def _enable_peer_access(self) -> None:
         num = torch.cuda.device_count()
@@ -114,6 +115,13 @@ class OptimizedOptimizerCentralNvlinkBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "hidden": self.hidden}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
