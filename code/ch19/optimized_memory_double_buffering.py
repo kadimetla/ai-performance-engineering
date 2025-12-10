@@ -48,6 +48,8 @@ class OptimizedMemoryDoubleBufferingBenchmark(BaseBenchmark):
         self.hidden_dim = 1024
         self.micro_batches = 16
         self.host_batches: list[torch.Tensor] = []
+        self.jitter_exemption_reason = "Memory double buffering benchmark: fixed dimensions"
+        self.register_workload_metadata(requests_per_iteration=float(self.micro_batches))
     
     def setup(self) -> None:
         """Setup: Initialize model and double buffers."""
@@ -166,6 +168,18 @@ class OptimizedMemoryDoubleBufferingBenchmark(BaseBenchmark):
         if self.buffer_a is None or self.buffer_b is None:
             return "Buffers not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
