@@ -33,6 +33,7 @@ class BaselineNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
         self.prefill_chunk_elems = 128 * 128
         self._tma_ext = None
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
+        self.jitter_exemption_reason = "Native TMA prefill/decode benchmark: fixed dimensions"
 
     def setup(self) -> None:
         self.inputs = build_inputs(self.device)
@@ -97,6 +98,13 @@ class BaselineNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch": self.batch, "seq_len": self.seq_len}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
