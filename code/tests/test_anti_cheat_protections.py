@@ -421,8 +421,8 @@ class TestLocationProtections:
         detector.end_capture()
         
         # Detector should track capture timing
-        state = detector.get_state()
-        assert state is not None
+        stats = detector.get_stats()
+        assert stats is not None
     
     def test_lazy_evaluation_force_evaluation(self):
         """Test that lazy tensors are forced to evaluate.
@@ -472,6 +472,9 @@ class TestMemoryProtections:
         
         Protection: check_input_output_aliasing()
         Attack: Output points to pre-filled input
+        
+        Note: check_input_output_aliasing returns (no_aliasing, message)
+        where no_aliasing=True means NO aliasing detected (good)
         """
         from core.harness.validity_checks import check_input_output_aliasing
         
@@ -479,17 +482,18 @@ class TestMemoryProtections:
         input_tensor = torch.randn(100, device="cuda")
         output_tensor = torch.randn(100, device="cuda")
         
-        # No aliasing - should pass
+        # No aliasing - should pass (returns True, None)
         inputs = {"x": input_tensor}
         outputs = {"y": output_tensor}
         
-        aliased, details = check_input_output_aliasing(inputs, outputs)
-        assert not aliased, "Separate tensors should not be aliased"
+        no_aliasing, message = check_input_output_aliasing(inputs, outputs)
+        assert no_aliasing, f"Separate tensors should not be aliased: {message}"
         
-        # Aliased case - should detect (same data_ptr)
+        # Aliased case - should detect (returns False, message)
         outputs_aliased = {"y": input_tensor}  # Same tensor!
-        aliased, details = check_input_output_aliasing(inputs, outputs_aliased)
-        assert aliased, f"Aliased tensors should be detected: {details}"
+        no_aliasing, message = check_input_output_aliasing(inputs, outputs_aliased)
+        assert not no_aliasing, "Aliased tensors should be detected"
+        assert message is not None, "Should have error message"
     
     def test_memory_pool_reset(self):
         """Test that memory pool can be reset.

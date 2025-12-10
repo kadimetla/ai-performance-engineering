@@ -158,7 +158,11 @@ PROTECTIONS = {
 def extract_test_names(test_dir: Path) -> Dict[str, str]:
     """Extract all test function names and their docstrings."""
     tests = {}
-    test_files = list(test_dir.glob("test_verification*.py")) + list(test_dir.glob("test_benchmark_verification.py"))
+    test_files = (
+        list(test_dir.glob("test_verification*.py")) + 
+        list(test_dir.glob("test_benchmark_verification.py")) +
+        list(test_dir.glob("test_anti_cheat*.py"))
+    )
     
     for test_file in test_files:
         content = test_file.read_text()
