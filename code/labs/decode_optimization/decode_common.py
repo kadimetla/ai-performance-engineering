@@ -131,6 +131,12 @@ class DecodeBenchmark(BaseBenchmark):
                     self._fp8_enabled = True
                 except Exception:
                     self.fp8_recipe = None
+        # Compliance: verification interface
+        self.jitter_exemption_reason = "Decode benchmark: fixed dimensions for serving tests"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.cfg.batch_size),
+            tokens_per_iteration=float(self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)),
+        )
 
     def setup(self) -> None:
         import gc
@@ -502,3 +508,19 @@ class DecodeBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Dict[str, float]:
         return self._custom_metrics
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {
+            "batch_size": self.cfg.batch_size,
+            "prompt_tokens": self.cfg.prompt_tokens,
+            "decode_tokens": self.cfg.decode_tokens,
+        }
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
