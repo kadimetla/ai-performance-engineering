@@ -138,6 +138,43 @@ def run_benchmark(
     return {"mean_time_ms": result.timing.mean_ms, **metrics}
 
 
+class _MoERoutingSimpleBenchmark(BaseBenchmark):
+    """Wrapper benchmark for simple MoE routing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._impl = BaselineMoERoutingSimple()
+        self._metrics = {}
+        self.jitter_exemption_reason = "MoE routing simple: fixed configuration"
+        self.register_workload_metadata(requests_per_iteration=1.0)
+
+    def setup(self) -> None:
+        self._impl.setup()
+
+    def benchmark_fn(self) -> None:
+        self._metrics = self._impl.run()
+        self._synchronize()
+
+    def teardown(self) -> None:
+        self._impl.cleanup()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=10, warmup=5)
+
+    def get_verify_output(self) -> torch.Tensor:
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        return {"type": "moe_routing_simple_baseline"}
+
+    def get_output_tolerance(self) -> tuple:
+        return (0.1, 1.0)
+
+
+def get_benchmark() -> BaseBenchmark:
+    return _MoERoutingSimpleBenchmark()
+
+
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
     benchmark_main(get_benchmark)

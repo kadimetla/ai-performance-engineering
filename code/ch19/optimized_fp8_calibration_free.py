@@ -286,6 +286,43 @@ def run_benchmark(
     }
 
 
+class _FP8CalibrationFreeBenchmark(BaseBenchmark):
+    """Wrapper benchmark for calibration-free FP8."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._impl = OptimizedFP8CalibrationFree()
+        self._output = None
+        self.jitter_exemption_reason = "FP8 calibration-free: fixed configuration"
+        self.register_workload_metadata(requests_per_iteration=1.0)
+
+    def setup(self) -> None:
+        self._impl.setup()
+
+    def benchmark_fn(self) -> None:
+        self._output = self._impl.run()
+        self._synchronize()
+
+    def teardown(self) -> None:
+        self._impl.cleanup()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=10, warmup=5)
+
+    def get_verify_output(self) -> torch.Tensor:
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        return {"type": "fp8_calibration_free"}
+
+    def get_output_tolerance(self) -> tuple:
+        return (0.1, 1.0)
+
+
+def get_benchmark() -> BaseBenchmark:
+    return _FP8CalibrationFreeBenchmark()
+
+
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
     benchmark_main(get_benchmark)

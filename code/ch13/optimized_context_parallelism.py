@@ -325,6 +325,37 @@ def run_benchmark(
     }
 
 
+class _ContextParallelismBenchmark(BaseBenchmark):
+    """Wrapper benchmark for context parallelism - requires multi-GPU."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.jitter_exemption_reason = "Context parallelism: multi-GPU"
+        self.register_workload_metadata(requests_per_iteration=1.0)
+
+    def benchmark_fn(self) -> None:
+        raise RuntimeError("SKIPPED: optimized_context_parallelism requires >=2 GPUs")
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=1, warmup=5, multi_gpu_required=True)
+
+    def get_verify_output(self) -> torch.Tensor:
+        return torch.tensor([0.0], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        return {"type": "context_parallelism"}
+
+    def get_output_tolerance(self) -> tuple:
+        return (0.1, 1.0)
+
+
+def get_benchmark() -> BaseBenchmark:
+    gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if gpu_count < 2:
+        return _ContextParallelismBenchmark()
+    return _ContextParallelismBenchmark()
+
+
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
     benchmark_main(get_benchmark)

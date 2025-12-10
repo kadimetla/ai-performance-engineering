@@ -63,6 +63,60 @@ def run_baseline(M=1024, N=1024, K=1024, BLOCK=128):
     return c
 
 
+# --- Benchmark Harness Integration ---
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+
+
+class BaselinePersistentMatmulTMABenchmark(BaseBenchmark):
+    """Benchmark wrapper for baseline persistent matmul TMA."""
+
+    def __init__(self, M: int = 1024, N: int = 1024, K: int = 1024):
+        super().__init__()
+        self.M = M
+        self.N = N
+        self.K = K
+        self.result = None
+        self.jitter_exemption_reason = "Persistent matmul TMA: fixed dimensions"
+        self.register_workload_metadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(M * N),
+        )
+
+    def setup(self) -> None:
+        torch.cuda.empty_cache()
+
+    def benchmark_fn(self) -> None:
+        self.result = run_baseline(self.M, self.N, self.K)
+        self._synchronize()
+        self.output = self.result
+
+    def teardown(self) -> None:
+        self.result = None
+        torch.cuda.empty_cache()
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(iterations=10, warmup=5)
+
+    def get_verify_output(self) -> torch.Tensor:
+        if self.output is None:
+            return torch.tensor([0.0], dtype=torch.float32)
+        return torch.tensor([self.output.sum().item()], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        return {"M": self.M, "N": self.N, "K": self.K}
+
+    def get_output_tolerance(self) -> tuple:
+        return (0.1, 1.0)
+
+
+def get_benchmark() -> BaseBenchmark:
+    return BaselinePersistentMatmulTMABenchmark()
+
+
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
     benchmark_main(get_benchmark)
