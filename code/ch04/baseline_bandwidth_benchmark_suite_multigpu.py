@@ -49,10 +49,15 @@ def measure_peer_bandwidth(size_mb: int = 256, iterations: int = 50, async_copy:
 
 
 class BandwidthSuiteMultiGPU(BaseBenchmark):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_bandwidth_gbps: Optional[float] = None
+        self.jitter_exemption_reason = "Bandwidth benchmark suite: fixed dimensions"
+        self.register_workload_metadata(requests_per_iteration=1.0)
+
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: bandwidth benchmark suite requires >=2 GPUs")
-        self.last_bandwidth_gbps: Optional[float] = None
 
     def benchmark_fn(self) -> None:
         self.last_bandwidth_gbps = measure_peer_bandwidth()
@@ -72,6 +77,13 @@ class BandwidthSuiteMultiGPU(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"type": "bandwidth_suite_multigpu"}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

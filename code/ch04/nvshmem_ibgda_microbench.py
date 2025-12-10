@@ -65,6 +65,8 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
             run_args=args,
             time_regex=None,  # Use harness timing instead of stdout parsing.
         )
+        self.jitter_exemption_reason = "NVSHMEM IBGDA microbench: fixed dimensions"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     # --------------------------------------------------------------------- Setup/teardown
     def setup(self) -> None:
@@ -205,3 +207,11 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         return self._parsed_metrics
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"mode": self.mode, "bytes_per_message": self.bytes_per_message}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
