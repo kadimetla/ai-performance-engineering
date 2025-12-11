@@ -444,7 +444,7 @@ class BenchmarkConfig:
 
     # Triton-style best practices (based on triton/testing.py)
     # See: https://github.com/triton-lang/triton/blob/main/python/triton/testing.py
-    clear_l2_cache: bool = field(default_factory=lambda: _get_default_value("clear_l2_cache", False))
+    clear_l2_cache: bool = field(default_factory=lambda: _get_default_value("clear_l2_cache", True))
     """Clear L2 cache before each iteration to ensure fair memory-bound comparisons."""
     
     full_device_sync: bool = field(default_factory=lambda: _get_default_value("full_device_sync", True))
@@ -481,7 +481,7 @@ class BenchmarkConfig:
     If enabled, raises an error if these values change during benchmark execution."""
     
     # Adaptive iterations (Triton-style best practice)
-    adaptive_iterations: bool = field(default_factory=lambda: _get_default_value("adaptive_iterations", False))
+    adaptive_iterations: bool = field(default_factory=lambda: _get_default_value("adaptive_iterations", True))
     """Enable adaptive iteration count to ensure statistically significant measurements.
     When enabled, iterations will be dynamically adjusted to achieve min_total_duration_ms.
     This is a Triton best practice for reliable benchmarking."""
@@ -526,8 +526,11 @@ class BenchmarkConfig:
     check_input_output_aliasing: bool = field(default_factory=lambda: _get_default_value("check_input_output_aliasing", True))
     """Verify output tensors don't alias input tensors (prevent pre-filled results)."""
     
-    clear_compile_cache: bool = field(default_factory=lambda: _get_default_value("clear_compile_cache", False))
+    clear_compile_cache: bool = field(default_factory=lambda: _get_default_value("clear_compile_cache", True))
     """Clear torch.compile cache before benchmark to ensure consistent compilation state."""
+
+    audit_stream_sync: bool = field(default_factory=lambda: _get_default_value("audit_stream_sync", True))
+    """Enable CUDA stream auditing to catch missing synchronizations by default."""
     
     detect_setup_precomputation: bool = field(default_factory=lambda: _get_default_value("detect_setup_precomputation", True))
     """Hash inputs before/after setup() to detect pre-computation during setup."""
@@ -785,6 +788,7 @@ class BaseBenchmark:
         self._config = None  # Cache for get_config()
         self._workload_metadata: Optional[WorkloadMetadata] = None
         self._workload_registered: bool = False
+        self._execution_marker: Optional[torch.Tensor] = None
     
     def _resolve_device(self) -> torch.device:
         """Resolve CUDA device, failing fast if CUDA is not available.
@@ -833,6 +837,13 @@ class BaseBenchmark:
         will still stash the merged config on ``self._config`` for runtime checks.
         """
         return getattr(self, "_config", None)
+
+    def get_verify_inputs(self) -> Dict[str, torch.Tensor]:
+        """Return input tensors used for verification/aliasing checks."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement get_verify_inputs() explicitly. "
+            "Return the exact tensors used during verification to enable aliasing checks."
+        )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> Optional[TorchrunLaunchSpec]:
         """Optional torchrun launch description for multi-GPU benchmarks."""
@@ -927,6 +938,23 @@ class BaseBenchmark:
             "NO AUTO-INFERENCE. NO FALLBACKS. Return a dict with workload parameters "
             "(e.g., {'batch_size': 32, 'seq_len': 512})."
         )
+
+    def get_output_tolerance(self) -> Tuple[float, float]:
+        """MANDATORY: Return (rtol, atol) tolerance for output comparison."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement get_output_tolerance() explicitly."
+        )
+
+    def get_custom_streams(self) -> List["torch.cuda.Stream"]:
+        """Return any non-default streams used by this benchmark."""
+        return []
+
+    def mark_execution_complete(self) -> None:
+        """Mark that this benchmark executed work on this rank/device."""
+        try:
+            self._execution_marker = torch.tensor([1.0], device=self.device)
+        except Exception:
+            self._execution_marker = torch.tensor([1.0])
 
     def _verify_kernel(
         self,
@@ -2825,6 +2853,13 @@ class BenchmarkHarness:
                     if validation_error:
                         errors.append(f"Validation failed: {validation_error}")
                     
+                    if hasattr(benchmark, "mark_execution_complete"):
+                        try:
+                            benchmark.mark_execution_complete()
+                        except Exception:
+                            # Execution marker is advisory; failures are surfaced in verification
+                            pass
+                    
                     if stage_watchdog['measurement']['status'] == 'running':
                         finish_stage('measurement')
                 
@@ -3493,14 +3528,25 @@ class BenchmarkHarness:
             
             audit_streams_enabled = getattr(config, 'audit_stream_sync', True)
             pre_streams: List[int] = []
+            declared_streams: List[Any] = []
+            if audit_streams_enabled and hasattr(benchmark_obj, "get_custom_streams"):
+                try:
+                    streams = benchmark_obj.get_custom_streams()
+                    if streams:
+                        declared_streams = [streams] if isinstance(streams, torch.cuda.Stream) else list(streams)
+                except Exception as exc:
+                    raise RuntimeError(f"get_custom_streams() failed: {exc}")
             stream_auditor = None
             stream_context = audit_streams(self.device) if audit_streams_enabled else nullcontext()
             if audit_streams_enabled:
-                pre_streams = get_active_streams(self.device)
+                pre_streams = get_active_streams(self.device, declared_streams)
 
             # Wrap timing loop with GC context to prevent GC interference
             with gc_context:
                 with stream_context as stream_auditor:
+                    if audit_streams_enabled and stream_auditor is not None:
+                        for stream in declared_streams:
+                            stream_auditor.record_stream_event(stream, operation="declared_stream")
                     # CUDA Graph capture (if enabled)
                     # Capture before starting timed iterations for graph replay mode
                     if use_cuda_graph:
@@ -3537,7 +3583,7 @@ class BenchmarkHarness:
             # Stream audit check - verify all streams are properly synchronized
             # This detects the Locus/KernelBench stream timing vulnerability
             if audit_streams_enabled:
-                post_streams = get_active_streams(self.device)
+                post_streams = get_active_streams(self.device, declared_streams)
                 sync_complete, sync_warning = check_stream_sync_completeness(pre_streams, post_streams)
                 audit_ok = True
                 audit_warnings: List[str] = []
@@ -3556,6 +3602,19 @@ class BenchmarkHarness:
                     issues.append("Stream synchronization incomplete")
                 if sync_warning:
                     issues.append(sync_warning)
+                if stream_auditor is not None:
+                    try:
+                        info = stream_auditor.get_info()
+                        declared_ids = set(post_streams)
+                        if info.default_stream_id is not None:
+                            declared_ids.add(info.default_stream_id)
+                        undeclared_streams = info.stream_ids - declared_ids
+                        if undeclared_streams:
+                            issues.append(
+                                f"UNDECLARED STREAMS: {len(undeclared_streams)} stream(s) were created/used without being declared via get_custom_streams()."
+                            )
+                    except Exception:
+                        pass
                 if not audit_ok or audit_warnings:
                     issues.extend(audit_warnings)
                 if issues:

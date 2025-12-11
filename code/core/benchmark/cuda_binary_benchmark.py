@@ -27,6 +27,7 @@ from typing import Optional, Sequence
 
 import torch
 
+from core.benchmark.verification import simple_signature
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.harness.cuda_capabilities import pipeline_runtime_allowed
 from core.benchmark.tma_checks import require_tma_instructions
@@ -356,7 +357,11 @@ class CudaBinaryBenchmark(BaseBenchmark):
             NotImplementedError: If workload_params not provided and method not overridden
         """
         if self._workload_params:
-            return self._workload_params
+            params = dict(self._workload_params)
+            dtype = params.pop("dtype", "float32")
+            batch_size = int(params.pop("batch_size", 1))
+            normalized_dims = {k: int(v) for k, v in params.items()}
+            return simple_signature(batch_size=batch_size, dtype=dtype, **normalized_dims)
         raise NotImplementedError(
             f"{self.__class__.__name__} must provide workload_params to __init__ or override "
             "get_input_signature(). NO AUTO-INFERENCE. NO FALLBACKS. "
@@ -373,15 +378,21 @@ class CudaBinaryBenchmark(BaseBenchmark):
             Tensor containing the checksum value
         """
         if self._verify_checksum is None:
-            # Try to run verify to get checksum
             try:
                 self.run_verify()
-            except Exception:
-                pass  # Some binaries may not support verify mode
+            except Exception as e:
+                raise RuntimeError(
+                    f"CUDA binary verification failed: {e}. "
+                    "Ensure the binary supports -DVERIFY=1 build mode."
+                ) from e
         
-        # Return checksum as tensor (or 0.0 if not available)
-        checksum = self._verify_checksum if self._verify_checksum is not None else 0.0
-        return torch.tensor([checksum], dtype=torch.float32)
+        if self._verify_checksum is None:
+            raise RuntimeError(
+                "CUDA binary did not emit VERIFY_CHECKSUM. "
+                "Include cuda_verify.cuh and call VERIFY_PRINT_CHECKSUM()."
+            )
+        
+        return torch.tensor([self._verify_checksum], dtype=torch.float32)
     
     def run_verify(self) -> Optional[float]:
         """Build verify binary and run to get checksum.

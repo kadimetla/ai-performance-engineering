@@ -35,6 +35,8 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
         self.targets: Optional[torch.Tensor] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.criterion: Optional[nn.Module] = None
+        self.output: Optional[torch.Tensor] = None
+        self._verify_input: Optional[torch.Tensor] = None
         # Heavier batch/hidden to highlight benefits of AMP/compile in the optimized path.
         self.batch_size = 32
         self.hidden_dim = 8192
@@ -50,8 +52,10 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).float().train()
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+        self._verify_input = self.inputs[0:1].clone()
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
+        self.output = None
         for _ in range(3):
             self.optimizer.zero_grad()
             _ = self.model(self.inputs)
@@ -68,6 +72,11 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
                 loss.backward()
                 self.optimizer.step()
             self._synchronize()
+        # Capture output AFTER training completes for verification
+        with torch.no_grad():
+            self.model.eval()
+            self.output = self.model(self._verify_input).float().clone()
+            self.model.train()
     
     def teardown(self) -> None:
         self.model = None
@@ -108,6 +117,12 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
         return self.output.detach().clone()
+    
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return fixed verification input for aliasing checks."""
+        if self._verify_input is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self._verify_input
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

@@ -22,6 +22,7 @@ from core.harness.benchmark_harness import (
     WorkloadMetadata,
 )
 from core.utils.logger import get_logger
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 logger = get_logger(__name__)
 
@@ -142,7 +143,7 @@ def run_benchmark(
     return {"mean_time_ms": result.timing.mean_ms, **metrics}
 
 
-class _MoERoutingSimpleBenchmark(BaseBenchmark):
+class _MoERoutingSimpleBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrapper benchmark for simple MoE routing."""
 
     def __init__(self) -> None:
@@ -154,6 +155,21 @@ class _MoERoutingSimpleBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         self._impl.setup()
+        probe = torch.zeros(1, device=self.device, dtype=torch.bfloat16)
+        param_count = sum(p.numel() for p in self._impl.router.parameters()) if hasattr(self._impl, "router") else 0
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=torch.zeros(1, device=self.device, dtype=torch.bfloat16),
+            batch_size=1,
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def benchmark_fn(self) -> None:
         self._metrics = self._impl.run()
@@ -167,15 +183,13 @@ class _MoERoutingSimpleBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=10, warmup=5)
 
     def get_verify_output(self) -> torch.Tensor:
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
-        return {"type": "moe_routing_simple_baseline"}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
+        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

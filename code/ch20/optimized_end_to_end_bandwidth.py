@@ -52,6 +52,7 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[list[torch.Tensor]] = None
         self.outputs: Optional[list[torch.Tensor]] = None
+        self.output: Optional[torch.Tensor] = None
         self.batch_size = 32
         self.hidden_dim = 1024
         self.num_batches = 10
@@ -83,31 +84,10 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
             torch.manual_seed(42)
             
             model = SimplePipeline(hidden_dim=self.hidden_dim).to(self.device).half().eval()
-
-            compile_supported, compile_reason = is_torch_compile_supported_on_device()
-            disable_compile = bool(os.environ.get("PYTEST_CURRENT_TEST"))
-            if compile_supported and not disable_compile:
-                try:
-                    compiled_model = torch.compile(model, mode="reduce-overhead")
-                    self.model = compiled_model
-                    self._used_compiled_model = True
-                except Exception as exc:
-                    self._compile_error = f"{exc.__class__.__name__}: {exc}"
-                    self._used_compiled_model = False
-                    self.model = model
-                    if LOGGER is not None:
-                        LOGGER.warning(
-                            "torch.compile failed for %s; falling back to eager.",
-                            self.__class__.__name__,
-                            exc_info=exc,
-                        )
-            else:
-                reason = compile_reason or "torch.compile unsupported on this GPU"
-                if disable_compile:
-                    reason = "torch.compile disabled under pytest"
-                self._compile_error = reason
-                self._used_compiled_model = False
-                self.model = model
+            # torch.compile can introduce hidden streams; keep eager to satisfy stream audits.
+            self._compile_error = "torch.compile disabled to avoid undeclared stream timing"
+            self._used_compiled_model = False
+            self.model = model
 
             test_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
             for _ in range(3):
@@ -120,6 +100,7 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
                 for _ in range(self.num_batches)
             ]
             self.outputs = []
+            self.output = None
             
             for inp in self.inputs[:5]:
                 with torch.no_grad():
@@ -139,6 +120,10 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
                 for inp in self.inputs:
                     out = self.model(inp)
                     self.outputs.append(out)
+            if self.outputs:
+                self.output = torch.stack(self.outputs)
+            else:
+                self.output = None
             self._synchronize()
     
     def teardown(self) -> None:
@@ -180,9 +165,15 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.outputs is None:
+        if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.outputs.detach().clone()
+        return self.output.detach().clone()
+
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return stacked inputs for aliasing checks."""
+        if self.inputs is None:
+            raise RuntimeError("setup() must be called before verification")
+        return torch.stack(self.inputs)
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

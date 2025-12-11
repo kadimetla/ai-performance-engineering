@@ -50,6 +50,12 @@ class _DynamicQuantizedCacheBenchmark(BaseBenchmark):
             raise RuntimeError("benchmark_fn() must be called before verification")
         return self.tensor.detach().clone()
 
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return the cached tensor used for aliasing checks."""
+        if self.tensor is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self.tensor
+
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
         return {"schedule_bits": tuple(self.schedule_bits)}

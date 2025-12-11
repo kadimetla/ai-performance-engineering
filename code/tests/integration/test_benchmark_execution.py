@@ -133,6 +133,15 @@ class TestBenchmarkExecutionPipeline:
             
             def benchmark_fn(self):
                 raise RuntimeError("Intentional failure")
+            
+            def get_verify_inputs(self):
+                return {"input": torch.tensor([0.0], device=self.device)}
+            
+            def get_verify_output(self):
+                raise RuntimeError("benchmark_fn() must set output")
+            
+            def get_output_tolerance(self):
+                return (1e-5, 1e-8)
         
         benchmark = FailingBenchmark()
         config = BenchmarkConfig(

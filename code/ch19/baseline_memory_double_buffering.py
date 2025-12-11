@@ -129,6 +129,12 @@ class MemoryDoubleBufferingBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
         return self.output.detach().clone()
+    
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return device buffer used for verification/alias checks."""
+        if self.buffer is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self.buffer
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

@@ -169,11 +169,7 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {
-            "batch_size": self.batch_size,
-            "input_size": self.input_size,
-            "hidden_size": self.hidden_size,
-        }
+        return super().get_input_signature()
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""

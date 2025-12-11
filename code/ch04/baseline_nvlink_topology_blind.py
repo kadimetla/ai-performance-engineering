@@ -13,9 +13,10 @@ import torch
 
 from core.benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-class BaselineNvlinkTopologyBlindBenchmark(BaseBenchmark):
+class BaselineNvlinkTopologyBlindBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Naive P2P copy that does not enable peer access or respect NVLink distance."""
 
     def __init__(self):
@@ -37,6 +38,20 @@ class BaselineNvlinkTopologyBlindBenchmark(BaseBenchmark):
         self.src = torch.randn(n, device="cuda:0", dtype=torch.float16)
         self.dst = torch.empty(n, device="cuda:1", dtype=torch.float16)
         self._synchronize()
+        probe = torch.randn(256, device="cuda:0", dtype=torch.float16)
+        output = torch.zeros_like(probe, device="cuda:1")
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+        )
 
     def benchmark_fn(self) -> None:
         assert self.src is not None and self.dst is not None
@@ -72,11 +87,11 @@ class BaselineNvlinkTopologyBlindBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"numel": self.numel}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

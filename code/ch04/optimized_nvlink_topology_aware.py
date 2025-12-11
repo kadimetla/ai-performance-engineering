@@ -13,6 +13,7 @@ import torch
 
 from core.benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 def _find_preferred_pair() -> tuple[int, int]:
@@ -40,7 +41,7 @@ def _find_preferred_pair() -> tuple[int, int]:
     return best_pair
 
 
-class OptimizedNvlinkTopologyAwareBenchmark(BaseBenchmark):
+class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """P2P copy with peer access enabled and near-neighbor pairing."""
 
     def __init__(self):
@@ -73,6 +74,20 @@ class OptimizedNvlinkTopologyAwareBenchmark(BaseBenchmark):
         self.src = torch.randn(n, device=f"cuda:{self.src_id}", dtype=self.dtype)
         self.dst = torch.empty(n, device=f"cuda:{self.dst_id}", dtype=self.dtype)
         self._synchronize()
+        probe = torch.randn(256, device=f"cuda:{self.src_id}", dtype=self.dtype)
+        output = torch.zeros_like(probe, device=f"cuda:{self.dst_id}")
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+        )
 
     def benchmark_fn(self) -> None:
         assert self.src is not None and self.dst is not None
@@ -108,11 +123,11 @@ class OptimizedNvlinkTopologyAwareBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"numel": self.numel}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

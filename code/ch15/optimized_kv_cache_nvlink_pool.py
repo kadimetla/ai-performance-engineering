@@ -14,6 +14,7 @@ import torch.nn as nn
 
 from core.benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
 def _enable_peer_access() -> None:
@@ -26,7 +27,7 @@ def _enable_peer_access() -> None:
         pass
 
 
-class OptimizedKVCacheNvlinkPoolBenchmark(BaseBenchmark):
+class OptimizedKVCacheNvlinkPoolBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Tiered KV cache with NVLink pooling."""
 
     def __init__(self):
@@ -45,6 +46,7 @@ class OptimizedKVCacheNvlinkPoolBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch),
             tokens_per_iteration=float(tokens),
         )
+        self._verify_q: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
         torch.manual_seed(42)
@@ -52,6 +54,7 @@ class OptimizedKVCacheNvlinkPoolBenchmark(BaseBenchmark):
         self.peer_device = torch.device("cuda:1")
         self.model = nn.MultiheadAttention(self.hidden, self.heads, batch_first=True).to(self.device).eval()
         self._synchronize()
+        self._verify_q = torch.randn(1, 1, self.hidden, device=self.device)
 
     def _place_kv(self, k: torch.Tensor, v: torch.Tensor, step: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
         """Decide where to place KV: local -> peer -> host."""
@@ -95,6 +98,20 @@ class OptimizedKVCacheNvlinkPoolBenchmark(BaseBenchmark):
                 out, _ = self.model(q, k_all, v_all)
                 self.output = out.detach().clone()
             self._synchronize()
+        if self.output is not None and self._verify_q is not None:
+            self._set_verification_payload(
+                inputs={"q": self._verify_q},
+                output=self.output,
+                batch_size=int(self._verify_q.shape[0]),
+                parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+                precision_flags={
+                    "fp16": False,
+                    "bf16": False,
+                    "fp8": False,
+                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                },
+                output_tolerance=(1e-3, 1e-3),
+            )
 
     def teardown(self) -> None:
         self.model = None
@@ -125,17 +142,15 @@ class OptimizedKVCacheNvlinkPoolBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch": self.batch, "seq_len": self.seq_len}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -31,8 +31,9 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
-class OptimizedDisaggregatedBenchmark(BaseBenchmark):
+class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Disaggregated inference (prefill and decode separated across GPUs).
     
         Disaggregated inference: Separates prefill (parallel, compute-intensive) and decode
@@ -125,6 +126,25 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
             requests_per_iteration=self._workload.requests_per_iteration,
             tokens_per_iteration=self._workload.tokens_per_iteration,
         )
+        probe = torch.randn(2, 16, self.hidden_dim, device=self.device)
+        output = torch.zeros(2, 16, self.hidden_dim, device=self.device, dtype=torch.float32)
+        total_params = 0
+        if self.prefill_model is not None:
+            total_params += sum(p.numel() for p in self.prefill_model.parameters())
+        if self.decode_model is not None:
+            total_params += sum(p.numel() for p in self.decode_model.parameters())
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.shape[0],
+            parameter_count=total_params,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Disaggregated inference."""
@@ -185,11 +205,11 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
         return None
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "prefill_len": self.prefill_len}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

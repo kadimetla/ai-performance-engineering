@@ -298,6 +298,122 @@ def is_tolerance_looser(custom: ToleranceSpec, default: ToleranceSpec) -> bool:
     return custom.rtol > default.rtol or custom.atol > default.atol
 
 
+def _normalize_dtype_str(dtype: Union[str, torch.dtype]) -> str:
+    """Normalize dtype representation to a lowercase torch-style string."""
+    dtype_str = str(dtype)
+    return dtype_str.replace("torch.", "").lower()
+
+
+def simple_signature(
+    *,
+    batch_size: int = 1,
+    dtype: Union[str, torch.dtype] = "float32",
+    precision_flags: Optional[PrecisionFlags] = None,
+    **dims: int,
+) -> InputSignature:
+    """Construct a minimal, strictly-valid InputSignature for simple workloads.
+    
+    Args:
+        batch_size: Logical batch size for the workload.
+        dtype: Primary tensor dtype (applied to all declared shapes).
+        precision_flags: Optional precision configuration override.
+        dims: Dimension sizes that define the workload shape, in order.
+    
+    Returns:
+        InputSignature with shapes/dtypes populated for a single logical tensor.
+    """
+    shapes: Dict[str, Tuple[int, ...]] = {}
+    dtypes: Dict[str, str] = {}
+    if dims:
+        shapes["workload"] = tuple(int(v) for v in dims.values())
+        dtypes["workload"] = _normalize_dtype_str(dtype)
+    else:
+        shapes["workload"] = (int(batch_size),)
+        dtypes["workload"] = _normalize_dtype_str(dtype)
+    
+    default_tf32 = False
+    try:
+        default_tf32 = torch.cuda.is_available() and bool(torch.backends.cuda.matmul.allow_tf32)
+    except Exception:
+        default_tf32 = False
+    
+    flags = precision_flags or PrecisionFlags(tf32=default_tf32)
+    
+    parameter_count = sum(int(v) for v in dims.values()) if dims else int(batch_size)
+    sig = InputSignature(
+        shapes=shapes,
+        dtypes=dtypes,
+        batch_size=int(batch_size),
+        parameter_count=parameter_count,
+        precision_flags=flags,
+    )
+    errors = sig.validate(strict=True)
+    if errors:
+        raise ValueError(f"Invalid simple signature: {errors[0]}")
+    return sig
+
+
+def coerce_input_signature(sig: Union[InputSignature, Dict[str, Any]]) -> InputSignature:
+    """Convert a signature payload into a validated InputSignature.
+    
+    Raises:
+        TypeError: When sig is of an unexpected type.
+        ValueError: When required fields are missing/invalid.
+    """
+    if isinstance(sig, InputSignature):
+        errors = sig.validate(strict=True)
+        if errors:
+            raise ValueError(f"Invalid InputSignature: {errors[0]}")
+        return sig
+    
+    if not isinstance(sig, dict):
+        raise TypeError(f"Input signature must be InputSignature or dict, got {type(sig)}")
+    
+    if not sig.get("shapes") or not sig.get("dtypes"):
+        raise ValueError("Input signature must include non-empty 'shapes' and 'dtypes'")
+    if "batch_size" not in sig or "parameter_count" not in sig:
+        raise ValueError("Input signature must include 'batch_size' and 'parameter_count'")
+    
+    shapes = {k: tuple(v) if isinstance(v, (list, tuple)) else (int(v),) for k, v in sig["shapes"].items()}
+    dtypes = {k: _normalize_dtype_str(v) for k, v in sig["dtypes"].items()}
+    
+    precision_data = sig.get("precision_flags")
+    if isinstance(precision_data, PrecisionFlags):
+        precision = precision_data
+    elif isinstance(precision_data, dict):
+        precision = PrecisionFlags.from_dict(precision_data)
+    else:
+        precision = PrecisionFlags(
+            fp16=bool(sig.get("fp16", False)),
+            bf16=bool(sig.get("bf16", False)),
+            fp8=bool(sig.get("fp8", False)),
+            tf32=bool(sig.get("tf32", True)),
+        )
+    
+    signature = InputSignature(
+        shapes=shapes,
+        dtypes=dtypes,
+        batch_size=int(sig["batch_size"]),
+        parameter_count=int(sig["parameter_count"]),
+        precision_flags=precision,
+        world_size=sig.get("world_size"),
+        ranks=sig.get("ranks"),
+        shards=sig.get("shards"),
+        pipeline_stages=sig.get("pipeline_stages"),
+        per_rank_batch_size=sig.get("per_rank_batch_size"),
+        collective_type=sig.get("collective_type"),
+        num_streams=sig.get("num_streams"),
+        graph_capture_enabled=sig.get("graph_capture_enabled"),
+        pruning_enabled=sig.get("pruning_enabled"),
+        sparsity_ratio=sig.get("sparsity_ratio"),
+        quantization_mode=sig.get("quantization_mode"),
+    )
+    errors = signature.validate(strict=True)
+    if errors:
+        raise ValueError(f"Invalid InputSignature: {errors[0]}")
+    return signature
+
+
 # =============================================================================
 # Quarantine Reasons
 # =============================================================================
@@ -474,6 +590,7 @@ class VerifyResult:
     jitter_exemption_reason: Optional[str] = None
     seed_info: Optional[Dict[str, int]] = None
     timestamp: Optional[datetime] = None
+    details: Optional[Any] = None
     
     @classmethod
     def success(cls, signature_hash: str, **kwargs) -> "VerifyResult":
@@ -491,6 +608,7 @@ class VerifyResult:
         return cls(
             passed=False,
             reason=reason,
+            details=details,
             timestamp=datetime.now(),
         )
     
@@ -516,6 +634,8 @@ class VerifyResult:
             result["jitter_exemption_reason"] = self.jitter_exemption_reason
         if self.seed_info:
             result["seed_info"] = self.seed_info
+        if self.details is not None:
+            result["details"] = self.details
         return result
 
 

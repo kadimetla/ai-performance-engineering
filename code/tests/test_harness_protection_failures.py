@@ -38,6 +38,11 @@ class _CheatingSetupBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("output missing")
         return self.output
+    
+    def get_verify_inputs(self):
+        if self.output is None:
+            raise RuntimeError("output missing")
+        return {"x": self.output}
 
     def get_input_signature(self):
         return {"shapes": {"x": (1, 8)}, "dtypes": {"x": "float32"}, "batch_size": 1, "parameter_count": 0, "precision_flags": {}}
@@ -61,6 +66,11 @@ class _GraphCheatBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         return self.x
+    
+    def get_verify_inputs(self):
+        if self.x is None:
+            raise RuntimeError("input missing")
+        return {"x": self.x}
 
     def get_input_signature(self):
         return {"shapes": {"x": (4,)}, "dtypes": {"x": "float32"}, "batch_size": 1, "parameter_count": 0, "precision_flags": {}}
@@ -84,6 +94,11 @@ class _StreamCheatBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         return self.x
+    
+    def get_verify_inputs(self):
+        if self.x is None:
+            raise RuntimeError("input missing")
+        return {"x": self.x}
 
     def get_input_signature(self):
         return {"shapes": {"x": (4,)}, "dtypes": {"x": "float32"}, "batch_size": 1, "parameter_count": 0, "precision_flags": {}}

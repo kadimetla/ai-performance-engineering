@@ -46,6 +46,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 class MultiLayerNet(nn.Module):
@@ -63,7 +64,7 @@ class MultiLayerNet(nn.Module):
         return self.fc3(x)
 
 
-class BaselineNoOverlapBenchmark(BaseBenchmark):
+class BaselineNoOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """DDP without communication overlap - baseline."""
 
     def __init__(self):
@@ -107,6 +108,20 @@ class BaselineNoOverlapBenchmark(BaseBenchmark):
         print("[baseline_no_overlap] data allocated", flush=True)
         torch.cuda.synchronize(self.device)
         print("[baseline_no_overlap] setup done", flush=True)
+        probe = torch.randn(8, self.hidden_size, device=self.device)
+        output = torch.zeros(8, 1, device=self.device, dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.shape[0],
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: DDP training step without overlap."""
@@ -176,11 +191,11 @@ class BaselineNoOverlapBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "hidden_size": self.hidden_size}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

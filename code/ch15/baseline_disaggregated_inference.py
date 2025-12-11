@@ -42,20 +42,6 @@ class _DisaggregatedInferenceBenchmark(BaselineMoeInferenceBenchmark):
         }
         self.register_workload_metadata(requests_per_iteration=1.0)
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.float().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"speculative_window": self.speculative_window, "decode_parallelism": self.decode_parallelism}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
     def setup(self) -> None:
         super().setup()
         if self.model is not None:
@@ -114,6 +100,7 @@ class _DisaggregatedInferenceBenchmark(BaselineMoeInferenceBenchmark):
 
         self._disagg_history["prefill_ms"].extend(ttft_samples)
         self._disagg_history["decode_ms"].extend(decode_samples)
+        self._finalize_verification_payload()
         return {"prefill_ms": ttft_samples, "decode_ms": decode_samples}
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:

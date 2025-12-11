@@ -37,27 +37,24 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         self.N = 10_000_000
         # Memory transfer benchmark - jitter check not applicable
-        self._workload = WorkloadMetadata(
+        self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.N),
+            bytes_per_iteration=float(self.N * 4),
         )
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
+        if torch.cuda.device_count() < 2:
+            raise RuntimeError("SKIPPED: requires >=2 GPUs")
         torch.manual_seed(42)
         # Baseline: PCIe-based communication (no NVLink)
         # NVLink provides high-speed GPU-to-GPU communication
         # This baseline uses PCIe (slower)
         
-        num_gpus = torch.cuda.device_count()
-        if num_gpus < 2:
-            # Single GPU: simulate PCIe round-trip
-            self.data_gpu0 = torch.randn(self.N, device=self.device, dtype=torch.float32)
-            self.data_gpu1 = None
-        else:
-            # Multi-GPU: use PCIe (not NVLink)
-            self.data_gpu0 = torch.randn(self.N, device=torch.device("cuda:0"), dtype=torch.float32)
-            self.data_gpu1 = torch.randn(self.N, device=torch.device("cuda:1"), dtype=torch.float32)
+        # Multi-GPU: use PCIe (not NVLink)
+        self.data_gpu0 = torch.randn(self.N, device=torch.device("cuda:0"), dtype=torch.float32)
+        self.data_gpu1 = torch.randn(self.N, device=torch.device("cuda:1"), dtype=torch.float32)
         torch.cuda.synchronize(self.device)
         probe = torch.randn(1024, device=self.device)
         output = torch.zeros(1, device=self.device)
@@ -77,22 +74,17 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def benchmark_fn(self) -> None:
         """Benchmark: PCIe-based communication (no NVLink)."""
         with self._nvtx_range("baseline_nvlink"):
-            num_gpus = torch.cuda.device_count()
-            if num_gpus >= 2:
-                # Multi-GPU: PCIe-based transfer (no NVLink)
-                # Transfer through PCIe bus (slower than NVLink)
-                self.data_gpu1.copy_(self.data_gpu0, non_blocking=False)
-                torch.cuda.synchronize()
-                self.output = self.data_gpu1.sum().unsqueeze(0)
-            else:
-                # Single GPU: simulate inefficient CPU round-trip (no NVLink)
-                cpu_data = self.data_gpu0.cpu()
-                self.data_gpu0 = cpu_data.to(self.device)
-                torch.cuda.synchronize()
-                self.output = self.data_gpu0.sum().unsqueeze(0)
-            
+            # Multi-GPU: PCIe-based transfer (no NVLink)
+            # Transfer through PCIe bus (slower than NVLink)
+            self.data_gpu1.copy_(self.data_gpu0, non_blocking=False)
+            torch.cuda.synchronize()
+            self.output = self.data_gpu1.sum().unsqueeze(0)
+
             # Baseline: No NVLink benefits
             # PCIe-based communication (slower)
+            payload = getattr(self, "_verification_payload", None)
+            if payload is not None and self.output is not None:
+                payload.output = self.output.detach().clone()
 
     
     def teardown(self) -> None:

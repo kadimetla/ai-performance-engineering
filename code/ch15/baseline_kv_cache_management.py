@@ -8,9 +8,10 @@ import torch
 import torch.nn as nn
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
-class BaselineKVCacheManagementBenchmark(BaseBenchmark):
+class BaselineKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: recomputes KV every step (no cache reuse)."""
     
     def __init__(self):
@@ -30,6 +31,7 @@ class BaselineKVCacheManagementBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self._verify_input: Optional[torch.Tensor] = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -51,6 +53,7 @@ class BaselineKVCacheManagementBenchmark(BaseBenchmark):
             for _ in range(self.steps)
         ]
         self._synchronize()
+        self._verify_input = torch.randn(1, 1, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
     
     def benchmark_fn(self) -> None:
         """Benchmark: KV cache without management."""
@@ -76,6 +79,24 @@ class BaselineKVCacheManagementBenchmark(BaseBenchmark):
                 self.output = output.detach().clone()
                 _ = output[:, -1, :].sum()
             self._synchronize()
+        if self.output is not None and self._verify_input is not None:
+            param_count = 0
+            for layer in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
+                if layer is not None:
+                    param_count += sum(p.numel() for p in layer.parameters())
+            self._set_verification_payload(
+                inputs={"tokens": self._verify_input},
+                output=self.output,
+                batch_size=int(self._verify_input.shape[0]),
+                parameter_count=param_count,
+                precision_flags={
+                    "fp16": False,
+                    "bf16": True,
+                    "fp8": False,
+                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                },
+                output_tolerance=(1e-3, 1e-3),
+            )
         if self.output is None:
             raise RuntimeError("No output computed during benchmark")
     
@@ -117,17 +138,15 @@ class BaselineKVCacheManagementBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.detach().clone()
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "steps": self.steps, "hidden_dim": self.hidden_dim}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

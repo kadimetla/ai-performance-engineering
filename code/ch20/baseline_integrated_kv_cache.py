@@ -222,6 +222,12 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
         return self.output.detach().clone()
+    
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return a representative input tensor for aliasing checks."""
+        if not self.inputs:
+            raise RuntimeError("setup() must be called before verification")
+        return self.inputs[0]
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

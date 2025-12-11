@@ -458,6 +458,12 @@ class OptimizedFP4WeightQuantizationBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("Output not available - run benchmark first")
         return self.output.float()
+    
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return model input used for verification."""
+        if self.input is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self.input
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""

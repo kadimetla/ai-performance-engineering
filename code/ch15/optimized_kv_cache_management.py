@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - older PyTorch fallback
     sdpa_kernel = None  # type: ignore[assignment]
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
 def _flash_sdp_context():
@@ -24,7 +25,7 @@ def _flash_sdp_context():
     return sdpa_kernel([SDPBackend.FLASH_ATTENTION])
 
 
-class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
+class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: KV cache reuse and management."""
     
     def __init__(self):
@@ -47,6 +48,7 @@ class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self.output = None
+        self._verify_input: Optional[torch.Tensor] = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -85,6 +87,7 @@ class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
         except Exception as exc:
             raise RuntimeError(f"SKIPPED: flash-attn kernels unavailable on this arch/install: {exc}") from exc
         self._synchronize()
+        self._verify_input = torch.randn(1, 1, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
     
     def benchmark_fn(self) -> None:
         assert self.q_proj is not None and self.k_proj is not None and self.v_proj is not None and self.out_proj is not None
@@ -110,6 +113,24 @@ class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
                 self.cache_buffer.copy_(k_cache)
                 self.output = output.detach().clone()
             self._synchronize()
+        if self.output is not None and self._verify_input is not None:
+            param_count = 0
+            for layer in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
+                if layer is not None:
+                    param_count += sum(p.numel() for p in layer.parameters())
+            self._set_verification_payload(
+                inputs={"tokens": self._verify_input},
+                output=self.output,
+                batch_size=int(self._verify_input.shape[0]),
+                parameter_count=param_count,
+                precision_flags={
+                    "fp16": False,
+                    "bf16": True,
+                    "fp8": False,
+                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                },
+                output_tolerance=(1e-3, 1e-3),
+            )
     
     def teardown(self) -> None:
         self.q_proj = None
@@ -150,17 +171,15 @@ class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "steps": self.steps, "hidden_dim": self.hidden_dim}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
+        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

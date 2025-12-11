@@ -21,6 +21,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.metrics import compute_memory_transfer_metrics
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 def init_distributed() -> Tuple[int, int, int]:
@@ -40,7 +41,7 @@ def init_distributed() -> Tuple[int, int, int]:
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
 
-class BaselineSymmetricMemoryPerfBenchmark(BaseBenchmark):
+class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline NCCL AllReduce benchmark for symmetric memory comparison."""
 
     def __init__(self, size_mb: float = 16.0):
@@ -64,6 +65,20 @@ class BaselineSymmetricMemoryPerfBenchmark(BaseBenchmark):
         device = torch.device("cuda", device_id)
         self.tensor = torch.ones(self.numel, device=device, dtype=torch.float32)
         torch.cuda.synchronize()
+        probe = torch.ones(16, device=device, dtype=torch.float32)
+        output = torch.zeros(1, device=device, dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.numel(),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
 
     def benchmark_fn(self) -> Optional[Dict[str, float]]:
         """Run NCCL AllReduce and measure performance."""
@@ -123,11 +138,11 @@ class BaselineSymmetricMemoryPerfBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"size_mb": self.size_mb}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

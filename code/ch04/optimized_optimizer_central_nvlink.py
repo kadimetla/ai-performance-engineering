@@ -14,9 +14,10 @@ import torch.nn as nn
 
 from core.benchmark.gpu_requirements import skip_if_insufficient_gpus, require_peer_access
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-class OptimizedOptimizerCentralNvlinkBenchmark(BaseBenchmark):
+class OptimizedOptimizerCentralNvlinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Centralized optimizer state (one shard per switch island)."""
 
     def __init__(self):
@@ -62,6 +63,21 @@ class OptimizedOptimizerCentralNvlinkBenchmark(BaseBenchmark):
             master_m = torch.zeros_like(master_w, dtype=torch.float32, device=self.root_device)
             self.master_weights.append(master_w)
             self.momentum.append(master_m)
+        probe_device = self.models[0].weight.device if self.models else self.device
+        probe = torch.randn(4, self.hidden, device=probe_device)
+        output = torch.zeros(4, self.hidden, device=self.root_device, dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.shape[0],
+            parameter_count=sum(p.numel() for m in self.models for p in m.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -112,11 +128,11 @@ class OptimizedOptimizerCentralNvlinkBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "hidden": self.hidden}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

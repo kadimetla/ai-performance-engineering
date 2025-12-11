@@ -38,17 +38,31 @@ class SimpleBenchmark(BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.tensor = None
+        self.output = None
     
     def setup(self) -> None:
         self.tensor = torch.randn(100, 100, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
-        _ = self.tensor @ self.tensor
+        self.output = self.tensor @ self.tensor
         torch.cuda.synchronize()
     
     def validate_result(self) -> Optional[str]:
         return None
+    
+    def get_verify_inputs(self):
+        if self.tensor is None:
+            raise RuntimeError("Tensor not initialized")
+        return {"input": self.tensor}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 class SlowBenchmark(BaseBenchmark):
@@ -57,6 +71,7 @@ class SlowBenchmark(BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.tensor = None
+        self.output = None
     
     def setup(self) -> None:
         self.tensor = torch.randn(100, 100, device=self.device)
@@ -72,9 +87,23 @@ class SlowBenchmark(BaseBenchmark):
             # Do minimal work to keep CUDA context alive
             _ = self.tensor @ self.tensor
         torch.cuda.synchronize()
+        self.output = self.tensor
     
     def validate_result(self) -> Optional[str]:
         return None
+    
+    def get_verify_inputs(self):
+        if self.tensor is None:
+            raise RuntimeError("Tensor not initialized")
+        return {"input": self.tensor}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 class FailingBenchmark(BaseBenchmark):
@@ -82,6 +111,7 @@ class FailingBenchmark(BaseBenchmark):
     
     def __init__(self):
         super().__init__()
+        self.output = None
     
     def setup(self) -> None:
         pass
@@ -91,6 +121,17 @@ class FailingBenchmark(BaseBenchmark):
     
     def validate_result(self) -> Optional[str]:
         return None
+    
+    def get_verify_inputs(self):
+        return {"input": torch.tensor([0.0], device=self.device)}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 class TestSubprocessTimeoutKill:
@@ -391,7 +432,16 @@ class TestErrorHandling:
         """Test benchmark that doesn't implement setup."""
         class NoSetupBenchmark(BaseBenchmark):
             def benchmark_fn(self) -> None:
-                pass
+                self.output = torch.tensor([1.0], device=self.device)
+            
+            def get_verify_inputs(self):
+                return {"input": torch.tensor([1.0], device=self.device)}
+            
+            def get_verify_output(self):
+                return getattr(self, "output", torch.tensor([1.0], device=self.device))
+            
+            def get_output_tolerance(self):
+                return (1e-5, 1e-8)
         
         benchmark = NoSetupBenchmark()
         config = BenchmarkConfig(iterations=5, warmup=5, enable_profiling=False, use_subprocess=False)
@@ -406,9 +456,19 @@ class TestErrorHandling:
         class InvalidBenchmark(BaseBenchmark):
             def benchmark_fn(self) -> None:
                 self.tensor = torch.randn(10, 10, device=self.device)
+                self.output = self.tensor
             
             def validate_result(self) -> Optional[str]:
                 return "Validation failed"
+            
+            def get_verify_inputs(self):
+                return {"input": self.tensor}
+            
+            def get_verify_output(self):
+                return getattr(self, "output", self.tensor)
+            
+            def get_output_tolerance(self):
+                return (1e-5, 1e-8)
         
         benchmark = InvalidBenchmark()
         config = BenchmarkConfig(iterations=5, warmup=5, enable_profiling=False, use_subprocess=False)

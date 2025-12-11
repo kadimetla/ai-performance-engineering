@@ -33,6 +33,7 @@ class BaselineEndToEndBandwidthBenchmark(BaseBenchmark):
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[list[torch.Tensor]] = None
         self.outputs: Optional[list[torch.Tensor]] = None
+        self.output: Optional[torch.Tensor] = None
         self.batch_size = 32
         self.hidden_dim = 1024
         self.num_batches = 10
@@ -50,6 +51,7 @@ class BaselineEndToEndBandwidthBenchmark(BaseBenchmark):
             for _ in range(self.num_batches)
         ]
         self.outputs = []
+        self.output = None
         for inp in self.inputs[:3]:
             _ = self.model(inp)
         self._synchronize()
@@ -62,6 +64,10 @@ class BaselineEndToEndBandwidthBenchmark(BaseBenchmark):
                 for inp in self.inputs:
                     out = self.model(inp)
                     self.outputs.append(out)
+            if self.outputs:
+                self.output = torch.stack(self.outputs)
+            else:
+                self.output = None
             self._synchronize()
     
     def teardown(self) -> None:
@@ -100,9 +106,15 @@ class BaselineEndToEndBandwidthBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.outputs is None:
+        if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.outputs.detach().clone()
+        return self.output.detach().clone()
+
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return stacked inputs for aliasing checks."""
+        if self.inputs is None:
+            raise RuntimeError("setup() must be called before verification")
+        return torch.stack(self.inputs)
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

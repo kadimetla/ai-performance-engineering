@@ -21,6 +21,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.metrics import compute_memory_transfer_metrics
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 def symmetric_memory_available() -> bool:
@@ -45,7 +46,7 @@ def init_distributed() -> Tuple[int, int, int]:
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
 
-class OptimizedSymmetricMemoryPerfBenchmark(BaseBenchmark):
+class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized SymmetricMemory peer-put benchmark for direct GPU memory access."""
 
     def __init__(self, size_mb: float = 16.0):
@@ -88,6 +89,20 @@ class OptimizedSymmetricMemoryPerfBenchmark(BaseBenchmark):
         self.peer_buffer = self.handle.get_buffer(self.peer_rank)
         
         torch.cuda.synchronize()
+        probe = torch.ones(16, device=device, dtype=torch.float32)
+        output = torch.zeros(1, device=device, dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.numel(),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
 
     def benchmark_fn(self) -> Optional[Dict[str, float]]:
         """Run direct peer copy via SymmetricMemory and measure performance."""
@@ -152,11 +167,11 @@ class OptimizedSymmetricMemoryPerfBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"size_mb": self.size_mb}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

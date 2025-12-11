@@ -25,6 +25,7 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -270,12 +271,26 @@ def run_benchmark(
     }
 
 
-class _PipelineParallel1F1BBenchmark(BaseBenchmark):
+class _PipelineParallel1F1BBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrapper benchmark for 1F1B pipeline parallel - requires multi-GPU."""
 
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
+        probe = torch.zeros(1, device=self.device)
+        output = torch.zeros(1, device=self.device)
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
 
     def benchmark_fn(self) -> None:
         raise RuntimeError("SKIPPED: optimized_pipeline_parallel_1f1b requires >=2 GPUs")
@@ -284,10 +299,10 @@ class _PipelineParallel1F1BBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=1, warmup=5, multi_gpu_required=True)
 
     def get_verify_output(self) -> torch.Tensor:
-        return torch.tensor([0.0], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
-        return {"type": "pipeline_parallel_1f1b"}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         return (0.1, 1.0)

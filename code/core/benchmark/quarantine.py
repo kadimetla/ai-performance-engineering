@@ -17,7 +17,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from core.benchmark.verification import QuarantineReason, QuarantineRecord
+import torch
+
+from core.benchmark.verification import (
+    QuarantineReason,
+    QuarantineRecord,
+    coerce_input_signature,
+)
 
 
 # Default quarantine cache location
@@ -297,8 +303,7 @@ def check_benchmark_compliance(benchmark: Any) -> List[QuarantineReason]:
         # Try calling it to ensure it returns a valid signature
         try:
             sig = benchmark.get_input_signature()
-            if sig is None or (isinstance(sig, dict) and not sig):
-                issues.append(QuarantineReason.MISSING_INPUT_SIGNATURE)
+            coerce_input_signature(sig)
         except Exception:
             issues.append(QuarantineReason.MISSING_INPUT_SIGNATURE)
     
@@ -327,7 +332,12 @@ def check_benchmark_compliance(benchmark: Any) -> List[QuarantineReason]:
     else:
         try:
             inputs = benchmark.get_verify_inputs()
-            if inputs is None:
+            tensors_present = False
+            if isinstance(inputs, torch.Tensor):
+                tensors_present = True
+            elif isinstance(inputs, dict):
+                tensors_present = any(isinstance(v, torch.Tensor) for v in inputs.values())
+            if not tensors_present:
                 issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)
         except Exception:
             issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)

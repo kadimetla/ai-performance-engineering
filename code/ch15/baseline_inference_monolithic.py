@@ -25,6 +25,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
     WorkloadMetadata,
 )
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
 class SimpleLLM(nn.Module):
@@ -59,7 +60,7 @@ class SimpleLLM(nn.Module):
         return torch.cat(outputs, dim=1)
 
 
-class BaselineInferenceMonolithicBenchmark(BaseBenchmark):
+class BaselineInferenceMonolithicBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Monolithic inference baseline using the shared harness conventions."""
     
     def __init__(self):
@@ -77,6 +78,7 @@ class BaselineInferenceMonolithicBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=self.prefill_seq + self.num_tokens,
         )
+        self._verify_prompt: Optional[torch.Tensor] = None
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
@@ -88,6 +90,7 @@ class BaselineInferenceMonolithicBenchmark(BaseBenchmark):
         with torch.no_grad():
             self.kv_cache = self.model.prefill(self.prompt)
         torch.cuda.synchronize(self.device)
+        self._verify_prompt = torch.randint(0, 10000, (1, 32), device=self.device)
     
     def benchmark_fn(self) -> Optional[dict]:
         if self.model is None or self.prompt is None:
@@ -123,6 +126,20 @@ class BaselineInferenceMonolithicBenchmark(BaseBenchmark):
                 self._history["tpot"].extend(tpot_times_ms)
                 # Capture the full decoded sequence for verification
                 self.output = torch.cat(decoded_tokens, dim=1).detach().clone()
+                if self._verify_prompt is not None:
+                    self._set_verification_payload(
+                        inputs={"prompt": self._verify_prompt},
+                        output=self.output,
+                        batch_size=int(self._verify_prompt.shape[0]),
+                        parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+                        precision_flags={
+                            "fp16": False,
+                            "bf16": True,
+                            "fp8": False,
+                            "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                        },
+                        output_tolerance=(1e-3, 1e-3),
+                    )
                 return {
                     "ttft_times_ms": [ttft_ms],
                     "tpot_times_ms": tpot_times_ms,
@@ -158,20 +175,15 @@ class BaselineInferenceMonolithicBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {
-            "batch_size": self.batch_size,
-            "num_tokens": self.num_tokens,
-        }
+        return super().get_input_signature()
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
+        return super().get_verify_output()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
+import torch
+
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -16,9 +18,10 @@ from ch15.placement_sim import (  # noqa: E402
     PlacementSimulator,
     percentile,
 )
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
-class _PlacementBenchmark(BaseBenchmark):
+class _PlacementBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Shared scaffolding for placement simulations."""
 
     def __init__(self, cfg: PlacementConfig, prefix: str) -> None:
@@ -29,21 +32,22 @@ class _PlacementBenchmark(BaseBenchmark):
         self._summary: Dict[str, float] = {}
         self.output = None  # Simulation metrics as tensor
         self.register_workload_metadata(requests_per_iteration=1.0)
+        self._verify_cfg = torch.tensor(
+            [cfg.prefill_tp_size, cfg.decode_tp_size, cfg.decode_microbatch],
+            dtype=torch.int64,
+        )
 
     def get_verify_output(self) -> torch.Tensor:
         """Return simulation metrics as tensor for verification."""
-        import torch
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.clone()
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"prefix": self.prefix}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return super().get_output_tolerance()
 
     def setup(self) -> None:
         torch_backend = self.cfg.dtype
@@ -73,11 +77,23 @@ class _PlacementBenchmark(BaseBenchmark):
             f"{self.prefix}.remote_expert_ms": run.remote_expert_ms,
         }
         # Capture simulation metrics as tensor for verification
-        import torch
         self.output = torch.tensor([
             ttft_p50, ttft_p95, decode_p50, decode_p95, tput_tokens_s,
             float(run.cross_node_kv_moves), float(run.cross_node_collectives),
         ], dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"config": self._verify_cfg},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def get_config(self) -> Optional[BenchmarkConfig]:
         return BenchmarkConfig(

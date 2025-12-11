@@ -155,6 +155,12 @@ class OptimizedTrainingDistributedBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
         return self.output.detach().clone()
+    
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return fixed verification input for aliasing checks."""
+        if self._verify_input is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self._verify_input
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

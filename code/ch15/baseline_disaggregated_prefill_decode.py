@@ -21,6 +21,7 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -151,7 +152,7 @@ def run_benchmark(
     return {"mean_time_ms": result.timing.mean_ms, **metrics}
 
 
-class _DisaggregatedPrefillDecodeBenchmark(BaseBenchmark):
+class _DisaggregatedPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrapper benchmark for disaggregated prefill/decode."""
 
     def __init__(self) -> None:
@@ -162,6 +163,26 @@ class _DisaggregatedPrefillDecodeBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         self._impl.setup()
+        probe = torch.zeros(1, device=self.device)
+        output = torch.zeros(1, device=self.device)
+        param_count = 0
+        if hasattr(self._impl, "prefill_model"):
+            param_count += sum(p.numel() for p in self._impl.prefill_model.parameters())
+        if hasattr(self._impl, "decode_model"):
+            param_count += sum(p.numel() for p in self._impl.decode_model.parameters())
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=1,
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def benchmark_fn(self) -> None:
         self._metrics = self._impl.run()
@@ -174,13 +195,13 @@ class _DisaggregatedPrefillDecodeBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=3, warmup=5)
 
     def get_verify_output(self) -> torch.Tensor:
-        raise RuntimeError("Multi-GPU required - verification not supported on single GPU")
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
-        return {"type": "disaggregated_prefill_decode_baseline"}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
+        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

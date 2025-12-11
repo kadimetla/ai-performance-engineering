@@ -13,9 +13,10 @@ import torch
 import torch.nn as nn
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-class BaselineOptimizerReplicatedBenchmark(BaseBenchmark):
+class BaselineOptimizerReplicatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Replicated optimizer state per GPU."""
 
     def __init__(self):
@@ -39,6 +40,21 @@ class BaselineOptimizerReplicatedBenchmark(BaseBenchmark):
             buf = torch.zeros_like(model.weight, dtype=torch.float32, device=device)
             self.models.append(model)
             self.momentum.append(buf)
+        probe_device = self.models[0].weight.device if self.models else self.device
+        probe = torch.randn(4, self.hidden, device=probe_device)
+        output = torch.zeros(4, self.hidden, device=probe_device, dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.shape[0],
+            parameter_count=sum(p.numel() for m in self.models for p in m.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -84,11 +100,11 @@ class BaselineOptimizerReplicatedBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "hidden": self.hidden}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

@@ -48,6 +48,7 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.x: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.batch_size = 128
         self.hidden_dim = 2048  # Match baseline
         tokens = self.batch_size * self.hidden_dim
@@ -64,6 +65,7 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         self.model = OptimizedModel(hidden_dim=self.hidden_dim).to(self.device, dtype=dtype).eval()
         self.x = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=dtype)
+        self.output = None
         
         # Warmup
         for _ in range(10):
@@ -114,6 +116,12 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
         return self.output.detach().clone()
+    
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return input tensor for aliasing checks."""
+        if self.x is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self.x
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

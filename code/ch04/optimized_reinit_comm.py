@@ -35,8 +35,9 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
-class OptimizedReinitCommBenchmark(BaseBenchmark):
+class OptimizedReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Initialize NCCL once and reuse - good pattern."""
     
     def __init__(self):
@@ -65,6 +66,20 @@ class OptimizedReinitCommBenchmark(BaseBenchmark):
         torch.cuda.set_device(local_rank)
         self.tensor = torch.ones(1, device=self.device)
         torch.cuda.synchronize(self.device)
+        probe = torch.ones(1, device=self.device, dtype=torch.float32)
+        output = torch.zeros(1, device=self.device, dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"tensor": probe},
+            output=output,
+            batch_size=probe.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Reuse existing NCCL communicator."""
@@ -122,11 +137,11 @@ class OptimizedReinitCommBenchmark(BaseBenchmark):
         return None
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"type": "reinit_comm_optimized"}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

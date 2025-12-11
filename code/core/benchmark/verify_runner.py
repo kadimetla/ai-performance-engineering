@@ -36,6 +36,7 @@ from core.benchmark.verification import (
     QuarantineReason,
     ToleranceSpec,
     VerifyResult,
+    coerce_input_signature,
     compare_workload_metrics,
     detect_seed_mutation,
     get_enforcement_phase,
@@ -514,53 +515,7 @@ class VerifyRunner:
         if sig_dict is None:
             raise ValueError(f"{benchmark.__class__.__name__}.get_input_signature() returned None")
         
-        if isinstance(sig_dict, InputSignature):
-            errors = sig_dict.validate(strict=True)
-            if errors:
-                raise ValueError(f"Invalid InputSignature: {errors[0]}")
-            return sig_dict
-        
-        if not isinstance(sig_dict, dict):
-            raise TypeError(
-                f"{benchmark.__class__.__name__}.get_input_signature() must return InputSignature or dict, got {type(sig_dict)}"
-            )
-        
-        if not sig_dict.get("shapes") or not sig_dict.get("dtypes"):
-            raise ValueError("Input signature must include non-empty 'shapes' and 'dtypes'")
-        if "batch_size" not in sig_dict or "parameter_count" not in sig_dict:
-            raise ValueError("Input signature must include 'batch_size' and 'parameter_count'")
-        
-        shapes = {k: tuple(v) if isinstance(v, list) else tuple(v) for k, v in sig_dict["shapes"].items()}
-        dtypes = sig_dict["dtypes"]
-        precision = PrecisionFlags(
-            fp16=bool(sig_dict.get("fp16", False)),
-            bf16=bool(sig_dict.get("bf16", False)),
-            fp8=bool(sig_dict.get("fp8", False)),
-            tf32=bool(sig_dict.get("tf32", True)),
-        )
-        
-        signature = InputSignature(
-            shapes=shapes,
-            dtypes=dtypes,
-            batch_size=int(sig_dict["batch_size"]),
-            parameter_count=int(sig_dict["parameter_count"]),
-            precision_flags=precision,
-            world_size=sig_dict.get("world_size"),
-            ranks=sig_dict.get("ranks"),
-            shards=sig_dict.get("shards"),
-            pipeline_stages=sig_dict.get("pipeline_stages"),
-            per_rank_batch_size=sig_dict.get("per_rank_batch_size"),
-            collective_type=sig_dict.get("collective_type"),
-            num_streams=sig_dict.get("num_streams"),
-            graph_capture_enabled=sig_dict.get("graph_capture_enabled"),
-            pruning_enabled=sig_dict.get("pruning_enabled"),
-            sparsity_ratio=sig_dict.get("sparsity_ratio"),
-            quantization_mode=sig_dict.get("quantization_mode"),
-        )
-        errors = signature.validate(strict=True)
-        if errors:
-            raise ValueError(f"Invalid InputSignature: {errors[0]}")
-        return signature
+        return coerce_input_signature(sig_dict)
     
     def _extract_workload_metrics(self, benchmark: Any) -> Dict[str, float]:
         """Extract workload metrics from a benchmark.
@@ -728,15 +683,31 @@ class VerifyRunner:
         stream_auditor = None
         pre_streams: List[int] = []
         audit_ctx = nullcontext()
+        declared_streams: List[Any] = []
         if torch.cuda.is_available():
             from core.harness.validity_checks import audit_streams, get_active_streams
+            if hasattr(benchmark, "get_custom_streams"):
+                try:
+                    custom_streams = benchmark.get_custom_streams()
+                    if custom_streams:
+                        declared_streams = [custom_streams] if isinstance(custom_streams, torch.cuda.Stream) else list(custom_streams)
+                except Exception as exc:
+                    raise RuntimeError(f"get_custom_streams() failed during verification: {exc}")
             audit_ctx = audit_streams(getattr(benchmark, "device", None))
-            pre_streams = get_active_streams(getattr(benchmark, "device", None))
+            pre_streams = get_active_streams(getattr(benchmark, "device", None), declared_streams)
         
         try:
             # Run benchmark function under stream audit when CUDA is available
             with audit_ctx as stream_auditor:
+                if stream_auditor is not None:
+                    for stream in declared_streams:
+                        stream_auditor.record_stream_event(stream, operation="declared_stream")
                 benchmark.benchmark_fn()
+                if hasattr(benchmark, "mark_execution_complete"):
+                    try:
+                        benchmark.mark_execution_complete()
+                    except Exception:
+                        pass
             
             # Sync CUDA
             if torch.cuda.is_available():
@@ -753,7 +724,7 @@ class VerifyRunner:
             # Stream audit check for verification path
             if stream_auditor is not None:
                 from core.harness.validity_checks import check_stream_sync_completeness, get_active_streams
-                post_streams = get_active_streams(getattr(benchmark, "device", None))
+                post_streams = get_active_streams(getattr(benchmark, "device", None), declared_streams)
                 sync_complete, sync_warning = check_stream_sync_completeness(pre_streams, post_streams)
                 audit_ok, audit_warnings = stream_auditor.check_issues()
                 issues: List[str] = []
@@ -761,6 +732,18 @@ class VerifyRunner:
                     issues.append("Stream synchronization incomplete during verification run")
                 if sync_warning:
                     issues.append(sync_warning)
+                try:
+                    info = stream_auditor.get_info()
+                    declared_ids = set(post_streams)
+                    if info.default_stream_id is not None:
+                        declared_ids.add(info.default_stream_id)
+                    undeclared_streams = info.stream_ids - declared_ids
+                    if undeclared_streams:
+                        issues.append(
+                            f"UNDECLARED STREAMS during verification: {len(undeclared_streams)} stream(s) not declared via get_custom_streams()."
+                        )
+                except Exception:
+                    pass
                 if not audit_ok or audit_warnings:
                     issues.extend(audit_warnings)
                 if issues:

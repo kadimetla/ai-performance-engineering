@@ -86,7 +86,13 @@ class OptimizedMemoryHBM3eBenchmark(BaseBenchmark):
         """Return output tensor for verification."""
         if self.output is None:
             raise RuntimeError("Output not available - run benchmark first")
-        return self.output
+        return self.output.detach().clone()
+
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return input tensor for aliasing checks."""
+        if self.data is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self.data
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

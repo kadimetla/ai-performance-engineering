@@ -13,9 +13,11 @@ import torch
 
 from ch04.symmetric_memory_example import main as symmetric_memory_main
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from ch04.verification_payload_mixin import VerificationPayloadMixin
+from typing import Optional
 
 
-class SymmetricMemoryMultiGPU(BaseBenchmark):
+class SymmetricMemoryMultiGPU(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
@@ -23,6 +25,20 @@ class SymmetricMemoryMultiGPU(BaseBenchmark):
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: symmetric_memory requires >=2 GPUs")
+        probe = torch.arange(4, device=self.device, dtype=torch.float32)
+        output = torch.zeros(1, device=self.device, dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.numel(),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
 
     def benchmark_fn(self) -> None:
         symmetric_memory_main()
@@ -41,11 +57,11 @@ class SymmetricMemoryMultiGPU(BaseBenchmark):
         )
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"type": "symmetric_memory"}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

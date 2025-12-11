@@ -26,6 +26,7 @@ class BaselineFP4HardwareKernelBenchmark(BaseBenchmark):
         self.chapter_dir = Path(__file__).parent
         self.bin_path = self.chapter_dir / "baseline_fp4_hardware_kernel"
         self.output = None
+        self._verify_input = None
 
     def setup(self) -> None:
         # Build without arch suffix so we know the binary name deterministically.
@@ -35,6 +36,9 @@ class BaselineFP4HardwareKernelBenchmark(BaseBenchmark):
                 cwd=self.chapter_dir,
                 check=True,
             )
+        # Dummy input tensor for aliasing checks (binary benchmarks have no inputs)
+        import torch
+        self._verify_input = torch.tensor([0.0], dtype=torch.float32)
 
     def benchmark_fn(self) -> None:
         with self._nvtx_range("baseline_fp4_hardware_kernel"):
@@ -72,6 +76,16 @@ class BaselineFP4HardwareKernelBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
         return self.output.detach().clone()
+
+    def get_verify_inputs(self) -> "torch.Tensor":
+        """Return placeholder input tensor for aliasing checks."""
+        if self._verify_input is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self._verify_input
+
+    def get_output_tolerance(self) -> tuple:
+        """Tight tolerance: deterministic reference matmul output."""
+        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaselineFP4HardwareKernelBenchmark:

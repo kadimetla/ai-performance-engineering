@@ -90,6 +90,13 @@ class BenchmarkDefaults:
     enable_nvtx: Optional[bool] = None  # Auto-enabled if profiling enabled
     # Free allocator state between benchmarks by default.
     enable_cleanup: bool = True
+    clear_l2_cache: bool = True
+    clear_compile_cache: bool = True
+    reset_memory_pool: bool = True
+    adaptive_iterations: bool = True
+    audit_stream_sync: bool = True
+    min_total_duration_ms: float = 100.0
+    max_adaptive_iterations: int = 10000
     # Prefer subprocess isolation by default; fall back to thread mode when explicitly requested.
     use_subprocess: bool = True
     execution_mode: Optional[str] = None
@@ -155,6 +162,13 @@ class BenchmarkDefaults:
             "enable_proton": self.enable_proton,
             "enable_nvtx": self.enable_nvtx,
             "enable_cleanup": self.enable_cleanup,
+            "clear_l2_cache": self.clear_l2_cache,
+            "clear_compile_cache": self.clear_compile_cache,
+            "reset_memory_pool": self.reset_memory_pool,
+            "adaptive_iterations": self.adaptive_iterations,
+            "audit_stream_sync": self.audit_stream_sync,
+            "min_total_duration_ms": self.min_total_duration_ms,
+            "max_adaptive_iterations": self.max_adaptive_iterations,
             "use_subprocess": self.use_subprocess,
             "execution_mode": self.execution_mode,
             "launch_via": self.launch_via,

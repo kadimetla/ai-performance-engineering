@@ -25,9 +25,26 @@ class OptimizedContinuousBatchingBenchmark(_OptimizedContinuousBatchingBenchmark
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: requires >=2 GPUs")
         super().setup()
+        if self.batches:
+            self._verify_inputs = {"tokens": self.batches[0][:1].detach().clone()}
+        else:
+            self._verify_inputs = {"tokens": torch.zeros((1, self.hidden_dim), device=self.device)}
 
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
+
+    def get_verify_inputs(self) -> dict:
+        return {k: v.detach().clone() for k, v in getattr(self, "_verify_inputs", {}).items()}
+
+    def get_input_signature(self) -> dict:
+        batch_shape = tuple(self._verify_inputs["tokens"].shape) if hasattr(self, "_verify_inputs") else (1, self.hidden_dim)
+        return {
+            "batch_size": self.batch_size,
+            "num_batches": self.num_batches,
+            "hidden_dim": self.hidden_dim,
+            "shapes": {"tokens": batch_shape, "output": tuple(self.output.shape) if self.output is not None else (0,)},
+            "dtypes": {"tokens": "float32"},
+        }
 
 
 

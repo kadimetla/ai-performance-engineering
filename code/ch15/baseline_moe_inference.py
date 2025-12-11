@@ -33,9 +33,10 @@ from core.optimization.moe_inference import (  # noqa: E402
     env_override_float,
     env_override_int,
 )
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
-class BaselineMoeInferenceBenchmark(BaseBenchmark):
+class BaselineMoeInferenceBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Implements the HuggingFace-style baseline described in the MoE showcase doc."""
 
     def __init__(self) -> None:
@@ -66,6 +67,7 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
         self._mem_log_path: Optional[Path] = None
         self._nvlink_warned: bool = False
         self._nvlink_status: str = "unknown"
+        self._verify_prompt: Optional[torch.Tensor] = None
 
     def _build_config(self) -> MoeInferenceConfig:
         """Allow environment overrides to keep the workload tractable on smaller GPUs."""
@@ -117,6 +119,13 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
             if logger.start():
                 self._mem_logger = logger
                 self._mem_log_path = log_path
+        probe_len = min(8, cfg.context_window)
+        self._verify_prompt = torch.randint(
+            0,
+            cfg.vocab_size,
+            (1, probe_len),
+            device=self.device,
+        )
 
     # --------------------------------------------------------------- benchmark_fn
     def benchmark_fn(self) -> Dict[str, List[float]]:
@@ -156,6 +165,7 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
                     seed_tokens = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
             # Capture the final token ids for verification
             self.output = seed_tokens.detach().float().clone()
+            self._finalize_verification_payload()
 
         telemetry_after = query_gpu_telemetry(logical_index)
 
@@ -244,17 +254,36 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.config.batch_size, "num_experts": self.config.num_experts}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return super().get_output_tolerance()
+
+    def _finalize_verification_payload(self) -> None:
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must populate self.output before verification")
+        if self._verify_prompt is None:
+            raise RuntimeError("setup() must create _verify_prompt for verification")
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        precision_flags = {
+            "fp16": self.config.dtype_obj == torch.float16,
+            "bf16": self.config.dtype_obj == torch.bfloat16,
+            "fp8": False,
+            "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+        }
+        self._set_verification_payload(
+            inputs={"prompt": self._verify_prompt},
+            output=self.output.detach().clone(),
+            batch_size=int(self._verify_prompt.shape[0]),
+            parameter_count=param_count,
+            precision_flags=precision_flags,
+            output_tolerance=(1e-3, 1e-3),
+        )
 
 
 def get_benchmark() -> BaseBenchmark:

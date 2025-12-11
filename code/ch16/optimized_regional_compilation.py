@@ -23,6 +23,7 @@ if str(repo_root) not in sys.path:
 
 from core.utils import compile_utils as _compile_utils_patch  # noqa: F401
 from core.utils.compile_utils import enable_tf32, maybe_nested_compile_region
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -98,7 +99,7 @@ def _run_block(block: nn.Module, x: torch.Tensor) -> torch.Tensor:
 GraphCacheEntry = Tuple["torch.cuda.CUDAGraph", torch.Tensor, torch.Tensor]
 
 
-class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
+class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Regional compilation via CUDA graph capture for a fixed bucket."""
 
     def __init__(self):
@@ -116,6 +117,7 @@ class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
         self.transfer_stream: Optional[torch.cuda.Stream] = None
         self.graph_cache: Dict[int, GraphCacheEntry] = {}
         self._verify_input: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
@@ -130,6 +132,7 @@ class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
             d_ff=candidate["d_ff"],
         ).to(self.device, dtype=torch.bfloat16).eval()
         self.model = model
+        self.parameter_count = sum(p.numel() for p in model.parameters())
         self._configure_runtime()
         self.transfer_stream = torch.cuda.Stream()
         self.input_buffer = torch.empty(
@@ -233,9 +236,21 @@ class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
                 with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                     self.output = self.model(self.input_buffer[:, :seq_len])
             torch.cuda.synchronize()
-        if self._verify_input is not None and self.model is not None:
-            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                self.output = self.model(self._verify_input[:, :seq_len]).detach().float().clone()
+        if self._verify_input is None or self.model is None:
+            raise RuntimeError("Verification input or model missing")
+
+        verify_input = self._verify_input[:, :seq_len]
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            self.output = self.model(verify_input).detach().float().clone()
+
+        self._set_verification_payload(
+            inputs={"verify_input": verify_input},
+            output=self.output,
+            batch_size=1,
+            parameter_count=self.parameter_count,
+            precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def run(self, compare_eager: bool = False) -> torch.Tensor:
         """Run a single forward pass for demo/validation."""
@@ -287,6 +302,7 @@ class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
             setup_timeout_seconds=240,
             measurement_timeout_seconds=240,
             use_subprocess=False,
+            adaptive_iterations=False,
         )
 
     def get_custom_metrics(self) -> Optional[dict]:
@@ -306,19 +322,10 @@ class OptimizedRegionalCompilationBenchmark(BaseBenchmark):
             return "Model not initialized"
         return None
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"max_seq_len": self.max_seq_len, "d_model": self.d_model}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+    def get_custom_streams(self) -> List[torch.cuda.Stream]:
+        if self.transfer_stream is None:
+            return []
+        return [self.transfer_stream]
 
     def teardown(self) -> None:
         self.model = None

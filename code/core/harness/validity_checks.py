@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import statistics
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -222,12 +223,27 @@ def reset_cuda_memory_pool(device: Optional[Any] = None) -> None:
     
     torch.cuda.synchronize(device)
     torch.cuda.empty_cache()
+    try:
+        torch.cuda.ipc_collect()
+    except Exception:
+        pass
+    
+    # Best-effort reset of caching allocator state where supported
+    try:
+        if hasattr(torch, "_C") and hasattr(torch._C, "_cuda_cudaCachingAllocator_set_allocator_settings"):
+            torch._C._cuda_cudaCachingAllocator_set_allocator_settings("reset_allocator:True")
+    except Exception:
+        pass
     
     # Also reset the memory stats
     if hasattr(torch.cuda, 'reset_peak_memory_stats'):
         torch.cuda.reset_peak_memory_stats(device)
     if hasattr(torch.cuda, 'reset_accumulated_memory_stats'):
         torch.cuda.reset_accumulated_memory_stats(device)
+    
+    import gc
+    gc.collect()
+    torch.cuda.synchronize(device)
 
 
 # =============================================================================
@@ -609,11 +625,27 @@ def track_memory_allocations(device: Optional[Any] = None):
 # CUDA Stream Auditing
 # =============================================================================
 
+
+def _resolve_stream_id(stream: Any) -> Optional[int]:
+    """Return a stable identifier for a CUDA stream."""
+    if stream is None:
+        return None
+    try:
+        if hasattr(stream, "cuda_stream"):
+            return int(stream.cuda_stream)
+    except Exception:
+        return None
+    try:
+        return int(id(stream))
+    except Exception:
+        return None
+
 @dataclass
 class StreamUsageInfo:
     """Information about CUDA stream usage during benchmark."""
     default_stream_ops: int = 0
     custom_streams_detected: int = 0
+    default_stream_id: Optional[int] = None
     stream_ids: Set[int] = None
     sync_operations: int = 0
     unsync_warning: bool = False
@@ -702,7 +734,9 @@ class StreamAuditor:
             return
         
         import time
-        stream_id = stream.cuda_stream if hasattr(stream, 'cuda_stream') else id(stream)
+        stream_id = _resolve_stream_id(stream)
+        if stream_id is None:
+            return
         self._observed_streams.add(stream_id)
         
         self._stream_events.append({
@@ -744,6 +778,7 @@ class StreamAuditor:
         info = StreamUsageInfo()
         
         if self._default_stream_id is not None:
+            info.default_stream_id = self._default_stream_id
             info.default_stream_ops = sum(
                 1 for e in self._stream_events 
                 if e["is_default"] is True and e["operation"] != "sync_device"
@@ -804,7 +839,7 @@ def audit_streams(device: Optional[Any] = None):
         auditor.stop()
 
 
-def get_active_streams(device: Optional[Any] = None) -> List[int]:
+def get_active_streams(device: Optional[Any] = None, declared_streams: Optional[List[Any]] = None) -> List[int]:
     """Get list of active CUDA streams on a device.
     
     Note: This uses internal PyTorch APIs and may not be comprehensive.
@@ -812,13 +847,19 @@ def get_active_streams(device: Optional[Any] = None) -> List[int]:
     if torch is None or not torch.cuda.is_available():
         return []
     
-    streams = []
+    streams: Set[int] = set()
     
     # Get default stream
     default_stream = torch.cuda.current_stream(device)
-    streams.append(default_stream.cuda_stream)
+    streams.add(int(default_stream.cuda_stream))
     
-    return streams
+    if declared_streams:
+        for stream in declared_streams:
+            stream_id = _resolve_stream_id(stream)
+            if stream_id is not None:
+                streams.add(stream_id)
+    
+    return list(streams)
 
 
 def check_stream_sync_completeness(
@@ -1004,6 +1045,17 @@ def check_rank_execution(
     if hasattr(benchmark, '_skip_rank') and benchmark._skip_rank:
         return False, f"Rank {rank} has _skip_rank=True"
     
+    marker = getattr(benchmark, "_execution_marker", None)
+    if marker is not None:
+        try:
+            if torch is not None and isinstance(marker, torch.Tensor):
+                if marker.numel() == 0 or not bool(marker.detach().cpu().sum().item()):
+                    return False, f"Rank {rank} execution marker empty"
+                return True, None
+            return False, f"Rank {rank} execution marker invalid type ({type(marker)})"
+        except Exception as exc:
+            return False, f"Rank {rank} execution marker check failed: {exc}"
+    
     # Check if benchmark has output (indicates execution)
     if hasattr(benchmark, 'get_verify_output'):
         try:
@@ -1176,6 +1228,18 @@ class GraphCaptureCheatDetector:
                     f"SUSPICIOUS REPLAY TIME: Minimum replay time ({min_replay*1000:.3f}μs) "
                     "is near-zero. Graph may be empty or doing no actual work."
                 )
+        
+        # Check 4: High variance across replays (should be stable for real graphs)
+        if len(self.replay_times) >= 3:
+            mean_replay = statistics.mean(self.replay_times)
+            std_replay = statistics.pstdev(self.replay_times)
+            if mean_replay > 0:
+                cv = std_replay / mean_replay
+                if cv > 0.5:
+                    warnings_list.append(
+                        f"REPLAY VARIANCE: Replay times vary too much (CV={cv:.2f}). "
+                        "Real graph replay should be consistent."
+                    )
         
         if warnings_list:
             return True, " | ".join(warnings_list)

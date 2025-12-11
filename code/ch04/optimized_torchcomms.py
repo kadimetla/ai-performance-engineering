@@ -36,6 +36,7 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 def _init_distributed_if_needed() -> bool:
@@ -68,7 +69,7 @@ except ImportError:
     functional_all_gather = None
 
 
-class OptimizedTorchcommsBenchmark(BaseBenchmark):
+class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Modern torchcomms async-first patterns.
     
     Demonstrates modern PyTorch distributed communication:
@@ -137,6 +138,21 @@ class OptimizedTorchcommsBenchmark(BaseBenchmark):
         self._bytes_transferred = 2 * self.input.numel() * self.input.element_size()
         
         torch.cuda.synchronize(self.device)
+        probe = torch.randn(4, self.hidden, device=self.device)
+        output = torch.zeros(4, self.hidden, device=self.device, dtype=torch.float32)
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=output,
+            batch_size=probe.shape[0],
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
     
     def _async_all_reduce(self, tensor: torch.Tensor) -> torch.Tensor:
         """Perform async all-reduce using functional collectives.
@@ -278,13 +294,11 @@ class OptimizedTorchcommsBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
+        return super().get_verify_output()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch": self.batch, "hidden": self.hidden}
+        return super().get_input_signature()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
@@ -295,10 +309,24 @@ def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
     if gpu_count < 2:
-        class _SkipBenchmark(BaseBenchmark):
+        class _SkipBenchmark(VerificationPayloadMixin, BaseBenchmark):
             def __init__(self) -> None:
                 super().__init__()
                 self.register_workload_metadata(requests_per_iteration=1.0)
+                probe = torch.zeros(1, device=self.device)
+                output = torch.zeros(1, device=self.device)
+                self._set_verification_payload(
+                    inputs={"probe": probe},
+                    output=output,
+                    batch_size=1,
+                    parameter_count=0,
+                    precision_flags={
+                        "fp16": False,
+                        "bf16": False,
+                        "fp8": False,
+                        "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                    },
+                )
             def get_config(self) -> BenchmarkConfig:
                 return BenchmarkConfig(iterations=1, warmup=5)
             def benchmark_fn(self) -> None:
@@ -306,9 +334,9 @@ def get_benchmark() -> BaseBenchmark:
                     f"SKIPPED: torchcomms benchmark requires 2+ GPUs (found {gpu_count})"
                 )
             def get_verify_output(self) -> torch.Tensor:
-                return torch.tensor([0.0], dtype=torch.float32)
+                return super().get_verify_output()
             def get_input_signature(self) -> dict:
-                return {"type": "skip"}
+                return super().get_input_signature()
             def get_output_tolerance(self) -> tuple:
                 return (0.1, 1.0)
         return _SkipBenchmark()

@@ -666,6 +666,14 @@ class MockBenchmark:
         """
         return self.output
 
+    def get_output_tolerance(self) -> tuple:
+        """Return numeric tolerance for comparisons."""
+        return (1e-3, 1e-3)
+
+    def get_verify_inputs(self) -> Dict[str, torch.Tensor]:
+        """Return inputs for aliasing and signature checks."""
+        return {"input": torch.zeros(self._signature["shapes"]["input"])}
+
 
 class TestVerifyRunner:
     """Tests for VerifyRunner."""
@@ -1174,4 +1182,3 @@ class TestPropertyBasedGoldenOutput:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

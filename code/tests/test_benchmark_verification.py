@@ -40,6 +40,8 @@ class MockBenchmarkWithSignature(BaseBenchmark):
         self.seq_len = seq_len
         self.hidden_size = hidden_size
         self.data = None
+        self.output = None
+        self.output = None
     
     def setup(self):
         self.data = torch.randn(self.batch_size, self.seq_len, self.hidden_size, device=self.device)
@@ -55,10 +57,26 @@ class MockBenchmarkWithSignature(BaseBenchmark):
     def get_input_signature(self):
         """Required: Return explicit input signature."""
         return {
+            "shapes": {"input": (self.batch_size, self.seq_len, self.hidden_size)},
+            "dtypes": {"input": "torch.float32"},
             "batch_size": self.batch_size,
+            "parameter_count": self.batch_size * self.seq_len * self.hidden_size,
             "seq_len": self.seq_len,
             "hidden_size": self.hidden_size,
         }
+    
+    def get_verify_inputs(self):
+        if self.data is None:
+            raise RuntimeError("Data not initialized")
+        return {"input": self.data}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 class MockBenchmarkDifferentWorkload(BaseBenchmark):
@@ -85,10 +103,26 @@ class MockBenchmarkDifferentWorkload(BaseBenchmark):
     def get_input_signature(self):
         """Required: Return explicit input signature."""
         return {
+            "shapes": {"input": (self.batch_size, self.seq_len, self.hidden_size)},
+            "dtypes": {"input": "torch.float32"},
             "batch_size": self.batch_size,
+            "parameter_count": self.batch_size * self.seq_len * self.hidden_size,
             "seq_len": self.seq_len,
             "hidden_size": self.hidden_size,
         }
+    
+    def get_verify_inputs(self):
+        if self.data is None:
+            raise RuntimeError("Data not initialized")
+        return {"input": self.data}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 class MockBenchmarkSkipsInputVerification(BaseBenchmark):
@@ -97,19 +131,39 @@ class MockBenchmarkSkipsInputVerification(BaseBenchmark):
     def __init__(self, batch_size=32):
         super().__init__()
         self.batch_size = batch_size
+        self.data = None
+        self.output = None
     
     def setup(self):
-        pass
+        self.data = torch.ones(self.batch_size, 1, device=self.device)
     
     def benchmark_fn(self):
-        pass
+        self.output = self.data * 3
     
     def skip_input_verification(self) -> bool:
         return True  # Opt out - this is NON-COMPLIANT in strict mode
     
     def get_input_signature(self):
         """Required even though skipping - demonstrates non-compliant pattern."""
-        return {"batch_size": self.batch_size}
+        return {
+            "shapes": {"input": (self.batch_size, 1)},
+            "dtypes": {"input": "torch.float32"},
+            "batch_size": self.batch_size,
+            "parameter_count": self.batch_size,
+        }
+    
+    def get_verify_inputs(self):
+        if self.data is None:
+            raise RuntimeError("Data not initialized")
+        return {"input": self.data}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 class MockBenchmarkSkipsOutputVerification(BaseBenchmark):
@@ -117,19 +171,39 @@ class MockBenchmarkSkipsOutputVerification(BaseBenchmark):
     
     def __init__(self):
         super().__init__()
+        self.data = None
+        self.output = None
     
     def setup(self):
-        pass
+        self.data = torch.ones(4, device=self.device)
     
     def benchmark_fn(self):
-        pass
+        self.output = self.data + 1
     
     def skip_output_verification(self) -> bool:
         return True  # Opt out - this is NON-COMPLIANT in strict mode
     
     def get_input_signature(self):
         """Required in strict mode."""
-        return {}
+        return {
+            "shapes": {"input": (4,)},
+            "dtypes": {"input": "torch.float32"},
+            "batch_size": 4,
+            "parameter_count": 4,
+        }
+    
+    def get_verify_inputs(self):
+        if self.data is None:
+            raise RuntimeError("Data not initialized")
+        return {"input": self.data}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 class MockBenchmarkNoSignature(BaseBenchmark):
@@ -138,16 +212,31 @@ class MockBenchmarkNoSignature(BaseBenchmark):
     def __init__(self):
         super().__init__()
         self._internal_size = 100  # Private, not captured
+        self.data = None
+        self.output = None
     
     def setup(self):
-        pass
+        self.data = torch.ones(2, device=self.device)
     
     def benchmark_fn(self):
-        pass
+        self.output = self.data * 2
     
     def get_input_signature(self):
         """Returns empty dict - this is NON-COMPLIANT in strict mode."""
         return {}  # Empty = non-compliant
+    
+    def get_verify_inputs(self):
+        if self.data is None:
+            raise RuntimeError("Data not initialized")
+        return {"input": self.data}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 class MockBenchmarkWithMatrixDims(BaseBenchmark):
@@ -158,16 +247,39 @@ class MockBenchmarkWithMatrixDims(BaseBenchmark):
         self.M = M
         self.N = N
         self.K = K
+        self.data = None
+        self.output = None
     
     def setup(self):
-        pass
+        self.data = torch.ones(self.M, self.N, self.K, device=self.device)
     
     def benchmark_fn(self):
-        pass
+        self.output = self.data
     
     def get_input_signature(self):
         """Required: Return explicit input signature."""
-        return {"M": self.M, "N": self.N, "K": self.K}
+        return {
+            "shapes": {"mat": (self.M, self.N, self.K)},
+            "dtypes": {"mat": "torch.float32"},
+            "batch_size": self.M,
+            "parameter_count": self.M * self.N * self.K,
+            "M": self.M,
+            "N": self.N,
+            "K": self.K,
+        }
+    
+    def get_verify_inputs(self):
+        if self.data is None:
+            raise RuntimeError("Data not initialized")
+        return {"mat": self.data}
+    
+    def get_verify_output(self):
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must set output")
+        return self.output
+    
+    def get_output_tolerance(self):
+        return (1e-5, 1e-8)
 
 
 # =============================================================================

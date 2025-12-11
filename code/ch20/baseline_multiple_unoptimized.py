@@ -48,6 +48,7 @@ class BaselineMultipleUnoptimizedBenchmark(BaseBenchmark):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.x: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.batch_size = 128
         self.hidden_dim = 2048  # Smaller to make differences more visible
         tokens = self.batch_size * self.hidden_dim
@@ -60,6 +61,7 @@ class BaselineMultipleUnoptimizedBenchmark(BaseBenchmark):
         # FP32 - no tensor core acceleration
         self.model = UnoptimizedModel(hidden_dim=self.hidden_dim).to(self.device).float().eval()
         self.x = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+        self.output = None
         # Warmup
         for _ in range(5):
             with torch.no_grad():
@@ -74,6 +76,7 @@ class BaselineMultipleUnoptimizedBenchmark(BaseBenchmark):
                 for _ in range(3):
                     out = self.model(self.x)
                     _ = out.sum()  # Force materialization
+                self.output = out.detach()
             self._synchronize()
     
     def teardown(self) -> None:
@@ -112,6 +115,12 @@ class BaselineMultipleUnoptimizedBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() must be called before verification")
         return self.output.detach().clone()
+    
+    def get_verify_inputs(self) -> torch.Tensor:
+        """Return input tensor for aliasing checks."""
+        if self.x is None:
+            raise RuntimeError("setup() must be called before verification")
+        return self.x
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

@@ -21,9 +21,10 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-class OptimizedGb200LocalityBenchmark(BaseBenchmark):
+class OptimizedGb200LocalityBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self, size_mb: float = 256.0):
         super().__init__()
         self.size_mb = size_mb
@@ -42,6 +43,20 @@ class OptimizedGb200LocalityBenchmark(BaseBenchmark):
         self.device_template = torch.ones(self.numel, device=self.device, dtype=torch.float32)
         self.device_buf = torch.empty_like(self.device_template)
         torch.cuda.synchronize(self.device)
+        probe = torch.ones(64, dtype=torch.float32, device=self.device)
+        probe_out = (probe + 1.0).sum().unsqueeze(0)
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=probe_out,
+            batch_size=probe.shape[0],
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
 
     def benchmark_fn(self) -> None:
         assert self.device_buf is not None and self.device_template is not None
@@ -77,16 +92,11 @@ class OptimizedGb200LocalityBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {
-            "size_mb": self.size_mb,
-            "numel": self.numel,
-        }
+        return super().get_input_signature()
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must run before verification")
-        return self.output.detach().clone()
+        return super().get_verify_output()
     
     def get_output_tolerance(self) -> tuple:
         """Return custom tolerance for memory copy benchmark."""

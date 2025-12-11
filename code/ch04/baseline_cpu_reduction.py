@@ -26,9 +26,10 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-class BaselineCpuReductionBenchmark(BaseBenchmark):
+class BaselineCpuReductionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Anti-pattern: CPU round-trips for tensor reduction (very slow)."""
     
     def __init__(self):
@@ -64,6 +65,21 @@ class BaselineCpuReductionBenchmark(BaseBenchmark):
         shard_size = self.batch_size // self.num_shards
         self.output = torch.zeros(shard_size, self.hidden_dim, device=self.device)
         torch.cuda.synchronize(self.device)
+        probe = torch.randn(4, self.hidden_dim, device=self.device)
+        with torch.no_grad():
+            probe_output = self.model(probe).detach()
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=probe_output,
+            batch_size=probe.shape[0],
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: CPU round-trip reduction (anti-pattern)."""
@@ -118,18 +134,11 @@ class BaselineCpuReductionBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {
-            "batch_size": self.batch_size,
-            "hidden_dim": self.hidden_dim,
-            "inner_dim": self.inner_dim,
-            "num_shards": self.num_shards,
-        }
+        return super().get_input_signature()
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
+        return super().get_verify_output()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison.

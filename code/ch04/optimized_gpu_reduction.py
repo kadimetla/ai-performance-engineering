@@ -27,9 +27,10 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-class OptimizedGpuReductionBenchmark(BaseBenchmark):
+class OptimizedGpuReductionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Best practice: GPU-only reduction - no CPU round-trips."""
 
     def __init__(self):
@@ -70,6 +71,21 @@ class OptimizedGpuReductionBenchmark(BaseBenchmark):
         # Pre-allocate reduction buffer
         self._reduction_buffer = torch.zeros(shard_size, self.hidden_dim, device=self.device)
         torch.cuda.synchronize(self.device)
+        probe = torch.randn(4, self.hidden_dim, device=self.device)
+        with torch.no_grad():
+            probe_output = self.model(probe).detach()
+        self._set_verification_payload(
+            inputs={"probe": probe},
+            output=probe_output,
+            batch_size=probe.shape[0],
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+        )
 
     def benchmark_fn(self) -> None:
         from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
@@ -131,18 +147,11 @@ class OptimizedGpuReductionBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {
-            "batch_size": self.batch_size,
-            "hidden_dim": self.hidden_dim,
-            "inner_dim": self.inner_dim,
-            "num_shards": self.num_shards,
-        }
+        return super().get_input_signature()
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
+        return super().get_verify_output()
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison.
