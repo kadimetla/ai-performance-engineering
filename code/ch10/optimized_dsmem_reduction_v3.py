@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class OptimizedDSMEMReductionV3Benchmark(CudaBinaryBenchmark):
@@ -27,7 +28,13 @@ class OptimizedDSMEMReductionV3Benchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=60,
-            workload_params={"type": "dsmem_reduction_v3"},
+            workload_params={
+                "batch_size": 2048,
+                "dtype": "float32",
+                "N": 16 * 1024 * 1024,
+                "cluster_size": 2,
+                "block_elems": 4096,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
@@ -38,6 +45,19 @@ class OptimizedDSMEMReductionV3Benchmark(CudaBinaryBenchmark):
             num_elements=getattr(self, 'num_elements', 16 * 1024 * 1024),
             elapsed_ms=getattr(self, '_last_elapsed_ms', 0.03),
         )
+
+    def get_input_signature(self) -> dict:
+        """Signature for DSMEM reduction v3."""
+        return simple_signature(
+            batch_size=2048,
+            dtype="float32",
+            N=16 * 1024 * 1024,
+            cluster_size=2,
+            block_elems=4096,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -46,7 +47,7 @@ class SimpleModel(nn.Module):
         return x
 
 
-class BaselineDataloaderDefaultBenchmark(BaseBenchmark):
+class BaselineDataloaderDefaultBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Default DataLoader baseline - no optimizations."""
     
     def __init__(self):
@@ -108,6 +109,22 @@ class BaselineDataloaderDefaultBenchmark(BaseBenchmark):
             self.optimizer.step()
             self.output = outputs.detach().clone()
         self._synchronize()
+        if self.output is None or self._data_iter is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        # Capture the most recent batch for verification
+        inputs = {"data": data, "labels": labels}
+        self._set_verification_payload(
+            inputs=inputs,
+            output=self.output.detach().float().clone(),
+            batch_size=self.batch_size,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     
     def teardown(self) -> None:
@@ -159,14 +176,6 @@ class BaselineDataloaderDefaultBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("Output not available - run benchmark first")
         return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "feature_dim": self.feature_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineDataloaderDefaultBenchmark:

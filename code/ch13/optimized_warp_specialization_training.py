@@ -11,11 +11,12 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class OptimizedWarpSpecializationTrainingBenchmark(BaseBenchmark):
+class OptimizedWarpSpecializationTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Use torch.compile to fuse operations for better performance."""
     
     def __init__(self):
@@ -66,6 +67,20 @@ class OptimizedWarpSpecializationTrainingBenchmark(BaseBenchmark):
                 fused = torch.relu(self.input * self.weight)
                 self.output = self.model(fused).detach().float().clone()
         self._synchronize()
+        if self.input is None or self.weight is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input, "weight": self.weight},
+            output=self.output.detach().float().clone(),
+            batch_size=self.input.shape[0],
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
     
     def teardown(self) -> None:
         self.model = None
@@ -96,21 +111,6 @@ class OptimizedWarpSpecializationTrainingBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch": self.batch, "width": self.width}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        # fp16 vs fp32 can have differences
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> OptimizedWarpSpecializationTrainingBenchmark:

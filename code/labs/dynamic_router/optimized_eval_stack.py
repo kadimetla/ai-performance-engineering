@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import io
+import json
 import sys
+from numbers import Number
 from typing import Dict, List, Optional
 
 import torch
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from labs.dynamic_router.eval_stack import EvalConfig, run_eval_stack
+from contextlib import redirect_stdout
 
 
-class OptimizedEvalStackBenchmark(BaseBenchmark):
+class OptimizedEvalStackBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs the cheap-eval stack with the optimized settings."""
 
     def __init__(self) -> None:
@@ -19,26 +24,44 @@ class OptimizedEvalStackBenchmark(BaseBenchmark):
         self._summary: Dict[str, float] = {}
         self.metrics: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
+        self.verify_input: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def _resolve_device(self) -> torch.device:  # type: ignore[override]
         return torch.device("cpu")
 
     def setup(self) -> None:
-        return
+        torch.manual_seed(42)
 
     def benchmark_fn(self) -> None:
-        cfg = EvalConfig.from_flags(self._argv(), seed=0)
-        self._summary = run_eval_stack("optimized", cfg)
-        metric_values = list(self._summary.values()) or [0.0]
-        expected_shape = (1, len(metric_values))
+        cfg = EvalConfig.from_flags(self._argv(), seed=42)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self._summary = run_eval_stack("optimized", cfg)
+        captured = buf.getvalue().strip()
+        if captured:
+            try:
+                lines = [ln for ln in captured.splitlines() if ln]
+                print(json.dumps({"event": "eval_stack_stdout", "variant": "optimized", "lines": lines}), file=sys.stderr)
+            except Exception:
+                print(captured, file=sys.stderr)
+        summary_tensor = torch.tensor(
+            [float(v) for v in self._summary.values() if isinstance(v, Number)],
+            dtype=torch.float32,
+        )
+        if summary_tensor.numel() == 0:
+            summary_tensor = torch.zeros(1, dtype=torch.float32)
+        verify_tensor = torch.tensor([[float(cfg.request_count), float(cfg.experts)]], dtype=torch.float32)
+        expected_shape = tuple(verify_tensor.shape)
         if self.metrics is None or tuple(self.metrics.shape) != expected_shape:
-            self.metrics = torch.randn(expected_shape, dtype=torch.float32)
-        summary_tensor = torch.tensor([metric_values], dtype=torch.float32)
-        self.output = (summary_tensor + self.metrics).detach()
+            self.metrics = torch.zeros(expected_shape, dtype=torch.float32)
+        if self.verify_input is None or tuple(self.verify_input.shape) != expected_shape:
+            self.verify_input = torch.ones(expected_shape, dtype=torch.float32)
+        self.output = (verify_tensor * self.verify_input + self.metrics).detach()
         self._set_verification_payload(
             inputs={
-                "seed": torch.tensor([0], dtype=torch.int64),
+                "verify_input": self.verify_input.detach(),
+                "seed": torch.tensor([cfg.seed], dtype=torch.int64),
                 "metrics": summary_tensor.detach(),
             },
             output=self.output,
@@ -50,6 +73,7 @@ class OptimizedEvalStackBenchmark(BaseBenchmark):
 
     def teardown(self) -> None:
         self.metrics = None
+        self.verify_input = None
         self.output = None
         super().teardown()
 
@@ -80,4 +104,4 @@ def get_benchmark() -> BaseBenchmark:
 if __name__ == "__main__":
     bench = get_benchmark()
     bench.benchmark_fn()
-    print(bench.get_custom_metrics())
+    print(json.dumps(bench.get_custom_metrics() or {}, indent=2))

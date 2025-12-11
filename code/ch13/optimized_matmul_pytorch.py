@@ -26,6 +26,7 @@ except ImportError:
 from typing import Optional
 
 from core.utils.compile_utils import enable_tf32, compile_callable
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -41,7 +42,7 @@ def optimized_matmul(A: torch.Tensor, B: torch.Tensor, bias: torch.Tensor) -> to
     return torch.relu(out + bias)
 
 
-class OptimizedMatmulCUTLASSBenchmark(BaseBenchmark):
+class OptimizedMatmulCUTLASSBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """CUTLASS matmul optimization - compiled GEMM."""
     
     def __init__(self):

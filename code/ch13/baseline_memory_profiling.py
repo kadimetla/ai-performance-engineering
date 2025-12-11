@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import enable_tf32
 
@@ -26,7 +27,7 @@ class SimpleModel(nn.Module):
         return x
 
 
-class BaselineMemoryProfilingBenchmark(BaseBenchmark):
+class BaselineMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline memory profiling - tracks usage without optimization."""
     
     def __init__(self):
@@ -76,6 +77,20 @@ class BaselineMemoryProfilingBenchmark(BaseBenchmark):
             self.peak_memory_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
             self.output = outputs.detach().clone()
         self._synchronize()
+        if self.inputs is None or self.targets is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.inputs, "targets": self.targets},
+            output=self.output.detach().float().clone(),
+            batch_size=self.inputs.shape[0],
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -108,20 +123,6 @@ class BaselineMemoryProfilingBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineMemoryProfilingBenchmark:

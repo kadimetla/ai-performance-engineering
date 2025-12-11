@@ -195,20 +195,6 @@ class BaselineFSDP2FP32CommBenchmark(VerificationPayloadMixin, BaseBenchmark):
             return "Model not initialized"
         return None
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""

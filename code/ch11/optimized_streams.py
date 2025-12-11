@@ -194,15 +194,6 @@ class OptimizedStreamsBenchmark(BaseBenchmark):
         """Return tolerance for numerical comparison."""
         return (1e-5, 1e-5)
 
-    def get_custom_streams(self):
-        """Declare custom streams for audit logging."""
-        streams = []
-        if self.stream_h2d is not None:
-            streams.append(self.stream_h2d)
-        if self.stream_compute is not None:
-            streams.append(self.stream_compute)
-        return streams
-
 
 def get_benchmark() -> OptimizedStreamsBenchmark:
     """Factory function for benchmark discovery."""

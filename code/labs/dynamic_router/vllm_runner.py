@@ -8,7 +8,11 @@ opt-in harness hook: if vLLM or the model is unavailable, it raises SKIPPED.
 from __future__ import annotations
 
 import argparse
+import io
+import json
+import sys
 import time
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -86,7 +90,16 @@ class _VllmWrapper:
             device=f"cuda:{device_index}",
             enforce_eager=True,
         )
-        self.engine = LLMEngine.from_engine_args(engine_args)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.engine = LLMEngine.from_engine_args(engine_args)
+        captured = buf.getvalue().strip()
+        if captured:
+            try:
+                lines = [ln for ln in captured.splitlines() if ln]
+                print(json.dumps({"event": "vllm_engine_init_stdout", "gpu": gpu_id, "lines": lines}), file=sys.stderr)
+            except Exception:
+                print(captured, file=sys.stderr)
         self._inflight: Dict[str, _RequestRuntime] = {}
 
     def add_request(self, rt: _RequestRuntime) -> None:
@@ -182,7 +195,16 @@ class _VllmV1Wrapper(_VllmWrapper):
             enforce_eager=True,
         )
         # Keep EngineCore in-process so we can drive step_fn() directly.
-        self.engine = V1LLMEngine.from_engine_args(engine_args, enable_multiprocessing=False)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.engine = V1LLMEngine.from_engine_args(engine_args, enable_multiprocessing=False)
+        captured = buf.getvalue().strip()
+        if captured:
+            try:
+                lines = [ln for ln in captured.splitlines() if ln]
+                print(json.dumps({"event": "vllm_engine_v1_init_stdout", "gpu": gpu_id, "lines": lines}), file=sys.stderr)
+            except Exception:
+                print(captured, file=sys.stderr)
         core_client = getattr(self.engine, "engine_core", None)
         if core_client is None or not hasattr(core_client, "engine_core"):
             _skip("V1 EngineCore client is not available in-process; disable VLLM_ENABLE_V1_MULTIPROCESSING.")

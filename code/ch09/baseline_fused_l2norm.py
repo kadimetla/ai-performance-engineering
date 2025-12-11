@@ -19,6 +19,9 @@ class BaselineFusedL2NormBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        n_elems = 1 << 20
+        iterations = 100
+        bytes_per_elem = 12  # two reads + one write (float32)
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="baseline_fused_l2norm",
@@ -26,9 +29,15 @@ class BaselineFusedL2NormBenchmark(CudaBinaryBenchmark):
             iterations=5,
             warmup=5,
             timeout_seconds=90,
-            workload_params={"type": "fused_l2norm"},
+            workload_params={
+                "N": n_elems,
+                "iterations": iterations,
+                "dtype": "float32",
+            },
         )
-        self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
+        self.register_workload_metadata(
+            bytes_per_iteration=float(n_elems * bytes_per_elem),
+        )
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return roofline metrics."""

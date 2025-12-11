@@ -19,6 +19,10 @@ class OptimizedTransposePaddedBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        width = 4096
+        random_sweeps = 256
+        write_repeats = 8
+        matrix_bytes = width * width * 4
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="optimized_transpose_padded",
@@ -26,9 +30,14 @@ class OptimizedTransposePaddedBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=90,
-            workload_params={"type": "transpose"},
+            workload_params={
+                "width": width,
+                "random_sweeps": random_sweeps,
+                "write_repeats": write_repeats,
+                "dtype": "float32",
+            },
         )
-        self.register_workload_metadata(bytes_per_iteration=4096 * 4096 * 4 * 2)
+        self.register_workload_metadata(bytes_per_iteration=float(matrix_bytes * 3))
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics."""

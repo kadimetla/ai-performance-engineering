@@ -20,6 +20,7 @@ import torch
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -36,7 +37,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class BaselineMatmulPyTorchBenchmark(BaseBenchmark):
+class BaselineMatmulPyTorchBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """PyTorch matmul baseline - sequential unfused operations."""
     
     def __init__(self):

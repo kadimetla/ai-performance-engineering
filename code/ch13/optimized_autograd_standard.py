@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import copy
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
@@ -27,7 +28,7 @@ class SimpleModel(nn.Module):
         return x
 
 
-class OptimizedAutogradCompiledBenchmark(BaseBenchmark):
+class OptimizedAutogradCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Autograd accelerated with CUDA graphs to remove launch overhead."""
     
     def __init__(self):
@@ -105,6 +106,20 @@ class OptimizedAutogradCompiledBenchmark(BaseBenchmark):
                 raise RuntimeError("Output buffer not initialized")
             self.output = self.output_buffer.detach().clone()
         self._synchronize()
+        if self.inputs is None or self.targets is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.inputs, "targets": self.targets},
+            output=self.output.detach().float().clone(),
+            batch_size=self.batch_size,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def _train_step(self, batch: torch.Tensor, target: torch.Tensor, capture_output: bool = False) -> None:
         assert self.model is not None and self.optimizer is not None and self.criterion is not None
@@ -156,20 +171,6 @@ class OptimizedAutogradCompiledBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> OptimizedAutogradCompiledBenchmark:

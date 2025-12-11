@@ -42,6 +42,7 @@ from typing import Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -444,7 +445,7 @@ class FP8PerChannelBenchmark:
 # Benchmark Harness Integration
 #============================================================================
 
-class FP8PerChannelDemoBenchmark(BaseBenchmark):
+class FP8PerChannelDemoBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark harness wrapper for FP8 per-channel demo."""
 
     def __init__(self):
@@ -455,6 +456,8 @@ class FP8PerChannelDemoBenchmark(BaseBenchmark):
         self.in_features = 4096
         self.out_features = 4096
         self._last = 0.0
+        self.output = None
+        self._verify_input = None
         
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
@@ -482,6 +485,30 @@ class FP8PerChannelDemoBenchmark(BaseBenchmark):
         results = self.demo_benchmark.measure_throughput(num_warmup=5, num_iterations=1)
         self._last = results.get("per_channel", {}).get("elapsed_ms", 0.0)
         self._synchronize()
+        verify_input = torch.randn(
+            self.batch_size,
+            self.seq_len,
+            self.in_features,
+            device=self.device,
+            dtype=torch.float32,
+        )
+        self._verify_input = verify_input
+        if self.demo_benchmark is None or not hasattr(self.demo_benchmark, "per_channel_linear"):
+            raise RuntimeError("Demo benchmark not initialized")
+        with torch.no_grad():
+            self.output = self.demo_benchmark.per_channel_linear(verify_input).detach().float().clone()
+        self._set_verification_payload(
+            inputs={"input": verify_input},
+            output=self.output,
+            batch_size=self.batch_size,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": True,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -507,18 +534,6 @@ class FP8PerChannelDemoBenchmark(BaseBenchmark):
         if self.demo_benchmark is None:
             return "Benchmark not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        raise RuntimeError("Demo benchmark - no verification output")
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
@@ -573,4 +588,3 @@ if __name__ == "__main__":
     print()
     print("Note: Per-channel scaling is recommended when accuracy matters.")
     print("The overhead is minimal compared to the accuracy benefits.")
-

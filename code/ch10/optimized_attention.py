@@ -20,11 +20,12 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.utils.compile_utils import enable_tf32
 
 
-class OptimizedAttentionBenchmark(BaseBenchmark):
+class OptimizedAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized attention using Flash Attention/SDPA and FP16."""
 
     def __init__(self):
@@ -90,6 +91,25 @@ class OptimizedAttentionBenchmark(BaseBenchmark):
                     is_causal=False,
                 )
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={
+                "query": self.query,
+                "key": self.key,
+                "value": self.value,
+            },
+            output=self.output.detach().float().clone(),
+            batch_size=self.batch_size,
+            parameter_count=0,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.query = None
@@ -112,20 +132,6 @@ class OptimizedAttentionBenchmark(BaseBenchmark):
         if self.query is None or self.key is None or self.value is None:
             return "Tensors not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to FP16."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> OptimizedAttentionBenchmark:

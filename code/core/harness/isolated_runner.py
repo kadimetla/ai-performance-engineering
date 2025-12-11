@@ -26,11 +26,13 @@ Protocol:
 from __future__ import annotations
 
 import gc
+import io
 import json
 import statistics
 import sys
 import time
 import traceback
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -84,200 +86,213 @@ def run_benchmark(input_data: Dict[str, Any]) -> Dict[str, Any]:
     """Run benchmark and return results in harness-expected format."""
     import importlib.util
     
-    errors: List[str] = []
-    times_ms: List[float] = []
-    memory_peak_mb: Optional[float] = None
-    memory_allocated_mb: Optional[float] = None
-    inference_timing_data: Optional[Dict[str, List[float]]] = None
-    
-    # Extract input
-    module_path = Path(input_data["benchmark_module_path"])
-    class_name = input_data["benchmark_class_name"]
-    config_dict = input_data.get("config_dict", {})
-    device_str = input_data.get("device")
-    initial_state = input_data.get("initial_state")
-    
-    # Config
-    iterations = config_dict.get("iterations", 10)
-    warmup = config_dict.get("warmup", 3)
-    enable_memory_tracking = config_dict.get("enable_memory_tracking", True)
-    seed = config_dict.get("seed")
-    seed_info = {
-        "random_seed": None,
-        "numpy_seed": None,
-        "torch_seed": None,
-        "cuda_seed": None,
-    }
-    
-    benchmark_name = class_name
-    
-    try:
-        # Reset CUDA state BEFORE loading the module
-        reset_cuda_state()
+    def _execute() -> Dict[str, Any]:
+        errors: List[str] = []
+        times_ms: List[float] = []
+        memory_peak_mb: Optional[float] = None
+        memory_allocated_mb: Optional[float] = None
+        inference_timing_data: Optional[Dict[str, List[float]]] = None
         
-        # Apply deterministic seeds if provided (align with harness behavior)
-        if seed is not None:
-            try:
-                import random
-                random.seed(seed)
-                seed_info["random_seed"] = seed
-            except Exception:
-                pass
-            try:
-                import numpy as np
-                np.random.seed(seed)
-                seed_info["numpy_seed"] = seed
-            except Exception:
-                pass
+        # Extract input
+        module_path = Path(input_data["benchmark_module_path"])
+        class_name = input_data["benchmark_class_name"]
+        config_dict = input_data.get("config_dict", {})
+        device_str = input_data.get("device")
+        initial_state = input_data.get("initial_state")
+        
+        # Config
+        iterations = config_dict.get("iterations", 10)
+        warmup = config_dict.get("warmup", 3)
+        enable_memory_tracking = config_dict.get("enable_memory_tracking", True)
+        seed = config_dict.get("seed")
+        seed_info = {
+            "random_seed": None,
+            "numpy_seed": None,
+            "torch_seed": None,
+            "cuda_seed": None,
+        }
+        
+        benchmark_name = class_name
+        
+        try:
+            # Reset CUDA state BEFORE loading the module
+            reset_cuda_state()
+            
+            # Apply deterministic seeds if provided (align with harness behavior)
+            if seed is not None:
+                try:
+                    import random
+                    random.seed(seed)
+                    seed_info["random_seed"] = seed
+                except Exception:
+                    pass
+                try:
+                    import numpy as np
+                    np.random.seed(seed)
+                    seed_info["numpy_seed"] = seed
+                except Exception:
+                    pass
+                try:
+                    import torch
+                    torch.manual_seed(seed)
+                    seed_info["torch_seed"] = seed
+                    if torch.cuda.is_available():
+                        torch.cuda.manual_seed_all(seed)
+                        seed_info["cuda_seed"] = seed
+                except Exception:
+                    pass
+            
+            # Load module
+            spec = importlib.util.spec_from_file_location("benchmark_module", str(module_path))
+            if spec is None or spec.loader is None:
+                errors.append(f"Failed to load module spec from {module_path}")
+                return _make_error_response(errors, seed_info=seed_info)
+            
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["benchmark_module"] = module
+            spec.loader.exec_module(module)
+            
+            # Get benchmark instance
+            if class_name == "get_benchmark":
+                if not hasattr(module, "get_benchmark"):
+                    errors.append(f"Module {module_path} has no get_benchmark() function")
+                    return _make_error_response(errors, seed_info=seed_info)
+                benchmark = module.get_benchmark()
+                benchmark_name = getattr(benchmark, 'name', None) or benchmark.__class__.__name__
+            else:
+                if not hasattr(module, class_name):
+                    errors.append(f"Module {module_path} has no class {class_name}")
+                    return _make_error_response(errors, seed_info=seed_info)
+                benchmark_class = getattr(module, class_name)
+                benchmark = benchmark_class()
+                benchmark_name = class_name
+            
+            # Apply initial state if provided
+            if initial_state:
+                for key, value in initial_state.items():
+                    if hasattr(benchmark, key):
+                        setattr(benchmark, key, value)
+            
+            # Setup
             try:
                 import torch
-                torch.manual_seed(seed)
-                seed_info["torch_seed"] = seed
-                if torch.cuda.is_available():
-                    torch.cuda.manual_seed_all(seed)
-                    seed_info["cuda_seed"] = seed
-            except Exception:
-                pass
-        
-        # Load module
-        spec = importlib.util.spec_from_file_location("benchmark_module", str(module_path))
-        if spec is None or spec.loader is None:
-            errors.append(f"Failed to load module spec from {module_path}")
-            return _make_error_response(errors, seed_info=seed_info)
-        
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["benchmark_module"] = module
-        spec.loader.exec_module(module)
-        
-        # Get benchmark instance
-        if class_name == "get_benchmark":
-            if not hasattr(module, "get_benchmark"):
-                errors.append(f"Module {module_path} has no get_benchmark() function")
-                return _make_error_response(errors, seed_info=seed_info)
-            benchmark = module.get_benchmark()
-            benchmark_name = getattr(benchmark, 'name', None) or benchmark.__class__.__name__
-        else:
-            if not hasattr(module, class_name):
-                errors.append(f"Module {module_path} has no class {class_name}")
-                return _make_error_response(errors, seed_info=seed_info)
-            benchmark_class = getattr(module, class_name)
-            benchmark = benchmark_class()
-            benchmark_name = class_name
-        
-        # Apply initial state if provided
-        if initial_state:
-            for key, value in initial_state.items():
-                if hasattr(benchmark, key):
-                    setattr(benchmark, key, value)
-        
-        # Setup
-        try:
-            import torch
-            cuda_available = torch.cuda.is_available()
-        except ImportError:
-            cuda_available = False
-        
-        if cuda_available:
-            import torch
-            torch.cuda.reset_peak_memory_stats()
-        
-        benchmark.setup()
-        
-        if cuda_available:
-            import torch
-            torch.cuda.synchronize()
-        
-        # Warmup
-        for _ in range(warmup):
-            benchmark.benchmark_fn()
+                cuda_available = torch.cuda.is_available()
+            except ImportError:
+                cuda_available = False
+            
+            if cuda_available:
+                import torch
+                torch.cuda.reset_peak_memory_stats()
+            
+            benchmark.setup()
+            
             if cuda_available:
                 import torch
                 torch.cuda.synchronize()
-        
-        # Check if benchmark reports its own timing (e.g., CudaBinaryBenchmark parses kernel time from output)
-        use_reported_time = bool(getattr(benchmark, "use_reported_time", False))
-        
-        # Timed runs - use CUDA events for GPU (accurate), perf_counter for CPU only
-        if cuda_available:
-            import torch
-            # GPU: use CUDA Events for accurate GPU timing
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
-            torch.cuda.synchronize()  # sync once before timing loop
             
-            for _ in range(iterations):
-                start_event.record()
+            # Warmup
+            for _ in range(warmup):
                 benchmark.benchmark_fn()
-                end_event.record()
-                end_event.synchronize()
-                elapsed_ms = start_event.elapsed_time(end_event)
-                
-                # Use benchmark-reported time if available (e.g., parsed from CUDA binary output)
-                if use_reported_time:
-                    reported = getattr(benchmark, "last_time_ms", None)
-                    if reported is not None:
-                        elapsed_ms = reported
-                
-                times_ms.append(elapsed_ms)
-        else:
-            # CPU: use perf_counter (only valid for CPU-only benchmarks)
-            for _ in range(iterations):
-                start = time.perf_counter()
-                benchmark.benchmark_fn()
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                times_ms.append(elapsed_ms)
-        
-        # Memory tracking
-        if enable_memory_tracking and cuda_available:
-            import torch
-            memory_peak_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
-            memory_allocated_mb = torch.cuda.memory_allocated() / (1024 * 1024)
-        
-        # Capture verify_output BEFORE teardown (teardown may clear self.output)
-        verify_output_data = None
-        try:
-            if hasattr(benchmark, 'get_verify_output'):
-                verify_output = benchmark.get_verify_output()
-                if verify_output is not None:
+                if cuda_available:
                     import torch
-                    if isinstance(verify_output, torch.Tensor):
-                        # Serialize tensor: shape, dtype, and data as list
-                        verify_output_data = {
-                            'shape': list(verify_output.shape),
-                            'dtype': str(verify_output.dtype),
-                            'data': verify_output.detach().cpu().float().tolist(),
-                        }
+                    torch.cuda.synchronize()
+            
+            # Check if benchmark reports its own timing (e.g., CudaBinaryBenchmark parses kernel time from output)
+            use_reported_time = bool(getattr(benchmark, "use_reported_time", False))
+            
+            # Timed runs - use CUDA events for GPU (accurate), perf_counter for CPU only
+            if cuda_available:
+                import torch
+                # GPU: use CUDA Events for accurate GPU timing
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+                torch.cuda.synchronize()  # sync once before timing loop
+                
+                for _ in range(iterations):
+                    start_event.record()
+                    benchmark.benchmark_fn()
+                    end_event.record()
+                    end_event.synchronize()
+                    elapsed_ms = start_event.elapsed_time(end_event)
+                    
+                    # Use benchmark-reported time if available (e.g., parsed from CUDA binary output)
+                    if use_reported_time:
+                        reported = getattr(benchmark, "last_time_ms", None)
+                        if reported is not None:
+                            elapsed_ms = reported
+                    
+                    times_ms.append(elapsed_ms)
+            else:
+                # CPU: use perf_counter (only valid for CPU-only benchmarks)
+                for _ in range(iterations):
+                    start = time.perf_counter()
+                    benchmark.benchmark_fn()
+                    elapsed_ms = (time.perf_counter() - start) * 1000
+                    times_ms.append(elapsed_ms)
+            
+            # Memory tracking
+            if enable_memory_tracking and cuda_available:
+                import torch
+                memory_peak_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+                memory_allocated_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+            
+            # Capture verify_output BEFORE teardown (teardown may clear self.output)
+            verify_output_data = None
+            try:
+                if hasattr(benchmark, 'get_verify_output'):
+                    verify_output = benchmark.get_verify_output()
+                    if verify_output is not None:
+                        import torch
+                        if isinstance(verify_output, torch.Tensor):
+                            # Serialize tensor: shape, dtype, and data as list
+                            verify_output_data = {
+                                'shape': list(verify_output.shape),
+                                'dtype': str(verify_output.dtype),
+                                'data': verify_output.detach().cpu().float().tolist(),
+                            }
+            except Exception as e:
+                # Log but don't fail - verification is optional
+                errors.append(f"get_verify_output() warning: {e}")
+            
+            # Teardown
+            benchmark.teardown()
+            
+            # Get inference timing data if available
+            if hasattr(benchmark, "get_inference_timing_data"):
+                inference_timing_data = benchmark.get_inference_timing_data()
+            
         except Exception as e:
-            # Log but don't fail - verification is optional
-            errors.append(f"get_verify_output() warning: {e}")
+            tb = traceback.format_exc()
+            errors.append(f"Benchmark execution failed: {e}")
+            errors.append(tb)
+            return _make_error_response(errors)
         
-        # Teardown
-        benchmark.teardown()
-        
-        # Get inference timing data if available
-        if hasattr(benchmark, "get_inference_timing_data"):
-            inference_timing_data = benchmark.get_inference_timing_data()
-        
-    except Exception as e:
-        tb = traceback.format_exc()
-        errors.append(f"Benchmark execution failed: {e}")
-        errors.append(tb)
-        return _make_error_response(errors)
+        # Build successful response with Pydantic model
+        return _make_success_response(
+            times_ms=times_ms,
+            iterations=iterations,
+            warmup=warmup,
+            memory_peak_mb=memory_peak_mb,
+            memory_allocated_mb=memory_allocated_mb,
+            benchmark_name=benchmark_name,
+            device_str=device_str,
+            inference_timing_data=inference_timing_data,
+            verify_output_data=verify_output_data,
+            errors=errors,
+            seed_info=seed_info,
+        )
     
-    # Build successful response with Pydantic model
-    return _make_success_response(
-        times_ms=times_ms,
-        iterations=iterations,
-        warmup=warmup,
-        memory_peak_mb=memory_peak_mb,
-        memory_allocated_mb=memory_allocated_mb,
-        benchmark_name=benchmark_name,
-        device_str=device_str,
-        inference_timing_data=inference_timing_data,
-        verify_output_data=verify_output_data,
-        errors=errors,
-        seed_info=seed_info,
-    )
+    stdout_buffer = io.StringIO()
+    with redirect_stdout(stdout_buffer):
+        result = _execute()
+    captured = stdout_buffer.getvalue().strip()
+    if captured:
+        try:
+            lines = [ln for ln in captured.splitlines() if ln]
+            print(json.dumps({"event": "benchmark_stdout", "lines": lines}), file=sys.stderr)
+        except Exception:
+            print(captured, file=sys.stderr)
+    return result
 
 
 def _make_error_response(errors: List[str], seed_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

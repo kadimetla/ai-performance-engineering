@@ -179,20 +179,6 @@ class OptimizedGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
         metrics["graph.conditional_support"] = 1.0 if supports_conditional_graphs() else 0.0
         return metrics
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.data is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.data.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""

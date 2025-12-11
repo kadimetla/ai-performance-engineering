@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from numbers import Number
 from typing import Dict, Optional
 
 import torch
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from labs.dynamic_router.topology import detect_topology, write_topology
 
 
-class TopologyProbeBenchmark(BaseBenchmark):
+class TopologyProbeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Capture a snapshot of GPU↔NUMA mapping for downstream routing demos."""
 
     def __init__(self) -> None:
@@ -20,24 +23,32 @@ class TopologyProbeBenchmark(BaseBenchmark):
         self.output_path: Optional[Path] = None
         self.metrics: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
+        self.verify_input: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
         # Nothing to initialize besides ensuring artifacts dir exists (handled by write_topology).
-        return
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
 
     def benchmark_fn(self) -> None:
         topo = detect_topology()
         self.output_path = write_topology(topo)
         self.snapshot = topo
         metrics_dict = self.get_custom_metrics() or {}
-        metric_values = list(metrics_dict.values()) or [0.0]
-        expected_shape = (1, len(metric_values))
+        metric_values = [float(v) for v in metrics_dict.values() if isinstance(v, Number)]
+        if not metric_values:
+            metric_values = [0.0]
+        summary_tensor = torch.tensor(metric_values, dtype=torch.float32).unsqueeze(0)
+        expected_shape = tuple(summary_tensor.shape)
         if self.metrics is None or tuple(self.metrics.shape) != expected_shape:
-            self.metrics = torch.randn(expected_shape, dtype=torch.float32)
-        summary_tensor = torch.tensor([metric_values], dtype=torch.float32)
-        self.output = (summary_tensor + self.metrics).detach()
+            self.metrics = torch.zeros(expected_shape, dtype=torch.float32)
+        if self.verify_input is None or tuple(self.verify_input.shape) != expected_shape:
+            self.verify_input = torch.ones(expected_shape, dtype=torch.float32)
+        self.output = (summary_tensor * self.verify_input + self.metrics).detach()
         self._set_verification_payload(
             inputs={
+                "verify_input": self.verify_input.detach(),
                 "num_gpus": torch.tensor([len(self.snapshot.gpu_numa) if self.snapshot else 0], dtype=torch.int64),
             },
             output=self.output,
@@ -62,6 +73,7 @@ class TopologyProbeBenchmark(BaseBenchmark):
     def teardown(self) -> None:
         self.metrics = None
         self.output = None
+        self.verify_input = None
         self.snapshot = None
         self.output_path = None
         super().teardown()
@@ -75,4 +87,4 @@ def get_benchmark() -> BaseBenchmark:
 if __name__ == "__main__":
     bench = get_benchmark()
     bench.benchmark_fn()
-    print(bench.get_custom_metrics())
+    print(json.dumps(bench.get_custom_metrics() or {}, indent=2))

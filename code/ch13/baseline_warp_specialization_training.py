@@ -9,10 +9,11 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class BaselineWarpSpecializationTrainingBenchmark(BaseBenchmark):
+class BaselineWarpSpecializationTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline training workload without warp specialization."""
 
     def __init__(self):
@@ -57,6 +58,20 @@ class BaselineWarpSpecializationTrainingBenchmark(BaseBenchmark):
                 fused = torch.relu(self.input * self.weight)
                 self.output = self.model(fused).detach().clone()
         self._synchronize()
+        if self.input is None or self.weight is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input, "weight": self.weight},
+            output=self.output.detach().float().clone(),
+            batch_size=self.input.shape[0],
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         """Release GPU resources."""
@@ -92,20 +107,6 @@ class BaselineWarpSpecializationTrainingBenchmark(BaseBenchmark):
         if self.input is None or self.weight is None:
             return "Input tensors not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch": self.batch, "width": self.width}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineWarpSpecializationTrainingBenchmark:

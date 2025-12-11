@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class OptimizedDynamicParallelismDeviceBenchmark(CudaBinaryBenchmark):
@@ -21,13 +22,29 @@ class OptimizedDynamicParallelismDeviceBenchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=120,
             time_regex=r"Elapsed_ms:\s*([0-9.]+)",
-            workload_params={"type": "dynamic_parallelism_device"},
+            workload_params={
+                "batch_size": 262144,
+                "dtype": "float32",
+                "elements": 262144,
+                "segment_size": 256,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics."""
         return None
+
+    def get_input_signature(self) -> dict:
+        return simple_signature(
+            batch_size=262144,
+            dtype="float32",
+            elements=262144,
+            segment_size=256,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 
 
 

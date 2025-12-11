@@ -11,6 +11,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 class BaselinePipeline3StageBenchmark(CudaBinaryBenchmark):
     """Wraps the 2-stage pipeline GEMV kernel (baseline for 3-stage comparison)."""
 
@@ -23,7 +24,13 @@ class BaselinePipeline3StageBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=120,
-            workload_params={"type": "pipeline_3stage"},
+            workload_params={
+                "batch_size": 8,
+                "dtype": "float32",
+                "elements": 16 * 1024 * 1024,
+                "segments": 8,
+                "segment_size": 2 * 1024 * 1024,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
@@ -34,6 +41,19 @@ class BaselinePipeline3StageBenchmark(CudaBinaryBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def get_input_signature(self) -> dict:
+        """Signature for sequential 3-stage pipeline baseline."""
+        return simple_signature(
+            batch_size=8,
+            dtype="float32",
+            elements=16 * 1024 * 1024,
+            segments=8,
+            segment_size=2 * 1024 * 1024,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 def get_benchmark() -> BaseBenchmark:
     """Factory for discover_benchmarks()."""
     return BaselinePipeline3StageBenchmark()

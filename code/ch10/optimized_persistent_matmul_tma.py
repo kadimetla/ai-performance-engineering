@@ -28,6 +28,7 @@ from core.harness.benchmark_harness import (
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 try:
     import triton
@@ -199,7 +200,7 @@ def run_optimized(M=1024, N=1024, K=1024):
 # Benchmark Harness Integration
 # ============================================================================
 
-class PersistentMatmulTMABenchmark(BaseBenchmark):
+class PersistentMatmulTMABenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark harness wrapper for TMA persistent matmul."""
 
     def __init__(self, M: int = 1024, N: int = 1024, K: int = 1024):
@@ -266,6 +267,20 @@ class PersistentMatmulTMABenchmark(BaseBenchmark):
         )
         self._last = float(self.c.sum())
         self._synchronize()
+        if self.c is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"A": self.a, "B": self.b},
+            output=self.c.detach().float().clone(),
+            batch_size=self.M,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+            output_tolerance=(0.05, 0.05),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -296,20 +311,6 @@ class PersistentMatmulTMABenchmark(BaseBenchmark):
         if not torch.allclose(self.c, expected, rtol=0.05, atol=0.05):
             return "Result verification failed"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.c is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.c.detach().float()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"M": self.M, "N": self.N, "K": self.K}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to FP16."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

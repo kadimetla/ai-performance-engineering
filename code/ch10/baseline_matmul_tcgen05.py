@@ -18,11 +18,12 @@ from typing import Optional
 import torch
 
 from ch10.matmul_extension_tcgen05 import load_matmul_tcgen05_module
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.tcgen05_requirements import check_tcgen05_support
 
 
-class BaselineMatmulTCGen05Benchmark(BaseBenchmark):
+class BaselineMatmulTCGen05Benchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Custom tcgen05 CUDA kernel (educational implementation)."""
 
     def __init__(self) -> None:
@@ -63,6 +64,20 @@ class BaselineMatmulTCGen05Benchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.module.matmul_tcgen05(self.A, self.B)
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"A": self.A, "B": self.B},
+            output=self.output.detach().float().clone(),
+            batch_size=self.size,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.A = None
@@ -86,20 +101,6 @@ class BaselineMatmulTCGen05Benchmark(BaseBenchmark):
         if self.A is None or self.B is None:
             return "Matrices not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.detach().float()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"size": self.size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to FP16."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaselineMatmulTCGen05Benchmark:

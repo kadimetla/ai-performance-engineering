@@ -25,6 +25,7 @@ from core.harness.benchmark_harness import (
     BenchmarkConfig,
     WorkloadMetadata,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 @dataclass
@@ -78,7 +79,7 @@ class BaselineRouter:
 # Benchmark Harness Integration
 #============================================================================
 
-class BaselineRouterBenchmark(BaseBenchmark):
+class BaselineRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark harness wrapper for baseline round-robin router."""
 
     def __init__(self):
@@ -88,6 +89,7 @@ class BaselineRouterBenchmark(BaseBenchmark):
         self.num_requests = 1000
         self._last = 0.0
         self.output: Optional[torch.Tensor] = None
+        self.verify_input: Optional[torch.Tensor] = None
         self.register_workload_metadata(
             requests_per_iteration=float(self.num_requests),
             tokens_per_iteration=float(self.num_requests * 100),
@@ -95,6 +97,9 @@ class BaselineRouterBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         """Setup: Initialize baseline round-robin router."""
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         gpu_ids = [f"gpu_{i}" for i in range(self.num_gpus)]
         self.router = BaselineRouter(gpu_ids)
 
@@ -119,9 +124,13 @@ class BaselineRouterBenchmark(BaseBenchmark):
                 self.router.complete(f"req_{i-10}")
         
         self._last = float(routed)
-        self.output = torch.tensor([[self._last, float(self.num_gpus)]], dtype=torch.float32)
+        verify_tensor = torch.tensor([[float(self.num_requests), float(self.num_gpus)]], dtype=torch.float32)
+        if self.verify_input is None or tuple(self.verify_input.shape) != tuple(verify_tensor.shape):
+            self.verify_input = torch.ones_like(verify_tensor)
+        self.output = (verify_tensor * self.verify_input).detach()
         self._set_verification_payload(
             inputs={
+                "verify_input": self.verify_input.detach(),
                 "num_gpus": torch.tensor([self.num_gpus], dtype=torch.int64),
                 "num_requests": torch.tensor([self.num_requests], dtype=torch.int64),
             },
@@ -136,6 +145,7 @@ class BaselineRouterBenchmark(BaseBenchmark):
         """Teardown: Clean up resources."""
         self.router = None
         self.output = None
+        self.verify_input = None
         self.metrics = None
         super().teardown()
 

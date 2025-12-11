@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
+from numbers import Number
 from typing import Dict, Optional
 
 import torch
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from labs.dynamic_router.topology_probe import TopologyProbeBenchmark
 
 
-class BaselineTopologyProbeBenchmark(BaseBenchmark):
+class BaselineTopologyProbeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs the topology probe under aisp bench."""
 
     def __init__(self) -> None:
@@ -18,23 +21,31 @@ class BaselineTopologyProbeBenchmark(BaseBenchmark):
         self._summary: Dict[str, float] = {}
         self.metrics: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
+        self.verify_input: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
-        return
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
 
     def benchmark_fn(self) -> None:
         bench = TopologyProbeBenchmark()
         bench.benchmark_fn()
         self._summary = bench.get_custom_metrics() or {}
-        metric_values = list(self._summary.values()) or [0.0]
-        expected_shape = (1, len(metric_values))
+        metric_values = [float(v) for v in self._summary.values() if isinstance(v, Number)]
+        if not metric_values:
+            metric_values = [0.0]
+        summary_tensor = torch.tensor(metric_values, dtype=torch.float32).unsqueeze(0)
+        expected_shape = tuple(summary_tensor.shape)
         if self.metrics is None or tuple(self.metrics.shape) != expected_shape:
-            self.metrics = torch.randn(expected_shape, dtype=torch.float32)
-        summary_tensor = torch.tensor([metric_values], dtype=torch.float32)
-        self.output = (summary_tensor + self.metrics).detach()
+            self.metrics = torch.zeros(expected_shape, dtype=torch.float32)
+        if self.verify_input is None or tuple(self.verify_input.shape) != expected_shape:
+            self.verify_input = torch.ones(expected_shape, dtype=torch.float32)
+        self.output = (summary_tensor * self.verify_input + self.metrics).detach()
         self._set_verification_payload(
             inputs={
+                "verify_input": self.verify_input.detach(),
                 "num_gpus": torch.tensor([len(self._summary)], dtype=torch.int64),
             },
             output=self.output,
@@ -46,6 +57,7 @@ class BaselineTopologyProbeBenchmark(BaseBenchmark):
 
     def teardown(self) -> None:
         self.metrics = None
+        self.verify_input = None
         self.output = None
         super().teardown()
 
@@ -63,4 +75,4 @@ def get_benchmark() -> BaseBenchmark:
 if __name__ == "__main__":
     b = get_benchmark()
     b.benchmark_fn()
-    print(b.get_custom_metrics())
+    print(json.dumps(b.get_custom_metrics() or {}, indent=2))

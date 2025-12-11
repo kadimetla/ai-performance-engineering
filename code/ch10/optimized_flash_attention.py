@@ -28,6 +28,7 @@ import torch.nn.functional as F
 from contextlib import contextmanager, nullcontext
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import (
     BaseBenchmark,
@@ -145,7 +146,7 @@ class TiledAttentionModule(nn.Module):
         return self.out_proj(attn_output)
 
 
-class OptimizedFlashAttentionBenchmark(BaseBenchmark):
+class OptimizedFlashAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Tiled attention via FlashAttention SDPA backend.
     
     This benchmark demonstrates the practical benefit of Chapter 10's
@@ -222,9 +223,23 @@ class OptimizedFlashAttentionBenchmark(BaseBenchmark):
             with torch.no_grad(), sdpa_flash_backend():
                 # The SDPA call internally uses tiled computation
                 # This is the same pipelining concept from Ch10 applied to attention
-                _output = self.model(self.input, is_causal=self.use_causal)
+                self.output = self.model(self.input, is_causal=self.use_causal)
         
         self._synchronize()
+        if self.output is None or self.input is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output.detach().float().clone(),
+            batch_size=self.batch_size,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -264,20 +279,6 @@ class OptimizedFlashAttentionBenchmark(BaseBenchmark):
                 return "NaN values in attention output"
         
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to FP16."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

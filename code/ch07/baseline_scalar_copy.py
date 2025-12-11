@@ -19,6 +19,7 @@ class BaselineCopyScalarBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        num_floats = 64 * 1024 * 1024
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="baseline_copy_scalar",
@@ -27,9 +28,12 @@ class BaselineCopyScalarBenchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=90,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
-            workload_params={"type": "scalar_copy"},
+            workload_params={
+                "N": num_floats,
+                "dtype": "float32",
+            },
         )
-        self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
+        self.register_workload_metadata(bytes_per_iteration=float(num_floats * 8))
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics."""

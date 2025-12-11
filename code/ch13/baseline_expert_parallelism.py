@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -25,7 +26,7 @@ class ExpertLayer(nn.Module):
         return self.expert(x)
 
 
-class BaselineExpertParallelismBenchmark(BaseBenchmark):
+class BaselineExpertParallelismBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: MoE without expert parallelism (all experts on single GPU)."""
     
     def __init__(self):
@@ -76,6 +77,20 @@ class BaselineExpertParallelismBenchmark(BaseBenchmark):
                         output[expert_mask] += expert_output
                 self.output = output.detach().clone()
         self._synchronize()
+        if self.input_data is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input_data},
+            output=self.output.detach().float().clone(),
+            batch_size=self.input_data.shape[0],
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         self.experts = None
@@ -107,20 +122,6 @@ class BaselineExpertParallelismBenchmark(BaseBenchmark):
         if self.router is None:
             return "Router not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"num_experts": self.num_experts, "top_k": self.top_k}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineExpertParallelismBenchmark:

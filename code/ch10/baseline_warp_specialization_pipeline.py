@@ -14,6 +14,7 @@ import torch.nn as nn
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -24,7 +25,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
 from ch10.workload_config import WORKLOAD
 
 
-class BaselineWarpSpecializationPipelineBenchmark(BaseBenchmark):
+class BaselineWarpSpecializationPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Sequential processing without warp specialization or pipelining."""
     
     def __init__(self):
@@ -65,6 +66,12 @@ class BaselineWarpSpecializationPipelineBenchmark(BaseBenchmark):
             self.hidden_dim,
             pin_memory=True,
         )
+        self.output = torch.empty(
+            self.micro_batches,
+            self.chunk_tokens,
+            self.hidden_dim,
+            device=self.device,
+        )
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
@@ -78,9 +85,24 @@ class BaselineWarpSpecializationPipelineBenchmark(BaseBenchmark):
                     host_chunk = self.inputs_host[idx]
                     device_chunk = host_chunk.to(self.device, non_blocking=False)
                     output = self.model(device_chunk)
+                    self.output[idx] = output
                     total += float(output.sum().item())
                     self._synchronize()
                 self._checksum = total
+        if self.output is None or self.inputs_host is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.inputs_host},
+            output=self.output.detach().float().clone(),
+            batch_size=int(self.micro_batches),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -113,20 +135,6 @@ class BaselineWarpSpecializationPipelineBenchmark(BaseBenchmark):
         if self.inputs_host is None:
             return "Inputs not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"micro_batches": self.micro_batches, "chunk_tokens": self.chunk_tokens, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

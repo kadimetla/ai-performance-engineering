@@ -19,6 +19,7 @@ class OptimizedHBMCopyBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        size_bytes = 256 * 1024 * 1024
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="optimized_hbm_copy",
@@ -26,9 +27,12 @@ class OptimizedHBMCopyBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=90,
-            workload_params={"type": "hbm_copy"},
+            workload_params={
+                "bytes": size_bytes,
+                "dtype": "float32",
+            },
         )
-        self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
+        self.register_workload_metadata(bytes_per_iteration=float(size_bytes * 2))
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics."""

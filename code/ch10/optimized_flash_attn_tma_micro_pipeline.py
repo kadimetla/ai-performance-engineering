@@ -7,6 +7,7 @@ from pathlib import Path
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class OptimizedFlashAttnTmaMicroPipelineBenchmark(CudaBinaryBenchmark):
@@ -24,7 +25,14 @@ class OptimizedFlashAttnTmaMicroPipelineBenchmark(CudaBinaryBenchmark):
             run_args=(),
             requires_pipeline_api=True,
             require_tma_instructions=True,
-            workload_params={"type": "flash_attn_tma_micro_pipeline"},
+            workload_params={
+                "batch_size": 2048,
+                "dtype": "float32",
+                "seq_len": 2048,
+                "d_head": 64,
+                "tile_kv": 40,
+                "threads": 128,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
@@ -36,6 +44,20 @@ class OptimizedFlashAttnTmaMicroPipelineBenchmark(CudaBinaryBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def get_input_signature(self) -> dict:
+        """Signature for optimized FlashAttn micro-pipeline."""
+        return simple_signature(
+            batch_size=2048,
+            dtype="float32",
+            seq_len=2048,
+            d_head=64,
+            tile_kv=40,
+            threads=128,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedFlashAttnTmaMicroPipelineBenchmark()

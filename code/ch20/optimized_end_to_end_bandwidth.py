@@ -59,10 +59,6 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
         self._inductor_cfg_state: Optional[InductorCudagraphState] = None
         self._used_compiled_model = False
         self._compile_error: Optional[str] = None
-        self._tracked_streams: set[torch.cuda.Stream] = set()
-        self._tracker_installed = False
-        self._orig_stream_cls = None
-        self._default_stream: Optional[torch.cuda.Stream] = None
         tokens = self.batch_size * self.num_batches
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(tokens),
@@ -87,7 +83,6 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
                 torch.backends.cudnn.deterministic = False
             torch.manual_seed(42)
             
-            self._install_stream_tracker()
             model = SimplePipeline(hidden_dim=self.hidden_dim).to(self.device).half().eval()
             compile_supported, compile_reason = is_torch_compile_supported_on_device()
             disable_compile = bool(os.environ.get("PYTEST_CURRENT_TEST"))
@@ -168,10 +163,6 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
         torch.cuda.empty_cache()
         restore_inductor_cudagraph_features(self._inductor_cfg_state)
         self._inductor_cfg_state = None
-        if self._tracker_installed and self._orig_stream_cls is not None:
-            torch.cuda.Stream = self._orig_stream_cls  # type: ignore[assignment]
-        self._tracker_installed = False
-        self._tracked_streams.clear()
     
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -210,32 +201,6 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
         if payload is None:
             return (0.1, 1.0)
         return super().get_output_tolerance()
-
-    def get_custom_streams(self) -> list[torch.cuda.Stream]:
-        """Declare any non-default streams created (compile/Inductor)."""
-        declared = set(self._tracked_streams)
-        if self._default_stream is not None:
-            declared.add(self._default_stream)
-        # Return stable list for auditor
-        return list(declared)
-
-    def _install_stream_tracker(self) -> None:
-        """Track streams created so we can declare them to the harness."""
-        if not torch.cuda.is_available() or self._tracker_installed:
-            return
-        self._default_stream = torch.cuda.current_stream(self.device)
-        self._tracked_streams = set()
-        orig_cls = torch.cuda.Stream
-        self._orig_stream_cls = orig_cls
-        benchmark = self
-
-        def _tracking_stream(*args, **kwargs):  # type: ignore[override]
-            s = orig_cls(*args, **kwargs)
-            benchmark._tracked_streams.add(s)
-            return s
-
-        torch.cuda.Stream = _tracking_stream  # type: ignore[assignment]
-        self._tracker_installed = True
 
 
 def get_benchmark() -> BaseBenchmark:

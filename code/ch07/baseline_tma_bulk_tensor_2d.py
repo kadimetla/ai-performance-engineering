@@ -19,6 +19,11 @@ class BaselineTMABulkTensor2D(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        width = 2048
+        height = 2048
+        tile_m = 64
+        tile_n = 32
+        bytes_per_matrix = width * height * 4
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="baseline_tma_bulk_tensor_2d",
@@ -26,9 +31,15 @@ class BaselineTMABulkTensor2D(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=120,
-            workload_params={"type": "tma_bulk_tensor_2d"},
+            workload_params={
+                "width": width,
+                "height": height,
+                "tile_m": tile_m,
+                "tile_n": tile_n,
+                "dtype": "float32",
+            },
         )
-        self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
+        self.register_workload_metadata(bytes_per_iteration=float(bytes_per_matrix * 2))
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics."""

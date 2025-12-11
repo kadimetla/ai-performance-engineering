@@ -23,7 +23,6 @@ class OptimizedContinuousBatchingBenchmark(_OptimizedContinuousBatchingBenchmark
 
     def __init__(self) -> None:
         super().__init__()
-        self.jitter_exemption_reason = "SKIPPED: requires >=2 GPUs"
         init_tokens = torch.zeros((1, self.hidden_dim), dtype=torch.float32)
         self._verify_inputs = {"tokens": init_tokens}
         self._set_verification_payload(

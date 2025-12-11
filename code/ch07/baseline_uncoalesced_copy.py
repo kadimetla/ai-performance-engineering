@@ -19,6 +19,9 @@ class BaselineCopyUncoalescedBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        n_elems = 1 << 23
+        random_passes = 64
+        repeat = 40
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="baseline_copy_uncoalesced",
@@ -27,9 +30,16 @@ class BaselineCopyUncoalescedBenchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=90,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
-            workload_params={"type": "uncoalesced_copy"},
+            workload_params={
+                "N": n_elems,
+                "random_passes": random_passes,
+                "repeat": repeat,
+                "dtype": "float32",
+            },
         )
-        self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
+        self.register_workload_metadata(
+            bytes_per_iteration=float(n_elems * (random_passes + 1) * 4),
+        )
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics."""

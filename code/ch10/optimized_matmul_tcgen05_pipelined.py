@@ -23,12 +23,13 @@ from typing import Optional
 import torch
 
 from ch10.matmul_extension_tcgen05 import load_matmul_tcgen05_module
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.tcgen05_requirements import check_tcgen05_support
 from labs.custom_vs_cublas.tcgen05_loader import matmul_tcgen05_pipelined
 
 
-class OptimizedMatmulTCGen05PipelinedBenchmark(BaseBenchmark):
+class OptimizedMatmulTCGen05PipelinedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Pipelined tcgen05 kernel with double-buffering.
     """
 
@@ -54,7 +55,8 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(BaseBenchmark):
     def setup(self) -> None:
         if not self._tcgen05_available:
             raise RuntimeError(self._skip_reason)
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         dtype = torch.float16
         self.A = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
         self.B = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
@@ -66,8 +68,22 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(BaseBenchmark):
         assert self.A is not None and self.B is not None
         with self._nvtx_range("optimized_matmul_tcgen05_pipelined"):
             with torch.no_grad():
-                _ = matmul_tcgen05_pipelined(self.A, self.B)
+                self.output = matmul_tcgen05_pipelined(self.A, self.B)
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"A": self.A, "B": self.B},
+            output=self.output.detach().float().clone(),
+            batch_size=self.size,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.A = None
@@ -94,20 +110,6 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(BaseBenchmark):
         if self.A is None or self.B is None:
             return "Matrices not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"size": self.size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to FP16."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> OptimizedMatmulTCGen05PipelinedBenchmark:

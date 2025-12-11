@@ -7,10 +7,11 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class BaselineQuantizationBenchmark(BaseBenchmark):
+class BaselineQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: FP32 precision without quantization (full precision)."""
     
     def __init__(self):
@@ -52,6 +53,20 @@ class BaselineQuantizationBenchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.model(self.data)
         self._synchronize()
+        if self.data is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.data},
+            output=self.output.detach().float().clone(),
+            batch_size=self.data.shape[0],
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -83,20 +98,6 @@ class BaselineQuantizationBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"N": self.N}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineQuantizationBenchmark:

@@ -9,10 +9,11 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-class OptimizedStreamOrderedBenchmark(BaseBenchmark):
+class OptimizedStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Overlap work across multiple CUDA streams."""
     
     def __init__(self):
@@ -110,6 +111,22 @@ class OptimizedStreamOrderedBenchmark(BaseBenchmark):
                 # Single synchronization at the end - key difference from baseline
                 torch.cuda.synchronize()
         self._synchronize()
+        if self.host_outputs is None or self.host_requests is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        output = torch.cat(self.host_outputs, dim=0)
+        inputs = {"requests": torch.stack(self.host_requests)}
+        self._set_verification_payload(
+            inputs=inputs,
+            output=output.detach().float().clone(),
+            batch_size=int(self.num_requests),
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-2, 1e-2),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -143,20 +160,6 @@ class OptimizedStreamOrderedBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.host_outputs is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        # Concatenate all outputs for comparison
-        return torch.cat(self.host_outputs, dim=0)
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim, "num_requests": self.num_requests}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (1e-2, 1e-2)
 
 
 def get_benchmark() -> OptimizedStreamOrderedBenchmark:

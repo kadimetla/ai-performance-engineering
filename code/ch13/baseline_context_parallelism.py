@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 import math
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -24,6 +24,7 @@ from core.harness.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -112,6 +113,7 @@ class BaselineContextParallelism:
         self.num_layers = num_layers
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.output: Optional[torch.Tensor] = None
         
         # Check memory requirements
         self._check_memory()
@@ -163,7 +165,7 @@ class BaselineContextParallelism:
             f"hidden={self.hidden_size}, heads={self.num_heads}, layers={self.num_layers}"
         )
     
-    def run(self) -> float:
+    def run(self) -> Tuple[float, torch.Tensor]:
         """Execute baseline attention without Context Parallelism."""
         torch.cuda.synchronize()
         
@@ -173,12 +175,13 @@ class BaselineContextParallelism:
             x = layer(x, self.mask)
         
         torch.cuda.synchronize()
+        self.output = x
         
         # Return peak memory usage
         peak_memory_gb = torch.cuda.max_memory_allocated() / (1024**3)
         logger.info(f"Peak memory: {peak_memory_gb:.2f} GB")
         
-        return peak_memory_gb
+        return peak_memory_gb, x
     
     def cleanup(self):
         """Clean up resources."""
@@ -211,22 +214,26 @@ def run_benchmark(
     t0 = torch.cuda.Event(enable_timing=True)
     t1 = torch.cuda.Event(enable_timing=True)
     t0.record()
-    peak_memory = benchmark.run()
+    peak_memory, output = benchmark.run()
     t1.record()
     torch.cuda.synchronize()
     elapsed_ms = t0.elapsed_time(t1)
+    verify_input = benchmark.input.detach().float().clone()
+    verify_mask = benchmark.mask.detach().clone()
+    verify_output = output.detach().float().clone()
     benchmark.cleanup()
     
-    return {
+    metrics = {
         "mean_time_ms": float(elapsed_ms),
         "peak_memory_gb": peak_memory,
         "seq_length": seq_length,
         "num_gpus": 1,
         "parallelism": "none",
     }
+    return metrics, {"input": verify_input, "mask": verify_mask, "output": verify_output}
 
 
-class BaselineContextParallelismBenchmark(BaseBenchmark):
+class BaselineContextParallelismBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness-friendly wrapper around the standalone baseline runner."""
 
     def __init__(self):
@@ -240,7 +247,20 @@ class BaselineContextParallelismBenchmark(BaseBenchmark):
 
     def benchmark_fn(self) -> None:
         # Use default shapes for a minimal single-GPU check.
-        self._metrics = run_benchmark()
+        metrics, verify = run_benchmark()
+        self._metrics = metrics
+        self._set_verification_payload(
+            inputs={"input": verify["input"], "mask": verify["mask"]},
+            output=verify["output"],
+            batch_size=verify["input"].shape[0],
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
         self._synchronize()
 
     def get_config(self) -> BenchmarkConfig:
@@ -248,19 +268,6 @@ class BaselineContextParallelismBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[Dict[str, Any]]:
         return self._metrics
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        raise RuntimeError("Multi-GPU required - verification not supported on single GPU")
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "context_parallelism"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineContextParallelismBenchmark()

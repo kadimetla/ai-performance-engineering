@@ -9,6 +9,7 @@ import torch
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
 from core.utils.extension_loader_template import load_cuda_extension_v2
 from core.harness.hardware_capabilities import ensure_dsmem_supported  # noqa: E402
@@ -26,7 +27,7 @@ def _load_baseline_extension():
     )
 
 
-class BaselineDualPipelineBenchmark(BaseBenchmark):
+class BaselineDualPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Calls the book-era dual-pipeline kernel launched across CUDA streams."""
 
     def __init__(self) -> None:
@@ -71,6 +72,20 @@ class BaselineDualPipelineBenchmark(BaseBenchmark):
         self._synchronize()
         if self.output is not None:
             self.output.copy_(result)
+        if self.input_a is None or self.input_b is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input_a": self.input_a, "input_b": self.input_b},
+            output=self.output.detach().float().clone(),
+            batch_size=int(self.tiles),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+            output_tolerance=(1e-4, 1e-4),
+        )
 
     def teardown(self) -> None:
         self.input_a = None
@@ -102,20 +117,6 @@ class BaselineDualPipelineBenchmark(BaseBenchmark):
         if not torch.isfinite(self.output).all():
             return "Output contains non-finite values"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"tiles": self.tiles, "tile_elems": self.tile_elems, "num_streams": self.num_streams}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (1e-4, 1e-4)
 
 
 def get_benchmark() -> BaselineDualPipelineBenchmark:

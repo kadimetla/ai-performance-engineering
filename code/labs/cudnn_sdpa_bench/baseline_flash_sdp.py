@@ -121,7 +121,6 @@ class FlashSDPLabBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch),
             tokens_per_iteration=float(tokens),
         )
-        self.jitter_exemption_reason = "Flash SDP lab benchmark: fixed dimensions"
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch),
             tokens_per_iteration=float(tokens),

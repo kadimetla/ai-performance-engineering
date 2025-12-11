@@ -19,6 +19,10 @@ class BaselineTMACopyBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        n_elems = 1 << 25
+        lookahead = 64
+        redundant_reads = 8
+        bytes_per_element = (redundant_reads * 3 + 1) * 4
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="baseline_tma_copy",
@@ -26,9 +30,16 @@ class BaselineTMACopyBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=120,
-            workload_params={"type": "tma_copy"},
+            workload_params={
+                "N": n_elems,
+                "lookahead": lookahead,
+                "redundant_reads": redundant_reads,
+                "dtype": "float32",
+            },
         )
-        self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
+        self.register_workload_metadata(
+            bytes_per_iteration=float(n_elems * bytes_per_element),
+        )
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics."""

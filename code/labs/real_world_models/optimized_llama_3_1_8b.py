@@ -31,7 +31,6 @@ class OptimizedLlama31_8B(BaseBenchmark):
         self.use_fp8 = use_fp8
         self.model_wrapper = None
         self._last_metrics = {}
-        self.jitter_exemption_reason = "Llama 3.1 8B optimized: fixed configuration"
         self.register_workload_metadata(requests_per_iteration=float(batch_size))
 
     def setup(self) -> None:

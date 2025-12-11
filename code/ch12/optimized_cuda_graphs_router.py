@@ -17,12 +17,13 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 from ch12.cuda_extensions import load_cuda_graphs_extension  # noqa: E402
 
 
-class CUDAGraphRouterBenchmark(BaseBenchmark):
+class CUDAGraphRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """CUDA Graph routing benchmark with a branch toggle on identical graphs."""
 
     def __init__(self) -> None:
@@ -59,6 +60,20 @@ class CUDAGraphRouterBenchmark(BaseBenchmark):
             self.route_flag ^= 1
             self._extension.graph_replay(self.data, self.iterations)
         self._synchronize()
+        if self.data is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.data.detach().clone()},
+            output=self.data.detach().clone(),
+            batch_size=self.N,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
@@ -81,20 +96,6 @@ class CUDAGraphRouterBenchmark(BaseBenchmark):
         if not torch.isfinite(self.data).all():
             return "Data contains non-finite values"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.data is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.data.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"N": self.N}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

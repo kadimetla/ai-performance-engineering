@@ -24,7 +24,6 @@ class BaselineLlama31_8B(BaseBenchmark):
         self.seq_length = seq_length
         self.model_wrapper = None
         self._last_metrics = {}
-        self.jitter_exemption_reason = "Llama 3.1 8B baseline: fixed configuration"
         self.register_workload_metadata(requests_per_iteration=float(batch_size))
 
     def setup(self) -> None:

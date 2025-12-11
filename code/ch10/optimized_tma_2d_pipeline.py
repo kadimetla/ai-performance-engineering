@@ -7,6 +7,7 @@ from pathlib import Path
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class OptimizedTma2DPipelineBenchmark(CudaBinaryBenchmark):
@@ -23,7 +24,15 @@ class OptimizedTma2DPipelineBenchmark(CudaBinaryBenchmark):
             timeout_seconds=90,
             run_args=(),
             requires_pipeline_api=True,
-            workload_params={"type": "tma_2d_pipeline"},
+            workload_params={
+                "batch_size": 4096,
+                "dtype": "float32",
+                "M": 4096,
+                "N": 4096,
+                "tile_n": 128,
+                "chunk_m": 64,
+                "stages": 1,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
@@ -34,6 +43,21 @@ class OptimizedTma2DPipelineBenchmark(CudaBinaryBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def get_input_signature(self) -> dict:
+        """Signature for optimized TMA 2D pipeline."""
+        return simple_signature(
+            batch_size=4096,
+            dtype="float32",
+            M=4096,
+            N=4096,
+            tile_n=128,
+            chunk_m=64,
+            stages=1,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 
 def get_benchmark() -> CudaBinaryBenchmark:
     return OptimizedTma2DPipelineBenchmark()

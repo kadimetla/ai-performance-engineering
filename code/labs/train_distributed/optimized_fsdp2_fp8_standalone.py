@@ -62,7 +62,6 @@ class OptimizedFSDP2FP8(BaseBenchmark):
         self.micro_batch_size = micro_batch_size
         self.use_fp8 = use_fp8 and TORCHAO_AVAILABLE
         self._last_metrics: Dict[str, float] = {}
-        self.jitter_exemption_reason = "FSDP2 FP8 standalone benchmark: multi-GPU"
         self.register_workload_metadata(requests_per_iteration=float(batch_size))
 
         # Initialize distributed

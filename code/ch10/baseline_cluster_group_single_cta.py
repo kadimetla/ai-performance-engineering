@@ -12,6 +12,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class BaselineClusterGroupSingleCtaBenchmark(CudaBinaryBenchmark):
@@ -26,7 +27,12 @@ class BaselineClusterGroupSingleCtaBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=60,
-            workload_params={"type": "cluster_group_single_cta"},
+            workload_params={
+                "batch_size": 8192,
+                "dtype": "float32",
+                "elements": 1 << 24,
+                "chunk_elems": 2048,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
@@ -38,6 +44,18 @@ class BaselineClusterGroupSingleCtaBenchmark(CudaBinaryBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def get_input_signature(self) -> dict:
+        """Signature for the single-CTA cluster fallback."""
+        return simple_signature(
+            batch_size=8192,
+            dtype="float32",
+            elements=1 << 24,
+            chunk_elems=2048,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 
 def get_benchmark() -> BaselineClusterGroupSingleCtaBenchmark:
     return BaselineClusterGroupSingleCtaBenchmark()

@@ -7,12 +7,13 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch10.workload_config import WORKLOAD
 
 
-class OptimizedBatchBenchmark(BaseBenchmark):
+class OptimizedBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: large batch size to maximize GPU utilization.
     
     Processes all data in a single forward pass, achieving better
@@ -64,6 +65,21 @@ class OptimizedBatchBenchmark(BaseBenchmark):
                 # Single large forward pass (one kernel launch, better GPU utilization)
                 self.output = self.model(self.input)
         self._synchronize()
+        if self.output is None or self.input is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output.detach().float().clone(),
+            batch_size=self.total_batch_size,
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.05, 0.05),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -97,26 +113,6 @@ class OptimizedBatchBenchmark(BaseBenchmark):
         if self.input is None:
             return "Input not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"total_batch_size": self.total_batch_size, "hidden_dim": self.hidden_dim}
-    
-    def get_output_tolerance(self) -> tuple[float, float]:
-        """Return (rtol, atol) for output verification.
-        
-        Large-batch vs micro-batching can have numerical differences due to:
-        - Different CUDA kernel parallelism patterns
-        - Different floating-point reduction order
-        - TF32 precision accumulation across multiple operations
-        """
-        return (0.05, 0.05)  # 5% relative tolerance for batch size comparisons
 
 
 def get_benchmark() -> OptimizedBatchBenchmark:

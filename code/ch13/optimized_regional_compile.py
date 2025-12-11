@@ -21,6 +21,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.utils import compile_utils as _compile_utils_patch  # noqa: F401
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -97,7 +98,7 @@ class TinyTransformerBlock(nn.Module):
         return x
 
 
-class OptimizedRegionalCompileBenchmark(BaseBenchmark):
+class OptimizedRegionalCompileBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: compile only the MLP region, keep the rest eager."""
 
     def __init__(self):
@@ -178,6 +179,20 @@ class OptimizedRegionalCompileBenchmark(BaseBenchmark):
         with torch.no_grad(), self._nvtx_range("optimized_regional_compile"):
             self.output = self.model(x).detach().float().clone()
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": x},
+            output=self.output.detach().float().clone(),
+            batch_size=self.batch_size,
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1.0, 10.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -212,21 +227,6 @@ class OptimizedRegionalCompileBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()  # Convert bf16 to fp32
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "hidden": self.hidden}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        # bf16 vs fp32 - outputs will differ
-        return (1.0, 10.0)
 
 
 def get_benchmark() -> BaseBenchmark:

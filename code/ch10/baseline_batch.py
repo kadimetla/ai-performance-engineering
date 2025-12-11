@@ -7,12 +7,13 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch10.workload_config import WORKLOAD
 
 
-class BaselineBatchBenchmark(BaseBenchmark):
+class BaselineBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: small batch size, limited GPU utilization.
     
     Processes the same data as optimized but in small micro-batches,
@@ -67,11 +68,7 @@ class BaselineBatchBenchmark(BaseBenchmark):
             self.hidden_dim,
         )
         # Pre-allocate output buffer
-        self.output = torch.empty(
-            self.total_batch_size,
-            self.hidden_dim,
-            device=self.device,
-        )
+        self.output = torch.empty(self.total_batch_size, self.hidden_dim, device=self.device)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
@@ -86,6 +83,21 @@ class BaselineBatchBenchmark(BaseBenchmark):
                     end = start + self.micro_batch_size
                     self.output[start:end] = self.model(self.inputs_chunked[idx])
         self._synchronize()
+        if self.output is None or self.input_flat is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input_flat},
+            output=self.output.detach().float().clone(),
+            batch_size=self.total_batch_size,
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.05, 0.05),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -122,34 +134,6 @@ class BaselineBatchBenchmark(BaseBenchmark):
         if self.output is None:
             return "Output not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"total_batch_size": self.total_batch_size, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
-    def get_verify_output(self) -> Optional[torch.Tensor]:
-        """Return output tensor for verification against optimized version."""
-        return self.output
-    
-    def get_output_tolerance(self) -> tuple[float, float]:
-        """Return (rtol, atol) for output verification.
-        
-        Micro-batching vs large-batch can have numerical differences due to:
-        - Different CUDA kernel parallelism patterns
-        - Different floating-point reduction order
-        - TF32 precision accumulation across multiple operations
-        """
-        return (0.05, 0.05)  # 5% relative tolerance for batch size comparisons
 
 
 def get_benchmark() -> BaselineBatchBenchmark:

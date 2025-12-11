@@ -68,8 +68,8 @@ def check_compliance(benchmark: Any) -> Dict[str, bool]:
         "get_verify_inputs": False,
         "get_output_tolerance": False,
         "validate_result": False,
-        # Jitter exemptions are optional; treat absence as compliant.
-        "jitter_exemption_reason": True,
+        # Jitter exemptions are NOT allowed; any exemption is a failure.
+        "jitter_exemption_reason": False,
         "register_workload_metadata_called": False,
     }
     
@@ -130,12 +130,17 @@ def check_compliance(benchmark: Any) -> Dict[str, bool]:
     if hasattr(benchmark, "validate_result"):
         compliance["validate_result"] = True
     
-    # Check jitter_exemption_reason attribute
+    # Jitter exemptions are no longer permitted.
     if hasattr(benchmark, "jitter_exemption_reason"):
         reason = getattr(benchmark, "jitter_exemption_reason")
-        # Explicit exemption is acceptable; absence is already treated as compliant.
         if reason:
-            compliance["jitter_exemption_reason"] = True
+            compliance["jitter_exemption_reason"] = False
+    elif hasattr(benchmark, "non_jitterable_reason"):
+        reason = getattr(benchmark, "non_jitterable_reason")
+        if reason:
+            compliance["jitter_exemption_reason"] = False
+    else:
+        compliance["jitter_exemption_reason"] = True
     
     # Check if workload metadata was registered
     if hasattr(benchmark, "_workload_registered") and benchmark._workload_registered:
@@ -172,7 +177,7 @@ def audit_directory(directory: Path) -> Dict[str, Dict[str, Any]]:
         compliance = check_compliance(benchmark)
         
         # Determine overall status
-        critical_methods = ["get_verify_output", "get_input_signature"]
+        critical_methods = ["get_verify_output", "get_input_signature", "jitter_exemption_reason"]
         is_compliant = all(compliance.get(m, False) for m in critical_methods)
         
         results[str(filepath)] = {

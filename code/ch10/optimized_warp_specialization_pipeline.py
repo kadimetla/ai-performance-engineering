@@ -32,10 +32,11 @@ from core.harness.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from ch10.workload_config import WORKLOAD
 
 
-class OptimizedWarpSpecializationPipelineBenchmark(BaseBenchmark):
+class OptimizedWarpSpecializationPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Warp specialization with intra-kernel pipelining."""
     
     def __init__(self):
@@ -86,6 +87,13 @@ class OptimizedWarpSpecializationPipelineBenchmark(BaseBenchmark):
                 device=self.device,
                 dtype=torch.float16,
             )
+        self.output = torch.empty(
+            self.micro_batches,
+            self.chunk_tokens,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
         self._synchronize()
         tokens = float(self.micro_batches * self.chunk_tokens)
         self.register_workload_metadata(
@@ -104,9 +112,27 @@ class OptimizedWarpSpecializationPipelineBenchmark(BaseBenchmark):
                     intermediate = intermediate_flat.view_as(self.input)
                     reshaped = intermediate.view(-1, self.hidden_dim)
                     output = self.model(reshaped)
+                    self.output = output.view(self.micro_batches, self.chunk_tokens, self.hidden_dim)
                     self._checksum = float(output.float().sum().item())
                 else:
-                    accumulator = torch.zeros(1, device=self.device, dtype=torch.float32)
+                    flat_input = self.input.view(-1, self.hidden_dim)
+                    flat_output = self.model(flat_input)
+                    self.output = flat_output.view(self.micro_batches, self.chunk_tokens, self.hidden_dim)
+                    self._checksum = float(self.output.float().sum().item())
+        if self.output is None or self.input is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output.detach().float().clone(),
+            batch_size=int(self.micro_batches),
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -130,20 +156,6 @@ class OptimizedWarpSpecializationPipelineBenchmark(BaseBenchmark):
         if self.input is None:
             return "Input not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"micro_batches": self.micro_batches, "chunk_tokens": self.chunk_tokens, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to FP16."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

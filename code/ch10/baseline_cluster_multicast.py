@@ -14,6 +14,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
+
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -22,7 +24,7 @@ from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # no
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-class BaselineClusterMulticastBenchmark(BaseBenchmark):
+class BaselineClusterMulticastBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs two sequential matmuls to mimic non-multicast traffic."""
 
     def __init__(self) -> None:
@@ -35,7 +37,8 @@ class BaselineClusterMulticastBenchmark(BaseBenchmark):
         self.register_workload_metadata(bytes_per_iteration=0.0)
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         hidden = 4096
         self.linear_a = nn.Linear(hidden, hidden, bias=False).to(self.device)
         self.linear_b = nn.Linear(hidden, hidden, bias=False).to(self.device)
@@ -49,11 +52,26 @@ class BaselineClusterMulticastBenchmark(BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(self.get_config())
         start = self._record_start()
         with nvtx_range("cluster_multicast_baseline", enable=enable_nvtx):
-            x = self.linear_a(self.inputs)
-            x = torch.relu(x)
-            x = self.linear_b(x)
+            with torch.no_grad():
+                x = self.linear_a(self.inputs)
+                x = torch.relu(x)
+                self.output = self.linear_b(x)
         torch.cuda.synchronize(self.device)
         latency_ms = self._record_stop(start)
+        if self.output is None or self.inputs is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.inputs},
+            output=self.output.detach().float().clone(),
+            batch_size=256,
+            precision_flags={
+                "bf16": True,
+                "fp16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
         return {"latency_ms": latency_ms}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
@@ -72,20 +90,6 @@ class BaselineClusterMulticastBenchmark(BaseBenchmark):
         if self.linear_a is None or self.linear_b is None:
             return "Models not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"hidden": 4096, "batch": 256}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

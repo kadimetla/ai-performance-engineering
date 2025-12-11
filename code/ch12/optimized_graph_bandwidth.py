@@ -143,14 +143,6 @@ class OptimizedGraphBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
             return "Destination tensor contains non-finite values"
         return None
 
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"N": self.N}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""

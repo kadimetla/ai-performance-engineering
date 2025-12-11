@@ -49,7 +49,6 @@ class BaselineFSDP2Standard(BaseBenchmark):
         self.num_layers = num_layers
         self.micro_batch_size = micro_batch_size
         self._last_metrics: Dict[str, float] = {}
-        self.jitter_exemption_reason = "FSDP2 standalone benchmark: multi-GPU"
         self.register_workload_metadata(requests_per_iteration=float(batch_size))
 
         self._init_distributed()

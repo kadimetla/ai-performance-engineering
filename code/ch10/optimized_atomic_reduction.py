@@ -19,6 +19,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class OptimizedAtomicReductionBenchmark(CudaBinaryBenchmark):
@@ -44,6 +45,13 @@ class OptimizedAtomicReductionBenchmark(CudaBinaryBenchmark):
             total_bytes=getattr(self, '_total_bytes', 64 * 1024 * 1024 * 4),
             elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
         )
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return simple_signature(batch_size=1, dtype="float32", workload=1).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

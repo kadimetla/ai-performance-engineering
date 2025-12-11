@@ -27,6 +27,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class OptimizedDSMEMClusterAtomicBenchmark(CudaBinaryBenchmark):
@@ -41,7 +42,13 @@ class OptimizedDSMEMClusterAtomicBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=120,
-            workload_params={"type": "dsmem_cluster_atomic"},
+            workload_params={
+                "batch_size": 1024,
+                "dtype": "float32",
+                "N": 16 * 1024 * 1024,
+                "cluster_size": 4,
+                "block_elems": 4096,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
@@ -52,6 +59,19 @@ class OptimizedDSMEMClusterAtomicBenchmark(CudaBinaryBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def get_input_signature(self) -> dict:
+        """Signature for DSMEM cluster atomic reduction."""
+        return simple_signature(
+            batch_size=1024,
+            dtype="float32",
+            N=16 * 1024 * 1024,
+            cluster_size=4,
+            block_elems=4096,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -14,6 +14,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch13.workload_config import WORKLOAD
 
@@ -69,7 +70,7 @@ class TransformerModel(nn.Module):
         return logits
 
 
-class BaselineTrainingBenchmark(BaseBenchmark):
+class BaselineTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Standard transformer training that stores all activations (memory heavy, but fast).
     
     Memory usage dominated by:
@@ -101,6 +102,8 @@ class BaselineTrainingBenchmark(BaseBenchmark):
         )
         self._peak_memory_gb = 0.0
         self.output = None
+        self._verify_input = None
+        self.parameter_count: int = 0
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -111,6 +114,8 @@ class BaselineTrainingBenchmark(BaseBenchmark):
         # Clear memory before setup
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(self.device)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         self.model = TransformerModel(
             hidden_dim=self.hidden_dim,
@@ -133,6 +138,12 @@ class BaselineTrainingBenchmark(BaseBenchmark):
             (self.batch_size, self.seq_len),
             device=self.device
         )
+        self._verify_input = torch.randint(
+            0, self.vocab_size,
+            (self.batch_size, self.seq_len),
+            device=self.device
+        )
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
         self.criterion = nn.CrossEntropyLoss()
@@ -162,7 +173,11 @@ class BaselineTrainingBenchmark(BaseBenchmark):
             # Optimizer step
             self.optimizer.step()
             # Store output for verification
-            self.output = logits.detach().clone()
+            with torch.no_grad():
+                self.model.eval()
+                verify_logits = self.model(self._verify_input)
+                self.output = verify_logits.detach().float().clone()
+                self.model.train()
         
         # Track peak memory after each iteration
         self._peak_memory_gb = max(
@@ -170,6 +185,21 @@ class BaselineTrainingBenchmark(BaseBenchmark):
             torch.cuda.max_memory_allocated(self.device) / 1e9
         )
         self._synchronize()
+        if self._verify_input is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input_ids": self._verify_input},
+            output=self.output,
+            batch_size=self._verify_input.shape[0],
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.5, 10.0),
+        )
     
     def teardown(self) -> None:
         """Cleanup and report memory usage."""
@@ -220,25 +250,6 @@ class BaselineTrainingBenchmark(BaseBenchmark):
             return f"Model forward pass failed: {e}"
         
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {
-            "batch_size": self.batch_size,
-            "seq_len": self.seq_len,
-            "hidden_dim": self.hidden_dim,
-            "num_layers": self.num_layers,
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.5, 10.0)
 
 
 def get_benchmark() -> BaselineTrainingBenchmark:

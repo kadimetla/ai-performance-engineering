@@ -21,6 +21,9 @@ class BaselineAsyncPrefetchBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        n_elems = 64 * 1024 * 1024
+        tile_size = 4096
+        bytes_touched = n_elems * 2 * 4  # read + write
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="baseline_async_prefetch",
@@ -28,12 +31,16 @@ class BaselineAsyncPrefetchBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=120,
-            workload_params={"type": "async_prefetch"},
+            workload_params={
+                "N": n_elems,
+                "tile_size": tile_size,
+                "dtype": "float32",
+            },
         )
-        self._bytes_requested = 1024 * 1024 * 4  # Default 1MB float32
+        self._bytes_requested = bytes_touched
         from core.harness.benchmark_harness import WorkloadMetadata
         self.register_workload_metadata(
-            bytes_per_iteration=float(self._bytes_requested),
+            bytes_per_iteration=float(bytes_touched),
         )
 
 

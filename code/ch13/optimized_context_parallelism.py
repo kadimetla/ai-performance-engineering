@@ -12,7 +12,7 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -21,6 +21,7 @@ import torch.nn as nn
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkConfig, BenchmarkMode
 from core.utils.logger import get_logger
 
@@ -179,6 +180,7 @@ class OptimizedContextParallelism:
         self.num_heads = num_heads
         self.num_layers = num_layers
         self.cp_ranks = cp_ranks
+        self.output: Optional[torch.Tensor] = None
         
         # Initialize distributed
         self._init_distributed()
@@ -250,7 +252,7 @@ class OptimizedContextParallelism:
             f"local_seq={self.seq_shard}, total_seq={self.seq_length}"
         )
     
-    def run(self) -> float:
+    def run(self) -> Tuple[float, torch.Tensor]:
         """Execute ring attention with Context Parallelism."""
         torch.cuda.synchronize()
         
@@ -260,6 +262,7 @@ class OptimizedContextParallelism:
             x = layer(x, causal=True)
         
         torch.cuda.synchronize()
+        self.output = x
         
         # Gather peak memory across all ranks
         peak_memory_gb = torch.cuda.max_memory_allocated() / (1024**3)
@@ -272,7 +275,7 @@ class OptimizedContextParallelism:
         
         logger.info(f"Rank {self.cp_rank}: Peak memory: {peak_memory_gb:.2f} GB")
         
-        return peak_memory_gb
+        return peak_memory_gb, x
     
     def cleanup(self):
         """Clean up resources."""
@@ -296,6 +299,7 @@ def run_benchmark(
 ) -> Dict[str, Any]:
     """Run optimized context parallelism benchmark."""
     
+    cp_ranks = min(cp_ranks, max(torch.cuda.device_count() if torch.cuda.is_available() else 1, 1))
     benchmark = OptimizedContextParallelism(
         batch_size=batch_size,
         seq_length=seq_length,
@@ -309,13 +313,15 @@ def run_benchmark(
     t0 = torch.cuda.Event(enable_timing=True)
     t1 = torch.cuda.Event(enable_timing=True)
     t0.record()
-    peak_memory = benchmark.run()
+    peak_memory, output = benchmark.run()
     t1.record()
     torch.cuda.synchronize()
     elapsed_ms = t0.elapsed_time(t1)
+    verify_input = benchmark.input.detach().float().clone()
+    verify_output = output.detach().float().clone()
     benchmark.cleanup()
     
-    return {
+    metrics = {
         "mean_time_ms": float(elapsed_ms),
         "peak_memory_gb": peak_memory,
         "seq_length": seq_length,
@@ -323,35 +329,39 @@ def run_benchmark(
         "parallelism": "context_parallel",
         "seq_per_gpu": seq_length // cp_ranks,
     }
+    return metrics, {"input": verify_input, "output": verify_output}
 
 
-class _ContextParallelismBenchmark(BaseBenchmark):
+class _ContextParallelismBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrapper benchmark for context parallelism - requires multi-GPU."""
 
     def __init__(self) -> None:
         super().__init__()
+        self._metrics: Dict[str, Any] = {}
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def benchmark_fn(self) -> None:
-        raise RuntimeError("SKIPPED: optimized_context_parallelism requires >=2 GPUs")
+        metrics, verify = run_benchmark()
+        self._metrics = metrics
+        self._set_verification_payload(
+            inputs={"input": verify["input"]},
+            output=verify["output"],
+            batch_size=verify["input"].shape[0],
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
+        self._synchronize()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=5, multi_gpu_required=True)
-
-    def get_verify_output(self) -> torch.Tensor:
-        raise RuntimeError("Multi-GPU benchmark - verification not supported on single GPU")
-
-    def get_input_signature(self) -> dict:
-        return {"type": "context_parallelism"}
-
-    def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
+        return BenchmarkConfig(iterations=1, warmup=5, multi_gpu_required=False)
 
 
 def get_benchmark() -> BaseBenchmark:
-    gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    if gpu_count < 2:
-        return _ContextParallelismBenchmark()
     return _ContextParallelismBenchmark()
 
 

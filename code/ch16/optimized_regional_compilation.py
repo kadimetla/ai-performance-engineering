@@ -322,11 +322,6 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
             return "Model not initialized"
         return None
 
-    def get_custom_streams(self) -> List[torch.cuda.Stream]:
-        if self.transfer_stream is None:
-            return []
-        return [self.transfer_stream]
-
     def teardown(self) -> None:
         self.model = None
         self.input_buffer = None

@@ -13,6 +13,7 @@ if str(repo_root) not in sys.path:
 import torch
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 from core.harness.hardware_capabilities import ensure_dsmem_supported
 class _SkipBenchmark(BaseBenchmark):
     """Placeholder when TMA multicast can't run on this hardware."""
@@ -30,7 +31,16 @@ class OptimizedTMAMulticastBenchmark(CudaBinaryBenchmark):
             iterations=10,
             warmup=5,  # Minimum warmup for CUDA binary
             timeout_seconds=180,
-            workload_params={"type": "tma_multicast"},
+            workload_params={
+                "batch_size": 2048,
+                "dtype": "float32",
+                "M": 2048,
+                "N": 2048,
+                "K": 2048,
+                "tile_m": 64,
+                "tile_n": 64,
+                "tile_k": 32,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
@@ -41,6 +51,22 @@ class OptimizedTMAMulticastBenchmark(CudaBinaryBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def get_input_signature(self) -> dict:
+        """Signature for TMA multicast GEMM."""
+        return simple_signature(
+            batch_size=2048,
+            dtype="float32",
+            M=2048,
+            N=2048,
+            K=2048,
+            tile_m=64,
+            tile_n=64,
+            tile_k=32,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 def _is_sm90_or_higher() -> bool:
     """Check if running on SM 9.0+ where TMA multicast is available."""
     if not torch.cuda.is_available():

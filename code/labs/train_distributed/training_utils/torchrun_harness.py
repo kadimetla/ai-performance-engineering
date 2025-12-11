@@ -37,7 +37,6 @@ class TorchrunScriptBenchmark(BaseBenchmark):
         self._target_label = target_label
         self.name = name or self._script_path.stem
         # Compliance: verification interface
-        self.jitter_exemption_reason = "Torchrun script benchmark: fixed configuration"
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def get_config(self) -> BenchmarkConfig:

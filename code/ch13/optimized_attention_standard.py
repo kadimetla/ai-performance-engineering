@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from core.utils.compile_utils import enable_tf32
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -38,7 +39,7 @@ class FlexAttention(nn.Module):
         return self.proj(out)
 
 
-class OptimizedAttentionFlexBenchmark(BaseBenchmark):
+class OptimizedAttentionFlexBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """FlexAttention optimization - optimized kernels."""
     
     def __init__(self):
@@ -81,6 +82,20 @@ class OptimizedAttentionFlexBenchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.model(self.inputs)
         self._synchronize()
+        if self.inputs is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.inputs},
+            output=self.output.detach().float().clone(),
+            batch_size=self.batch_size,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1.0, 100.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -117,15 +132,6 @@ class OptimizedAttentionFlexBenchmark(BaseBenchmark):
         if self.output is None:
             raise RuntimeError("Output not available - run benchmark first")
         return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        # Different model instances with random weights - verify shapes match
-        return (1.0, 100.0)
 
 
 def get_benchmark() -> OptimizedAttentionFlexBenchmark:

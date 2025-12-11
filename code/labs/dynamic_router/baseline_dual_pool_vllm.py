@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
+from numbers import Number
 from typing import Dict, Optional
 
 import torch
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from labs.dynamic_router.vllm_runner import run_dual_pool_vllm
 
 
-class BaselineDualPoolVllmBenchmark(BaseBenchmark):
+class BaselineDualPoolVllmBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs vLLM in a shared-pool configuration (prefill and decode on the same GPUs)."""
 
     def __init__(self) -> None:
@@ -18,23 +21,33 @@ class BaselineDualPoolVllmBenchmark(BaseBenchmark):
         self._summary: Dict[str, float] = {}
         self.metrics: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
+        self.verify_input: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
-        return
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
 
     def benchmark_fn(self) -> None:
         from labs.dynamic_router import vllm_runner
 
         self._summary = run_dual_pool_vllm("shared", cli_args=vllm_runner._CLI_ARGS)
-        metric_values = list(self._summary.values()) or [0.0]
-        expected_shape = (1, len(metric_values))
+        metric_values = [float(v) for v in self._summary.values() if isinstance(v, Number)]
+        if not metric_values:
+            metric_values = [0.0]
+        summary_tensor = torch.tensor(metric_values, dtype=torch.float32).unsqueeze(0)
+        expected_shape = tuple(summary_tensor.shape)
         if self.metrics is None or tuple(self.metrics.shape) != expected_shape:
-            self.metrics = torch.randn(expected_shape, dtype=torch.float32)
-        summary_tensor = torch.tensor([metric_values], dtype=torch.float32)
-        self.output = (summary_tensor + self.metrics).detach()
+            self.metrics = torch.zeros(expected_shape, dtype=torch.float32)
+        if self.verify_input is None or tuple(self.verify_input.shape) != expected_shape:
+            self.verify_input = torch.ones(expected_shape, dtype=torch.float32)
+        self.output = (summary_tensor * self.verify_input + self.metrics).detach()
         self._set_verification_payload(
-            inputs={"mode": torch.tensor([0], dtype=torch.int64)},  # shared
+            inputs={
+                "verify_input": self.verify_input.detach(),
+                "mode": torch.tensor([0], dtype=torch.int64),
+            },  # shared
             output=self.output,
             batch_size=1,
             parameter_count=0,
@@ -44,6 +57,7 @@ class BaselineDualPoolVllmBenchmark(BaseBenchmark):
 
     def teardown(self) -> None:
         self.metrics = None
+        self.verify_input = None
         self.output = None
         super().teardown()
 
@@ -62,4 +76,4 @@ def get_benchmark() -> BaseBenchmark:
 if __name__ == "__main__":
     bench = get_benchmark()
     bench.benchmark_fn()
-    print(bench.get_custom_metrics())
+    print(json.dumps(bench.get_custom_metrics() or {}, indent=2))

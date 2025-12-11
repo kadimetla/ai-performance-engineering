@@ -68,10 +68,11 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-class BaselinePersistentMatmulTMABenchmark(BaseBenchmark):
+class BaselinePersistentMatmulTMABenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark wrapper for baseline persistent matmul TMA."""
 
     def __init__(self, M: int = 1024, N: int = 1024, K: int = 1024):
@@ -84,6 +85,7 @@ class BaselinePersistentMatmulTMABenchmark(BaseBenchmark):
         self.B = None
         self.C = None
         self.block = 128
+        self.output = None
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(M * N),
@@ -122,6 +124,20 @@ class BaselinePersistentMatmulTMABenchmark(BaseBenchmark):
         self.result = self.C
         self._synchronize()
         self.output = self.result
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"A": self.A, "B": self.B},
+            output=self.output.detach().float().clone(),
+            batch_size=self.M,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+            output_tolerance=(1e-2, 1e-2),
+        )
 
     def teardown(self) -> None:
         self.result = None
@@ -132,18 +148,6 @@ class BaselinePersistentMatmulTMABenchmark(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=10, warmup=5)
-
-    def get_verify_output(self) -> torch.Tensor:
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self) -> dict:
-        return {"M": self.M, "N": self.N, "K": self.K}
-
-    def get_output_tolerance(self) -> tuple:
-        """TMA matmul may have slight precision differences."""
-        return (1e-2, 1e-2)
 
 
 def get_benchmark() -> BaseBenchmark:

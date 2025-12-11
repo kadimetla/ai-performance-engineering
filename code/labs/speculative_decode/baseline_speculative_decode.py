@@ -83,8 +83,6 @@ class BaselineSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
             requests_per_iteration=float(self.config.batch_size),
             tokens_per_iteration=float(self.config.batch_size * self.config.decode_length),
         )
-        # Speculative decoding: fixed configuration
-        self.jitter_exemption_reason = "Speculative decoding benchmark: fixed configuration"
     
     def setup(self) -> None:
         """Initialize model and prompt."""

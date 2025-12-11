@@ -117,7 +117,6 @@ class TritonMatmulProtonBenchmark(BaseBenchmark):
             target_label=f"labs/occupancy_tuning:{schedule.name}",
             use_subprocess=True,
         )
-        self.jitter_exemption_reason = "Triton matmul benchmark: fixed dimensions for occupancy testing"
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:

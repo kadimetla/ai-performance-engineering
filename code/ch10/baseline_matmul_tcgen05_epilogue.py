@@ -7,10 +7,11 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
-class BaselineMatmulTCGen05EpilogueBenchmark(BaseBenchmark):
+class BaselineMatmulTCGen05EpilogueBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: matmul followed by separate bias addition and SiLU activation.
     
     This is the naive approach that requires:
@@ -34,7 +35,8 @@ class BaselineMatmulTCGen05EpilogueBenchmark(BaseBenchmark):
         self.register_workload_metadata(bytes_per_iteration=float(self.n * self.n * 2 * 4))
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         dtype = torch.float16
         self.A = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
         self.B = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
@@ -50,8 +52,22 @@ class BaselineMatmulTCGen05EpilogueBenchmark(BaseBenchmark):
                 # Step 2: Add bias (separate kernel launch)
                 C = C + self.bias
                 # Step 3: SiLU activation (separate kernel launch)
-                C = F.silu(C)
+                self.output = F.silu(C)
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"A": self.A, "B": self.B, "bias": self.bias},
+            output=self.output.detach().float().clone(),
+            batch_size=self.size,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
 
     def teardown(self) -> None:
         self.A = None
@@ -67,21 +83,6 @@ class BaselineMatmulTCGen05EpilogueBenchmark(BaseBenchmark):
             return "Matrices not initialized"
         return None
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"size": self.size}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to FP16."""
-        return (0.5, 5.0)
-
 
 def get_benchmark() -> BaselineMatmulTCGen05EpilogueBenchmark:
     return BaselineMatmulTCGen05EpilogueBenchmark()
-

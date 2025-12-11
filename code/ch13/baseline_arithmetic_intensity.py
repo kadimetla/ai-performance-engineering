@@ -20,6 +20,7 @@ import torch
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -29,7 +30,7 @@ from core.harness.benchmark_harness import (
 )
 
 
-class BaselineArithmeticIntensityBenchmark(BaseBenchmark):
+class BaselineArithmeticIntensityBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Low arithmetic intensity baseline - memory-bound."""
     
     def __init__(self):
@@ -82,6 +83,20 @@ class BaselineArithmeticIntensityBenchmark(BaseBenchmark):
                 raise RuntimeError("Benchmark not initialized")
             self._chunked_matmul()
             self._synchronize()
+        if self.A is None or self.B is None or self.C is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"A": self.A, "B": self.B},
+            output=self.C.detach().float().clone(),
+            batch_size=self.M,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     
     def teardown(self) -> None:
@@ -118,14 +133,6 @@ class BaselineArithmeticIntensityBenchmark(BaseBenchmark):
         if self.C is None:
             raise RuntimeError("Output not available - run benchmark first")
         return self.C
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"M": self.M, "K": self.K, "N": self.N}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (1e-3, 1e-3)
 
 
 def get_benchmark() -> BaseBenchmark:

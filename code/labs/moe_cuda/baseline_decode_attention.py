@@ -36,7 +36,6 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self._history: Dict[str, List[float]] = {"latency_ms": []}
-        self.jitter_exemption_reason = "Decode attention benchmark: fixed dimensions"
 
     def setup(self) -> None:
         if not torch.cuda.is_available():

@@ -7,11 +7,12 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class OptimizedQuantizationBenchmark(BaseBenchmark):
+class OptimizedQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: FP16 quantization for faster inference with reduced memory."""
     
     def __init__(self):
@@ -58,6 +59,20 @@ class OptimizedQuantizationBenchmark(BaseBenchmark):
             with torch.no_grad():
                 self.output = self.quantized_model(self.data)
         self._synchronize()
+        if self.data is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.data},
+            output=self.output.detach().float().clone(),
+            batch_size=self.data.shape[0],
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.5, 5.0),
+        )
     
     def teardown(self) -> None:
         self.model = None
@@ -87,21 +102,6 @@ class OptimizedQuantizationBenchmark(BaseBenchmark):
         if self.quantized_model is None:
             return "Quantized model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()  # Convert to fp32 for comparison
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {"N": self.N}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        # fp16 vs fp32 can have differences
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> OptimizedQuantizationBenchmark:

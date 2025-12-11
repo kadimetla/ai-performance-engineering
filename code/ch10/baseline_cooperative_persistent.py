@@ -12,6 +12,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
 
 
 class BaselineCooperativePersistentBenchmark(CudaBinaryBenchmark):
@@ -27,7 +28,12 @@ class BaselineCooperativePersistentBenchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=180,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
-            workload_params={"type": "cooperative_persistent"},
+            workload_params={
+                "batch_size": 1 << 24,
+                "dtype": "float32",
+                "elements": 1 << 24,
+                "iterations": 40,
+            },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
 
@@ -39,6 +45,18 @@ class BaselineCooperativePersistentBenchmark(CudaBinaryBenchmark):
             num_stages=getattr(self, 'num_stages', 4),
             stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
         )
+
+    def get_input_signature(self) -> dict:
+        """Explicit signature for cooperative persistent pipeline baseline."""
+        return simple_signature(
+            batch_size=1 << 24,
+            dtype="float32",
+            elements=1 << 24,
+            iterations=40,
+        ).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        return (0.0, 0.0)
 
 def get_benchmark() -> BaselineCooperativePersistentBenchmark:
     """Factory for discover_benchmarks()."""

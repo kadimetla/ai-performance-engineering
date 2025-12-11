@@ -14,6 +14,8 @@ import torch.nn as nn
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
+
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -23,7 +25,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
 )
 
 
-class BaselineFlashAttentionBenchmark(BaseBenchmark):
+class BaselineFlashAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: Standard attention without FlashAttention optimizations.
     
     Uses manual attention computation (matmul + softmax + matmul) which
@@ -100,8 +102,22 @@ class BaselineFlashAttentionBenchmark(BaseBenchmark):
         """Benchmark: Standard attention without FlashAttention."""
         with self._nvtx_range("baseline_flash_attention"):
             with torch.no_grad():
-                _output = self._manual_attention(self.input)
+                self.output = self._manual_attention(self.input)
             self._synchronize()
+        if self.output is None or self.input is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output.detach().float().clone(),
+            batch_size=self.batch_size,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     
     def teardown(self) -> None:
@@ -138,20 +154,6 @@ class BaselineFlashAttentionBenchmark(BaseBenchmark):
         if self.input is None:
             return "Input not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_len": self.seq_len, "hidden_dim": self.hidden_dim}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

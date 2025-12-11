@@ -16,6 +16,8 @@ class OptimizedFloat8VectorBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        n_elems = 128 * 1024 * 1024
+        bytes_per_array = n_elems * 4
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="optimized_float8_vector",
@@ -23,9 +25,12 @@ class OptimizedFloat8VectorBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=5,
             timeout_seconds=120,
-            workload_params={"type": "float8_vector"},
+            workload_params={
+                "N": n_elems,
+                "dtype": "float32",
+            },
         )
-        self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
+        self.register_workload_metadata(bytes_per_iteration=float(bytes_per_array * 3))
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics."""

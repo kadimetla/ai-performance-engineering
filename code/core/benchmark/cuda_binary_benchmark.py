@@ -368,6 +368,10 @@ class CudaBinaryBenchmark(BaseBenchmark):
             "Return a dict with workload parameters (e.g., {'M': 4096, 'N': 4096, 'K': 4096})."
         )
     
+    def get_output_tolerance(self) -> tuple[float, float]:
+        """Verification tolerance for checksum-based CUDA binaries."""
+        return (1e-5, 1e-5)
+    
     def get_verify_output(self) -> "torch.Tensor":
         """Return checksum tensor from last verify run.
         
