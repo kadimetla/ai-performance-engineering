@@ -130,6 +130,8 @@ class OptimizedSpeculativeDecodingBenchmark(VerificationPayloadMixin, BaseBenchm
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"sequences": self.sequences},
             output=self.output.float(),

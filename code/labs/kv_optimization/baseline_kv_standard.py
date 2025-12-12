@@ -157,6 +157,8 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
         # Capture a slice of KV cache for verification (layer 0, first token/head window)
         view = self.kv_cache[:1, :1, :, :, : min(1, self.kv_cache.shape[4]), : min(8, self.kv_cache.shape[5])]
         self.output = view.detach().float().clone()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "batch_size": torch.tensor([self.batch_size], dtype=torch.int64, device="cpu"),

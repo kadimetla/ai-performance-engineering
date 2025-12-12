@@ -243,6 +243,10 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
             self.output = self.model(verify_input).detach().float().clone()
 
+        self._payload_verify_input = verify_input
+
+    def capture_verification_payload(self) -> None:
+        verify_input = self._payload_verify_input
         self._set_verification_payload(
             inputs={"verify_input": verify_input},
             output=self.output,

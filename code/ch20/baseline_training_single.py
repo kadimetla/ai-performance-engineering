@@ -77,6 +77,8 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
             self.model.eval()
             self.output = self.model(self._verify_input).float().clone()
             self.model.train()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},
             output=self.output,

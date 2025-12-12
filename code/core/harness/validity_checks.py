@@ -10,7 +10,7 @@ Categories covered:
 - Compilation issues (cache, recompilation)
 
 Reference:
-    See docs/remaining_protections.md for the full list of 93 validity issues.
+    See AGENTS.md and docs/implementation_status.md for the full list of validity issues.
 """
 
 from __future__ import annotations

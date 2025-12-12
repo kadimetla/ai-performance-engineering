@@ -148,6 +148,10 @@ class OptimizedPagedAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             parameter_count += sum(p.numel() for p in self.qkv_proj.parameters())
         if self.out_proj is not None:
             parameter_count += sum(p.numel() for p in self.out_proj.parameters())
+        self._payload_parameter_count = parameter_count
+
+    def capture_verification_payload(self) -> None:
+        parameter_count = self._payload_parameter_count
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output,

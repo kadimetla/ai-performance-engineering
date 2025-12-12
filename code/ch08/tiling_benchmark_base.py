@@ -40,7 +40,6 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        self.skip_output_check = True
         self.device = resolve_device()
         self.extension = None
         self.matrix_a: Optional[torch.Tensor] = None
@@ -92,13 +91,13 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
 
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
             self._invoke_kernel()
+
+    def capture_verification_payload(self) -> None:
+        """Register verification payload once after timing."""
         if self.matrix_a is None or self.matrix_b is None or self.output is None:
-            raise RuntimeError("benchmark_fn() must run after setup() initializes tensors")
+            raise RuntimeError("capture_verification_payload() requires initialized tensors")
         self._set_verification_payload(
-            inputs={
-                "matrix_a": self.matrix_a,
-                "matrix_b": self.matrix_b,
-            },
+            inputs={"matrix_a": self.matrix_a, "matrix_b": self.matrix_b},
             output=self.output.detach(),
             batch_size=self.matrix_rows,
             parameter_count=int(self.shared_dim * self.matrix_cols),
@@ -161,9 +160,6 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None:
             return "Output buffer not initialized"
         return None
-
-    def skip_output_verification(self) -> bool:
-        return True
 
     # ------------------------------------------------------------------ #
     # Extension loading (allow subclasses to override)

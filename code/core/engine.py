@@ -997,6 +997,10 @@ class ExportDomain:
         if detailed:
             return _get_handler().export_detailed_csv()
         return _get_handler().export_benchmarks_csv()
+
+    def csv_detailed(self) -> str:
+        """Export benchmarks to detailed CSV with all metrics."""
+        return self.csv(detailed=True)
     
     def pdf(self) -> bytes:
         """Generate PDF report."""

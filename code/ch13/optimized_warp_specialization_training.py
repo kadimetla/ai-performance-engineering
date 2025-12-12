@@ -69,6 +69,8 @@ class OptimizedWarpSpecializationTrainingBenchmark(VerificationPayloadMixin, Bas
         self._synchronize()
         if self.input is None or self.weight is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input, "weight": self.weight},
             output=self.output.detach().float().clone(),

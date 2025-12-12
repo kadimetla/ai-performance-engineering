@@ -30,11 +30,13 @@ class BaselineMoERouterUniformBenchmark(VerificationPayloadMixin, BaseBenchmark)
         )
         self._last_assignment: Dict[int, int] = {}
         self.output: Optional[torch.Tensor] = None
+        self._verify_input: Optional[torch.Tensor] = None
         self._verification_payload = None
 
     def setup(self) -> None:
-        torch.manual_seed(0)
-        random.seed(0)
+        torch.manual_seed(42)
+        random.seed(42)
+        self._verify_input = torch.tensor(self.tokens, device=self.device, dtype=torch.int64)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -49,15 +51,19 @@ class BaselineMoERouterUniformBenchmark(VerificationPayloadMixin, BaseBenchmark)
                 device=self.device,
                 dtype=torch.int32,
             )
-            self._set_verification_payload(
-                inputs={"tokens": torch.tensor(self.tokens, device=self.device)},
-                output=self.output,
-                batch_size=self.tokens,
-                parameter_count=0,
-                precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
-                output_tolerance=(0.0, 0.0),
-            )
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self._verify_input is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"tokens": self._verify_input},
+            output=self.output,
+            batch_size=self.tokens,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.0, 0.0),
+        )
 
     def teardown(self) -> None:
         self._last_assignment = {}

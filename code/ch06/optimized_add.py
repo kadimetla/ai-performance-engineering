@@ -41,6 +41,8 @@ class OptimizedAddParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("add_vectorized"):
             self.C = self.A + self.B
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B},
             output=self.C.detach(),

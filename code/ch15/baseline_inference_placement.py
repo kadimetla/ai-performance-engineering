@@ -80,6 +80,8 @@ class _PlacementBenchmark(BaseBenchmark):
             ttft_p50, ttft_p95, decode_p50, decode_p95, tput_tokens_s,
             float(run.cross_node_kv_moves), float(run.cross_node_collectives),
         ], dtype=torch.float32)
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"config": self._verify_cfg},
             output=self.output,

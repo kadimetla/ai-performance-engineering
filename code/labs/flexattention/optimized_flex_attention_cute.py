@@ -101,6 +101,8 @@ class OptimizedFlexAttentionCuteBenchmark(VerificationPayloadMixin, BaseBenchmar
             self.output = output_tensor.detach().float().clone()
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"q": self.q.detach(), "k": self.k.detach(), "v": self.v.detach()},
             output=self.output,

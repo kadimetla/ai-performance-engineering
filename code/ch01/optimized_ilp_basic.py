@@ -91,7 +91,7 @@ class OptimizedIlpBasicBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # High instruction-level parallelism
         
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.output = None
         self.parameter_count = 0
         self._compiled_op = None  # Use direct execution
         torch.cuda.synchronize(self.device)
@@ -116,6 +116,8 @@ class OptimizedIlpBasicBenchmark(VerificationPayloadMixin, BaseBenchmark):
             # Keep reference to prevent elimination and synchronize for accurate timing
             self._last_sum = self.output.sum()
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output,

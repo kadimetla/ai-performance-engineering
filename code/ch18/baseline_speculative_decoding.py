@@ -218,6 +218,8 @@ class BaselineSpeculativeDecodingBenchmark(VerificationPayloadMixin, BaseBenchma
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output")
         # Use the generated token ids as verification output.
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input_ids": self._inner_benchmark.input_ids},
             output=self.output.float(),

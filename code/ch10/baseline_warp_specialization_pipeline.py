@@ -91,6 +91,8 @@ class BaselineWarpSpecializationPipelineBenchmark(VerificationPayloadMixin, Base
                 self._checksum = total
         if self.output is None or self.inputs_host is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.inputs_host},
             output=self.output.detach().float().clone(),

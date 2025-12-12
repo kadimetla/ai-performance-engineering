@@ -42,6 +42,8 @@ class BaselineAddBenchmark(VerificationPayloadMixin, BaseBenchmark):
             for i in range(self.N):
                 self.C[i] = self.A[i] + self.B[i]
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B},
             output=self.C.detach(),

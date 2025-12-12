@@ -97,6 +97,8 @@ class BaselineCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._synchronize()
         if self.A is None or self.B is None or self.C is None:
             raise RuntimeError("Benchmark not initialized")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "A": self.A.detach(),

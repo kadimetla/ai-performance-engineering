@@ -172,6 +172,8 @@ class VectorizedRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.synchronize(self.device)
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.inputs.detach()},
             output=self.output,

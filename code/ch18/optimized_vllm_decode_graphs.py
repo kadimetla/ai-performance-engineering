@@ -266,6 +266,8 @@ class OptimizedVLLMDecodeGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark
             [float(len(self._trace)), total_tokens],
             dtype=torch.float32,
         )
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"trace": torch.tensor(self._trace, device=DEVICE)},
             output=self.output,

@@ -130,6 +130,8 @@ class BaselineRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchma
             torch.cuda.synchronize(self.device)
         if self._verify_input is None:
             raise RuntimeError("Verification input not initialized")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output.detach().clone(),

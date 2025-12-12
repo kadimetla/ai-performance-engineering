@@ -48,6 +48,8 @@ class BaselineDynamicRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.verify_input is None or tuple(self.verify_input.shape) != expected_shape:
             self.verify_input = torch.ones(expected_shape, dtype=torch.float32)
         self.output = (verify_tensor * self.verify_input + self.metrics).detach()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "verify_input": self.verify_input.detach(),

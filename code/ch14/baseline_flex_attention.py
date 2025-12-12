@@ -95,6 +95,8 @@ class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._synchronize()
         if self.output is None or self.q is None or self.k is None or self.v is None:
             raise RuntimeError("Verification input/output not initialized")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "q": self.q.detach(),

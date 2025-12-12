@@ -142,6 +142,10 @@ class BaselineRegionalTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None or self._last_input is None:
             raise RuntimeError("benchmark_fn() must produce output")
         dtype = self._last_input.dtype
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self._last_input},
             output=self.output.detach(),

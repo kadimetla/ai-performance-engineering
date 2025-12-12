@@ -315,6 +315,10 @@ class BaselineFP4WeightQuantizationBenchmark(VerificationPayloadMixin, BaseBench
         if self.output is None or self.input is None or self.model is None:
             raise RuntimeError("benchmark_fn() must produce output")
         dtype = self.output.dtype
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output.float(),

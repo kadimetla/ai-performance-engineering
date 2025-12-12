@@ -55,9 +55,15 @@ class DTensorMeshBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("benchmark_fn() must produce output for verification")
         input_local = self.tensor.to_local() if hasattr(self.tensor, "to_local") else self.tensor
         output_local = self.output.to_local() if hasattr(self.output, "to_local") else self.output
+        self.output = output_local
+        self._payload_input_local = input_local
+        return {}
+
+    def capture_verification_payload(self) -> None:
+        input_local = self._payload_input_local
         self._set_verification_payload(
             inputs={"input": input_local},
-            output=output_local.detach().float().clone(),
+            output=self.output.detach().float().clone(),
             batch_size=int(input_local.shape[0]) if input_local is not None else 1,
             precision_flags={
                 "fp16": False,
@@ -67,7 +73,6 @@ class DTensorMeshBenchmark(VerificationPayloadMixin, BaseBenchmark):
             },
             output_tolerance=(0.1, 1.0),
         )
-        return {}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

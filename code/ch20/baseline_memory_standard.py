@@ -46,6 +46,8 @@ class BaselineMemoryStandardBenchmark(BaseBenchmark):
                 self.result += 0.1
             self._synchronize()
         self.output = self.result
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"data": self.data},
             output=self.output,

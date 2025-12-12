@@ -87,6 +87,8 @@ class OptimizedGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         
         self.output = result
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"left": self.left, "right": self.right},
             output=self.output.detach().clone(),

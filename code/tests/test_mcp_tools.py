@@ -46,23 +46,19 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_system_dependencies",
         "aisp_system_context",
         "aisp_system_capabilities",
-        "aisp_cpu_memory_analysis",
-        "aisp_system_parameters",
-        "aisp_container_limits",
-        "aisp_full_system_analysis",
+        "aisp_system_full",
     ],
     "info": [
         "aisp_info_features",
-        "aisp_info_network",
     ],
     "benchmarking": [
-        "aisp_available_benchmarks",
         "aisp_benchmark_targets",
         "aisp_list_chapters",
         "aisp_run_benchmarks",
         "aisp_benchmark_report",
         "aisp_benchmark_export",
         "aisp_benchmark_compare_runs",
+        "aisp_benchmark_triage",
     ],
     "analysis": [
         "aisp_analyze_bottlenecks",
@@ -70,6 +66,11 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_analyze_scaling",
         "aisp_analyze_stacking",
         "aisp_analyze_whatif",
+        "aisp_analyze_comm_overlap",
+        "aisp_analyze_memory_patterns",
+        "aisp_analyze_dataloader",
+        "aisp_analyze_energy",
+        "aisp_predict_scaling",
     ],
     "optimization": [
         "aisp_recommend",
@@ -100,10 +101,9 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_profile_torch",
         "aisp_profile_hta",
         "aisp_profile_compare",
-        "aisp_nsys_summary",
-        "aisp_nsys_ncu_available",
         "aisp_compare_nsys",
         "aisp_compare_ncu",
+        "aisp_nsys_summary",
     ],
     "exports": [
         "aisp_export_csv",
@@ -117,26 +117,13 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_hw_pcie",
         "aisp_hw_cache",
         "aisp_hw_tc",
-        "aisp_hw_sfu",
-        "aisp_hw_tcp",
         "aisp_hw_network",
         "aisp_hw_ib",
         "aisp_hw_nccl",
         "aisp_hw_p2p",
     ],
-    "code_analysis": [
-        "aisp_warp_divergence",
-        "aisp_bank_conflicts",
-        "aisp_memory_access",
-        "aisp_comm_overlap",
-        "aisp_data_loading",
-        "aisp_energy_analysis",
-        "aisp_predict_scaling",
-    ],
     "huggingface": [
-        "aisp_hf_search",
-        "aisp_hf_trending",
-        "aisp_hf_download",
+        "aisp_hf",
     ],
     "cluster_cost": [
         "aisp_cluster_slurm",
@@ -148,7 +135,6 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_context_full",
         "aisp_triage",
         "aisp_job_status",
-        "aisp_help",
         "aisp_suggest_tools",
     ],
 }
@@ -325,7 +311,7 @@ def test_expected_tool_registration_matches_catalog():
     expected = {case.name for case in ALL_TOOL_CASES}
     registered = set(mcp_server.TOOLS.keys())
     assert expected == registered, "Tool catalog must mirror MCP server registry"
-    assert len(expected) == 86
+    assert len(expected) == 73
 
 
 def test_tool_list_protocol_matches_registration(server: mcp_server.MCPServer):
@@ -393,6 +379,8 @@ def test_slow_tools_opt_in_execution(server: mcp_server.MCPServer, case: ToolCas
 
 def test_benchmark_export_runs_inprocess(server: mcp_server.MCPServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    # Ensure a minimal benchmark file exists for the export tool.
+    BENCH_FILE.write_text(json.dumps({"benchmarks": []}))
     output_path = tmp_path / "export.json"
     params = {"data_file": str(BENCH_FILE), "format": "json", "output": str(output_path)}
     result = server.call_tool("aisp_benchmark_export", params)

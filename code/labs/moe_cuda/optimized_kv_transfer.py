@@ -132,6 +132,10 @@ class OptimizedKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("KV destination missing")
         self.output = self.kv_dest[0, :1, : min(8, self.hidden_size)].detach().float().clone()
         meta = torch.tensor([self.hidden_size], dtype=torch.int64, device="cpu")
+        self._payload_meta = meta
+
+    def capture_verification_payload(self) -> None:
+        meta = self._payload_meta
         self._set_verification_payload(
             inputs={"meta": meta},
             output=self.output,

@@ -131,6 +131,8 @@ class PlanBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
         if self.output is None or self.metrics is None:
             raise RuntimeError("Failed to produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"metrics": self.metrics},
             output=self.output.detach().clone(),

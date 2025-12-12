@@ -93,6 +93,8 @@ class OptimizedAttentionILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
                         self._last_sum += out.sum()
 
                 self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input},
             output=(self._last_sum if self._last_sum is not None else torch.zeros(1, device=self.device)).float().detach(),

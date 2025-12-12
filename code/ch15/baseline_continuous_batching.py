@@ -38,6 +38,7 @@ class BaselineContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchmar
     def setup(self) -> None:
         """Setup: initialize model and static batches."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.model = nn.Sequential(
             nn.Linear(self.hidden_dim, self.hidden_dim * 2),
             nn.ReLU(),
@@ -52,11 +53,26 @@ class BaselineContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchmar
             for i in range(self.num_batches)
         ]
 
-        self._verify_input = self.samples[:2].detach().clone()
-        output = torch.zeros_like(self._verify_input)
+        # Keep probe as a view into the timed inputs so jitter checks are meaningful.
+        self._verify_input = self.samples[:2].detach()
+        self._synchronize()
+
+    def benchmark_fn(self) -> None:
+        """Benchmark: static batches processed sequentially."""
+        assert self.model is not None and self.batches is not None
+        with self._nvtx_range("baseline_continuous_batching"):
+            with torch.no_grad():
+                outputs = []
+                for batch in self.batches:
+                    outputs.append(self.model(batch))
+                self.output = torch.cat(outputs, dim=0)
+
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self._verify_input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"probe": self._verify_input},
-            output=output,
+            output=self.output,
             batch_size=self.num_samples,
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             precision_flags={
@@ -67,33 +83,6 @@ class BaselineContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchmar
             },
             output_tolerance=(0.5, 5.0),
         )
-        self._synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: static batches processed sequentially."""
-        assert self.model is not None and self.batches is not None
-        with self._nvtx_range("baseline_continuous_batching"):
-            with torch.no_grad():
-                outputs = []
-                for batch in self.batches:
-                    outputs.append(self.model(batch))
-                self.output = torch.cat(outputs, dim=0)
-            if self._verify_input is None or self.output is None:
-                raise RuntimeError("setup() must be called before benchmark_fn()")
-            self._set_verification_payload(
-                inputs={"probe": self._verify_input},
-                output=self.output,
-                batch_size=self.num_samples,
-                parameter_count=sum(p.numel() for p in self.model.parameters()),
-                precision_flags={
-                    "fp16": False,
-                    "bf16": False,
-                    "fp8": False,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                },
-                output_tolerance=(0.5, 5.0),
-            )
-            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

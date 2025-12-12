@@ -21,6 +21,7 @@ except ImportError:
     pass
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.compile_utils import compile_model
 
 
@@ -38,7 +39,7 @@ class AutotuneModel(nn.Module):
         return self.fc2(x)
 
 
-class OptimizedAutotuningBenchmark(BaseBenchmark):
+class OptimizedAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs a small model with torch.compile to validate autotune plumbing."""
 
     def __init__(self):
@@ -56,7 +57,8 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         if enable_tf32 is not None:
             enable_tf32(set_global_precision=True)
         else:
@@ -93,17 +95,17 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
             with torch.no_grad(), sdpa_ctx:
                 _ = self.model(self.inputs)
             self._synchronize()
-        # Capture output AFTER benchmark for verification
-        if self._verify_input is not None and self.model is not None:
-            with torch.no_grad():
-                self.output = self.model(self._verify_input).float().clone()
-        if self._verify_input is None:
+
+    def capture_verification_payload(self) -> None:
+        if self._verify_input is None or self.model is None:
             raise RuntimeError("setup() must prepare verify input before verification")
+        with torch.no_grad():
+            self.output = self.model(self._verify_input).float().clone()
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},
-            output=self.output if self.output is not None else torch.zeros_like(self._verify_input),
-            batch_size=self._verify_input.shape[0],
-            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            output=self.output,
+            batch_size=int(self._verify_input.shape[0]),
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
             output_tolerance=(0.1, 1.0),
         )
 
@@ -138,28 +140,9 @@ class OptimizedAutotuningBenchmark(BaseBenchmark):
         if self.inputs is None:
             return "Input tensor not initialized"
         return None
+
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
-
-    def get_input_signature(self) -> dict:
-        return {
-            "shapes": {"verify_input": (self.batch, self.hidden_dim)},
-            "dtypes": {"verify_input": "torch.bfloat16"},
-            "batch_size": self.batch,
-            "parameter_count": sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
-            "precision_flags": {
-                "fp16": False,
-                "bf16": True,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

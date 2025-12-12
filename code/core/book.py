@@ -13,100 +13,101 @@ from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 
 
-# Book chapter topics for targeted search
+# Book chapter topics for targeted search (aligned with book/chXX.md titles)
 CHAPTER_TOPICS = {
-    "ch01": ["introduction", "performance engineering", "overview", "AI systems"],
-    "ch02": ["GPU architecture", "CUDA", "memory hierarchy", "warps", "SMs", "tensor cores"],
-    "ch03": ["PyTorch", "eager mode", "profiling basics", "torch.profiler"],
-    "ch04": ["profiling", "nsight", "ncu", "performance analysis", "bottlenecks", "roofline"],
-    "ch05": ["memory optimization", "kernel fusion", "operator fusion"],
-    "ch06": ["tensor cores", "WMMA", "matrix multiplication", "mixed precision", "gemm"],
-    "ch07": ["memory access", "coalescing", "shared memory", "bank conflicts", "HBM"],
-    "ch08": ["triton", "custom kernels", "kernel writing"],
-    "ch09": ["torch.compile", "inductor", "graph optimization", "dynamo", "cuda graphs"],
-    "ch10": ["quantization", "FP8", "INT8", "INT4", "precision", "awq", "gptq"],
-    "ch11": ["distributed training", "data parallel", "DDP", "gradient sync"],
-    "ch12": ["tensor parallelism", "pipeline parallelism", "model parallel", "3D parallelism"],
-    "ch13": ["FSDP", "ZeRO", "sharding", "fully sharded"],
-    "ch14": ["flash attention", "attention optimization", "memory efficient attention", "sdpa"],
-    "ch15": ["NCCL", "communication", "all-reduce", "collective operations", "nvlink"],
-    "ch16": ["vLLM", "inference", "serving", "continuous batching", "KV cache", "paged attention"],
-    "ch17": ["speculative decoding", "draft models", "inference acceleration"],
-    "ch18": ["RLHF", "PPO", "DPO", "GRPO", "reward model", "policy optimization"],
-    "ch19": ["production", "deployment", "monitoring", "scaling"],
+    "ch01": ["introduction", "overview", "performance engineering", "AI systems"],
+    "ch02": ["hardware overview", "GPU", "CPU", "interconnects", "Blackwell", "Grace", "NVLink", "HBM"],
+    "ch03": ["OS tuning", "docker", "kubernetes", "containers", "system configuration", "NUMA", "cgroups"],
+    "ch04": ["distributed training", "distributed inference", "multi-GPU", "NCCL", "NVLink", "NIXL", "overlap"],
+    "ch05": ["storage", "I/O", "GPUDirect Storage", "NVMe", "data loading", "input pipeline"],
+    "ch06": ["GPU architecture", "CUDA", "SIMT", "warps", "SMs", "memory hierarchy", "tensor cores"],
+    "ch07": ["memory access", "coalescing", "shared memory", "bank conflicts", "caching", "HBM"],
+    "ch08": ["occupancy", "warp efficiency", "ILP", "warp divergence", "software pipelining"],
+    "ch09": ["arithmetic intensity", "roofline", "tiling", "kernel efficiency", "vectorization"],
+    "ch10": ["intra-kernel pipelining", "cuda::pipeline", "TMA", "thread-block clusters", "warp specialization"],
+    "ch11": ["CUDA streams", "synchronization", "inter-kernel overlap", "concurrency", "PDL"],
+    "ch12": ["dynamic scheduling", "CUDA graphs", "irregular workloads", "persistent kernels"],
+    "ch13": ["PyTorch profiling", "torch.profiler", "nsight", "DDP", "FSDP", "scaling"],
+    "ch14": ["torch.compile", "TorchDynamo", "Inductor", "Triton", "kernel fusion", "autotuning"],
+    "ch15": ["multinode inference", "parallelism", "tensor parallel", "pipeline parallel", "KV cache", "NIXL"],
+    "ch16": ["production inference", "profiling", "debugging", "vLLM", "PagedAttention", "continuous batching"],
+    "ch17": ["disaggregated prefill", "decode", "routing", "continuous batching", "speculative decoding"],
+    "ch18": ["attention optimization", "FlashAttention", "FlashMLA", "KV transfer", "precision"],
+    "ch19": ["dynamic inference", "adaptive kernels", "quantization policies", "runtime autotuning", "RL control"],
+    "ch20": ["AI-assisted optimization", "autotuning", "reinforcement learning", "AlphaTensor", "automation"],
 }
 
-# Technique to chapter mapping
+# Technique to chapter mapping (aligned with book/chXX.md)
 TECHNIQUE_CHAPTERS = {
     # Memory optimizations
     "coalescing": ["ch07"],
-    "shared_memory": ["ch07"],
+    "shared_memory": ["ch07", "ch10"],
     "bank_conflicts": ["ch07"],
-    "memory_bandwidth": ["ch07", "ch02"],
-    "hbm": ["ch07", "ch02"],
+    "memory_bandwidth": ["ch06", "ch07"],
+    "hbm": ["ch06", "ch07"],
     
     # Compute optimizations
-    "occupancy": ["ch04"],
-    "warp_divergence": ["ch04"],
-    "ilp": ["ch04"],
-    "loop_unrolling": ["ch04"],
+    "occupancy": ["ch08"],
+    "warp_divergence": ["ch08"],
+    "ilp": ["ch08", "ch09"],
+    "loop_unrolling": ["ch08", "ch09"],
     
-    # Tensor cores
-    "tensor_cores": ["ch06"],
-    "wmma": ["ch06"],
-    "mixed_precision": ["ch06", "ch10"],
-    "gemm": ["ch06"],
+    # Tensor cores / GEMM
+    "tensor_cores": ["ch06", "ch09", "ch10"],
+    "wmma": ["ch06", "ch09"],
+    "mixed_precision": ["ch06", "ch09", "ch18"],
+    "gemm": ["ch06", "ch09", "ch10"],
     
-    # Attention
-    "flash_attention": ["ch14"],
-    "flash attention": ["ch14"],
-    "attention": ["ch14"],
-    "sdpa": ["ch14"],
-    "kv_cache": ["ch14", "ch16"],
+    # Attention / KV
+    "flash_attention": ["ch14", "ch18", "ch19"],
+    "flash attention": ["ch14", "ch18", "ch19"],
+    "attention": ["ch18", "ch19"],
+    "sdpa": ["ch14", "ch18", "ch19"],
+    "kv_cache": ["ch15", "ch17", "ch18"],
     
     # Kernel optimization
-    "kernel_fusion": ["ch05"],
-    "triton": ["ch08"],
-    "custom_kernels": ["ch08"],
+    "kernel_fusion": ["ch14"],
+    "triton": ["ch14"],
+    "custom_kernels": ["ch14"],
     
     # Compilation
-    "torch_compile": ["ch09"],
-    "inductor": ["ch09"],
-    "cuda_graphs": ["ch09"],
+    "torch_compile": ["ch13", "ch14"],
+    "inductor": ["ch14"],
+    "cuda_graphs": ["ch12", "ch13"],
     
-    # Quantization
-    "fp8": ["ch10"],
-    "int8": ["ch10"],
-    "int4": ["ch10"],
-    "quantization": ["ch10"],
-    "awq": ["ch10"],
-    "gptq": ["ch10"],
+    # Quantization / low precision
+    "fp8": ["ch18", "ch19"],
+    "int8": ["ch18", "ch19"],
+    "int4": ["ch18", "ch19"],
+    "quantization": ["ch18", "ch19"],
+    "awq": ["ch18", "ch19"],
+    "gptq": ["ch18", "ch19"],
     
-    # Distributed
-    "ddp": ["ch11"],
-    "data_parallel": ["ch11"],
-    "tensor_parallel": ["ch12"],
-    "pipeline_parallel": ["ch12"],
-    "fsdp": ["ch13"],
+    # Distributed training / parallelism
+    "ddp": ["ch04", "ch13"],
+    "data_parallel": ["ch04", "ch13"],
+    "tensor_parallel": ["ch04", "ch15"],
+    "pipeline_parallel": ["ch04", "ch15"],
+    "fsdp": ["ch04", "ch13"],
     "zero": ["ch13"],
     
     # Communication
-    "nccl": ["ch15"],
-    "all_reduce": ["ch15"],
-    "collective": ["ch15"],
-    "nvlink": ["ch15"],
+    "nccl": ["ch04", "ch13", "ch15"],
+    "all_reduce": ["ch04", "ch13"],
+    "collective": ["ch04", "ch13"],
+    "nvlink": ["ch02", "ch04", "ch15"],
     
     # Inference
-    "vllm": ["ch16"],
-    "continuous_batching": ["ch16"],
-    "paged_attention": ["ch16"],
-    "speculative_decoding": ["ch17"],
+    "vllm": ["ch15", "ch16", "ch17"],
+    "continuous_batching": ["ch15", "ch16", "ch17"],
+    "paged_attention": ["ch16", "ch17", "ch18"],
+    "speculative_decoding": ["ch15", "ch16", "ch17"],
     
-    # RLHF
-    "rlhf": ["ch18"],
-    "ppo": ["ch18"],
-    "dpo": ["ch18"],
-    "grpo": ["ch18"],
+    # RL / AI-assisted optimization
+    "rlhf": ["ch20"],
+    "ppo": ["ch19", "ch20"],
+    "dpo": ["ch20"],
+    "grpo": ["ch20"],
 }
 
 
@@ -202,22 +203,23 @@ class BookIndex:
     
     def _get_relevant_chapters(self, query: str) -> List[str]:
         """Determine which chapters are most relevant to the query."""
+        query_lower = query.lower()
         # Check technique mapping first
         for technique, chapters in TECHNIQUE_CHAPTERS.items():
-            if technique.replace('_', ' ') in query or technique in query:
+            if technique.replace('_', ' ') in query_lower or technique in query_lower:
                 return chapters
         
         # Otherwise search all chapters by topic
         relevant = []
         for chapter_id, topics in CHAPTER_TOPICS.items():
             for topic in topics:
-                if topic.lower() in query:
+                if topic.lower() in query_lower:
                     relevant.append(chapter_id)
                     break
         
         # If no specific match, search all chapters
         if not relevant:
-            relevant = [f"ch{i:02d}" for i in range(1, 19)]
+            relevant = [f"ch{i:02d}" for i in range(1, 21)]
         
         return relevant
     
@@ -373,4 +375,3 @@ def format_citations(citations: List[BookCitation]) -> str:
         output += "-" * 60 + "\n"
     
     return output
-

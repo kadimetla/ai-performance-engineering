@@ -191,6 +191,10 @@ class NvshmemIbgdaMicrobench(VerificationPayloadMixin, CudaBinaryBenchmark):
             device=device,
             dtype=torch.float32,
         )
+        self._payload_device = device
+
+    def capture_verification_payload(self) -> None:
+        device = self._payload_device
         self._set_verification_payload(
             inputs={
                 "mode": torch.tensor([ord(self.mode[0])], device=device, dtype=torch.int64),

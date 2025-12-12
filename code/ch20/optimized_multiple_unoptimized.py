@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -41,7 +42,7 @@ class OptimizedModel(nn.Module):
         return x
 
 
-class OptimizedAllTechniquesBenchmark(BaseBenchmark):
+class OptimizedAllTechniquesBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: BF16 + fused ops + no redundant compute."""
     
     def __init__(self):
@@ -81,11 +82,14 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
                 self.output = self.model(self.x)
                 _ = self.output.sum()  # Force materialization
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        assert self.model is not None and self.x is not None and self.output is not None
         self._set_verification_payload(
             inputs={"x": self.x},
-            output=self.output.float() if self.output is not None else None,
+            output=self.output.float(),
             batch_size=self.batch_size,
-            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
             output_tolerance=(0.5, 6.0),
             precision_flags={
                 "fp16": False,
@@ -126,12 +130,6 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
-
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.5, 6.0)
-        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -72,6 +72,8 @@ class OptimizedDualPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.output.copy_(result)
         if self.input_a is None or self.input_b is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input_a": self.input_a, "input_b": self.input_b},
             output=self.output.detach().float().clone(),

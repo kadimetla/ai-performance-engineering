@@ -85,6 +85,8 @@ class BaselineArithmeticIntensityBenchmark(VerificationPayloadMixin, BaseBenchma
             self._synchronize()
         if self.A is None or self.B is None or self.C is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B},
             output=self.C.detach().float().clone(),

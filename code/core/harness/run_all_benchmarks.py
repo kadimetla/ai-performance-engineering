@@ -2915,15 +2915,64 @@ def _test_chapter_impl(
                     result_entry['status'] = 'succeeded'
                     successful += 1
                     
-                    # POST-TIMING VERIFICATION: Compare outputs from the already-run benchmarks
-                    # Verification is now integrated into the timing flow - no separate pre-run
-                    # For baseline vs optimized pairs, outputs are compared after timing completes
-                    # _verify_patched_benchmark is reserved for LLM-patched benchmarks only
-                    result_entry['output_verification'] = {
-                        'verified': True,
-                        'verification_type': 'post_timing',
-                        'details': {'reason': 'Verification integrated into timing run'},
-                    }
+                    # POST-TIMING VERIFICATION: Strictly compare perf-run outputs
+                    if verify_output and best_opt:
+                        from core.benchmark.verify_runner import VerifyRunner
+
+                        try:
+                            runner = VerifyRunner()
+
+                            def _get_perf_output(bench):
+                                if hasattr(bench, "_subprocess_verify_output"):
+                                    out = getattr(bench, "_subprocess_verify_output")
+                                    if out is None:
+                                        raise RuntimeError("Missing subprocess verify_output")
+                                    return out
+                                return bench.get_verify_output()
+
+                            def _get_perf_tolerance(bench) -> tuple[float, float]:
+                                if hasattr(bench, "_subprocess_output_tolerance"):
+                                    tol = getattr(bench, "_subprocess_output_tolerance")
+                                    if tol is None:
+                                        raise RuntimeError("Missing subprocess output_tolerance")
+                                    return tol
+                                return bench.get_output_tolerance()
+
+                            baseline_output = _get_perf_output(baseline_benchmark)
+                            optimized_output = _get_perf_output(optimized_benchmark)
+                            tol = _get_perf_tolerance(baseline_benchmark)
+
+                            comparison = runner.compare_perf_outputs(baseline_output, optimized_output, tol)
+
+                            result_entry["verification"] = {
+                                "passed": comparison.passed,
+                                "max_diff": comparison.max_diff,
+                                "location": comparison.location,
+                                "rtol": tol[0],
+                                "atol": tol[1],
+                            }
+
+                            if comparison.passed:
+                                logger.info(
+                                    "    ✓ VERIFICATION PASSED: outputs match (max_diff=%s)",
+                                    f"{comparison.max_diff:.6f}" if comparison.max_diff is not None else "0.0",
+                                )
+                            else:
+                                reason = "Output mismatch"
+                                if comparison.max_diff is not None:
+                                    reason = f"Output mismatch (max_diff={comparison.max_diff:.6f})"
+                                logger.error("    ✗ VERIFICATION FAILED: %s", reason)
+                                result_entry["status"] = "failed_verification"
+                                result_entry["error"] = reason
+                                successful -= 1
+                                failed_error += 1
+                        except Exception as e:
+                            logger.error("    ✗ VERIFICATION FAILED: %s", e)
+                            result_entry["verification"] = {"passed": False, "reason": str(e)}
+                            result_entry["status"] = "failed_verification"
+                            result_entry["error"] = str(e)
+                            successful -= 1
+                            failed_error += 1
             elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
                 successful += 1

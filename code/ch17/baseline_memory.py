@@ -103,6 +103,8 @@ class BaselineMemoryBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self.output is None or self._last_input is None:
             raise RuntimeError("benchmark_fn() must produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._last_input},
             output=self.output,

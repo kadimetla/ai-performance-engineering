@@ -90,6 +90,8 @@ class OptimizedGraphBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self._verify_input is None or self.dst is None:
             raise RuntimeError("Verification input/output not initialized")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"src": self._verify_input},
             output=self.dst.detach().clone(),

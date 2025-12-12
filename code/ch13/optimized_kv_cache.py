@@ -197,6 +197,8 @@ class OptimizedKVCacheOptimizedBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.output = hidden.detach().clone()
         if self._verify_input is None:
             raise RuntimeError("Verification input not initialized")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output,

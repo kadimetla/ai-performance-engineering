@@ -25,6 +25,7 @@ class BaselineGuidedDecodingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.input_ids: Optional[torch.Tensor] = None
         self.embedded_input: Optional[torch.Tensor] = None
         self.memory: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self._verify_output: Optional[torch.Tensor] = None
         self.max_length = 20
         self.batch_size = 4
@@ -76,11 +77,16 @@ class BaselineGuidedDecodingBenchmark(VerificationPayloadMixin, BaseBenchmark):
             with torch.no_grad():
                 # Use fixed inputs for deterministic verification
                 output = self.model(self.embedded_input, self.memory)
+                self.output = output
                 _ = output.sum()
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.embedded_input is None or self.memory is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"embedded_input": self.embedded_input, "memory": self.memory},
-            output=output,
+            output=self.output,
             batch_size=self.batch_size,
             parameter_count=int(self.parameter_count),
             output_tolerance=(1e-4, 1e-4),

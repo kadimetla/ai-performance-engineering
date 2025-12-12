@@ -49,9 +49,11 @@ class TestBenchmarkDiscoveryIntegration:
                 # Labs live under labs/ and may not use ch* naming
                 assert len(relative.parts) >= 2
                 continue
-            assert chapter_dir.name.startswith('ch')
-            if chapter_dir.name.startswith('ch'):
-                assert chapter_dir.name[2:].isdigit()
+            # Benchmarks may live in nested dirs under a chapter; require the
+            # top-level component to be a real chXX directory.
+            top = relative.parts[0]
+            assert top.startswith("ch")
+            assert top[2:].isdigit()
     
     def test_discover_benchmarks_finds_real_pairs(self):
         """Test that discovery finds real baseline/optimized pairs."""

@@ -130,6 +130,8 @@ class BaselineNVFP4TrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Verification input/model missing")
         with torch.no_grad():
             self.output = self.model(self._verify_input).float().clone()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},
             output=self.output,

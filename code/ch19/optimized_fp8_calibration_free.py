@@ -316,6 +316,8 @@ class _FP8CalibrationFreeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self._impl.input is None or self._output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._impl.input},
             output=self._output,

@@ -306,6 +306,16 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("benchmark_fn() did not produce output")
         fp8_dtype = getattr(torch, "float8_e4m3fn", None)
         fp8_enabled = fp8_dtype is not None and self.runtime_dtype == fp8_dtype
+        self._payload_fp8_enabled = fp8_enabled
+        self._payload_k = k
+        self._payload_q = q
+        self._payload_v = v
+
+    def capture_verification_payload(self) -> None:
+        fp8_enabled = self._payload_fp8_enabled
+        k = self._payload_k
+        q = self._payload_q
+        v = self._payload_v
         self._set_verification_payload(
             inputs={"q": q.detach(), "k": k.detach(), "v": v.detach()},
             output=self.output,

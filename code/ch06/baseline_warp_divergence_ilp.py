@@ -63,6 +63,8 @@ class BaselineWarpDivergenceILPBenchmark(VerificationPayloadMixin, BaseBenchmark
 
             self.output = result
             self.routing_logits = mask_source
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input, "routing_logits": self.routing_logits},
             output=self.output.detach(),

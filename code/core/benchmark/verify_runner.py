@@ -419,7 +419,7 @@ class VerifyRunner:
             raise ValueError(
                 f"{benchmark.__class__.__name__}.get_verify_output() returned None. "
                 "Must return a tensor or dict of tensors. "
-                "If this is a throughput-only benchmark, return a checksum tensor."
+                "Surface the real output (or a representative slice); verification cannot be skipped."
             )
         
         outputs: Dict[str, torch.Tensor] = {}
@@ -441,6 +441,57 @@ class VerifyRunner:
                 f"torch.Tensor or Dict[str, torch.Tensor], got {type(out)}"
             )
         
+        return outputs
+
+    def _extract_output_for_aliasing(self, benchmark: Any) -> Dict[str, torch.Tensor]:
+        """Extract output tensors WITHOUT cloning for aliasing detection.
+
+        Aliasing checks rely on pointer equality (`tensor.data_ptr()`), so this
+        method must not detach/clone outputs.
+        """
+        # Prefer direct access to VerificationPayloadMixin storage when available.
+        payload = getattr(benchmark, "_verification_payload", None)
+        if payload is not None:
+            payload_out = getattr(payload, "output", None)
+            if isinstance(payload_out, torch.Tensor):
+                return {"output": payload_out}
+
+        if not hasattr(benchmark, "get_verify_output"):
+            raise NotImplementedError(
+                f"{benchmark.__class__.__name__} must implement get_verify_output(). "
+                "No fallbacks or auto-detection allowed."
+            )
+        if not callable(benchmark.get_verify_output):
+            raise TypeError(
+                f"{benchmark.__class__.__name__}.get_verify_output must be a method, "
+                f"got {type(benchmark.get_verify_output)}"
+            )
+
+        out = benchmark.get_verify_output()
+        if out is None:
+            raise ValueError(
+                f"{benchmark.__class__.__name__}.get_verify_output() returned None; "
+                "cannot perform aliasing detection."
+            )
+
+        outputs: Dict[str, torch.Tensor] = {}
+        if isinstance(out, torch.Tensor):
+            outputs["output"] = out
+        elif isinstance(out, dict):
+            for name, tensor in out.items():
+                if isinstance(tensor, torch.Tensor):
+                    outputs[name] = tensor
+            if not outputs:
+                raise ValueError(
+                    f"{benchmark.__class__.__name__}.get_verify_output() returned dict "
+                    "with no tensor values."
+                )
+        else:
+            raise TypeError(
+                f"{benchmark.__class__.__name__}.get_verify_output() must return "
+                f"torch.Tensor or Dict[str, torch.Tensor], got {type(out)}"
+            )
+
         return outputs
     
     def _extract_inputs(self, benchmark: Any) -> Dict[str, torch.Tensor]:
@@ -491,7 +542,7 @@ class VerifyRunner:
             Tuple of (no_aliasing, error_message_if_aliasing)
         """
         inputs = self._extract_inputs(benchmark)
-        outputs = self._extract_output(benchmark)
+        outputs = self._extract_output_for_aliasing(benchmark)
         
         # Use the check from validity_checks module
         no_aliasing, error_msg = check_input_output_aliasing(inputs, outputs)
@@ -649,12 +700,49 @@ class VerifyRunner:
             max_diff=max_diff_overall if max_diff_overall > 0 else None,
             tolerance_used=tolerance,
         )
+
+    def compare_perf_outputs(
+        self,
+        baseline_output: Union[torch.Tensor, Dict[str, torch.Tensor]],
+        optimized_output: Union[torch.Tensor, Dict[str, torch.Tensor]],
+        tolerance: Tuple[float, float],
+    ) -> ComparisonDetails:
+        """Compare already-captured perf-run outputs strictly.
+
+        This is used for post-timing verification. Callers MUST supply an
+        explicit tolerance from the baseline benchmark; no fallbacks or
+        auto-inference are permitted.
+        """
+        def _coerce(out: Union[torch.Tensor, Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+            if isinstance(out, torch.Tensor):
+                return {"output": out.detach()}
+            if isinstance(out, dict):
+                if not out:
+                    raise ValueError("verify_output dict is empty")
+                coerced: Dict[str, torch.Tensor] = {}
+                for name, tensor in out.items():
+                    if not isinstance(tensor, torch.Tensor):
+                        raise TypeError(f"verify_output['{name}'] must be torch.Tensor, got {type(tensor)}")
+                    coerced[name] = tensor.detach()
+                return coerced
+            raise TypeError(f"verify_output must be torch.Tensor or Dict[str, torch.Tensor], got {type(out)}")
+
+        expected = _coerce(baseline_output)
+        actual = _coerce(optimized_output)
+        tol_spec = ToleranceSpec(rtol=float(tolerance[0]), atol=float(tolerance[1]))
+        return self._compare_outputs(expected, actual, tol_spec)
     
     def _run_with_seed(
         self,
         benchmark: Any,
         seed: int,
-    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, float], Dict[str, int], Dict[str, torch.Tensor]]:
+    ) -> Tuple[
+        Dict[str, torch.Tensor],
+        Dict[str, float],
+        Dict[str, int],
+        Dict[str, torch.Tensor],
+        InputSignature,
+    ]:
         """Run a benchmark with specific seed and extract outputs.
         
         Args:
@@ -662,7 +750,7 @@ class VerifyRunner:
             seed: Random seed to use
         
         Returns:
-            Tuple of (outputs, workload_metrics, seed_info, inputs_used)
+            Tuple of (outputs, workload_metrics, seed_info, inputs_used, input_signature)
         """
         # Set deterministic seeds BEFORE setup and capture seed_info
         # NOTE: We do NOT re-seed after setup. This ensures inputs created
@@ -680,6 +768,7 @@ class VerifyRunner:
             raise RuntimeError("Verification forbids CUDA graph capture. Disable enable_cuda_graph for verify runs.")
         
         inputs_for_validation: Dict[str, torch.Tensor] = {}
+        signature: Optional[InputSignature] = None
         stream_auditor = None
         pre_streams: List[int] = []
         audit_ctx = nullcontext()
@@ -703,11 +792,34 @@ class VerifyRunner:
                     for stream in declared_streams:
                         stream_auditor.record_stream_event(stream, operation="declared_stream")
                 benchmark.benchmark_fn()
+                # Allow benchmarks to set verification payload outside benchmark_fn().
+                capture_hook = getattr(benchmark, "capture_verification_payload", None)
+                if callable(capture_hook):
+                    try:
+                        capture_hook()
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"capture_verification_payload() failed during verification: {exc}"
+                        ) from exc
                 if hasattr(benchmark, "mark_execution_complete"):
                     try:
                         benchmark.mark_execution_complete()
                     except Exception:
                         pass
+
+                # STRICT: Verification metadata must be surfaced post-run.
+                inputs_for_validation = self._extract_inputs(benchmark)
+
+                # Memory aliasing check must use *real* tensors (no clones).
+                outputs_for_aliasing = self._extract_output_for_aliasing(benchmark)
+                no_aliasing, alias_error = check_input_output_aliasing(
+                    inputs_for_validation, outputs_for_aliasing
+                )
+                if not no_aliasing:
+                    raise RuntimeError(alias_error or "INPUT_OUTPUT_ALIASING detected")
+
+                # Payload-backed signatures are extracted post-run.
+                signature = self._extract_signature(benchmark)
             
             # Sync CUDA
             if torch.cuda.is_available():
@@ -716,10 +828,8 @@ class VerifyRunner:
             # Extract outputs
             outputs = self._extract_output(benchmark)
             metrics = self._extract_workload_metrics(benchmark)
-            try:
-                inputs_for_validation = self._extract_inputs(benchmark)
-            except Exception:
-                inputs_for_validation = {}
+            if signature is None:
+                raise RuntimeError("get_input_signature() did not produce a signature during verification run")
             
             # Stream audit check for verification path
             if stream_auditor is not None:
@@ -755,7 +865,7 @@ class VerifyRunner:
             if detect_seed_mutation(seed_info):
                 raise RuntimeError("Benchmark mutated RNG seeds during execution")
             
-            return outputs, metrics, seed_info, inputs_for_validation
+            return outputs, metrics, seed_info, inputs_for_validation, signature
             
         finally:
             # Always teardown
@@ -858,7 +968,7 @@ class VerifyRunner:
         try:
             # Run with different seed
             fresh_seed = config.seed + 1000
-            fresh_outputs, _, _, _ = self._run_with_seed(benchmark, fresh_seed)
+            fresh_outputs, _, _, _, _ = self._run_with_seed(benchmark, fresh_seed)
             
             # For deterministic algorithms, outputs should match
             # For non-deterministic, they should differ
@@ -942,15 +1052,13 @@ class VerifyRunner:
         except (RuntimeError, NotImplementedError):
             return True, None  # Benchmark doesn't support output verification
         
-        # Get the input tensor to perturb
-        input_tensor = None
-        if hasattr(benchmark, tensor_name):
-            input_tensor = getattr(benchmark, tensor_name)
-        elif hasattr(benchmark, 'x') and tensor_name == 'input':
-            input_tensor = benchmark.x
-        elif hasattr(benchmark, 'inputs'):
-            input_tensor = benchmark.inputs
-        
+        # Get the input tensor to perturb from declared verification inputs.
+        try:
+            verify_inputs = self._extract_inputs(benchmark)
+        except Exception:
+            return True, None  # Can't access verification inputs - skip check
+
+        input_tensor = verify_inputs.get(tensor_name)
         if input_tensor is None or not isinstance(input_tensor, torch.Tensor):
             return True, None  # Can't find input tensor - skip check
         
@@ -965,6 +1073,14 @@ class VerifyRunner:
             
             # Re-run benchmark
             benchmark.benchmark_fn()
+
+            # Post-run payload refresh for benchmarks using capture_verification_payload().
+            capture_hook = getattr(benchmark, "capture_verification_payload", None)
+            if callable(capture_hook):
+                try:
+                    capture_hook()
+                except Exception as exc:
+                    return True, f"Jitter check skipped due to capture_verification_payload() error: {exc}"
             
             # Get new output
             try:
@@ -1024,38 +1140,26 @@ class VerifyRunner:
         issues = check_benchmark_compliance(baseline)
         if issues:
             reason = issues[0]  # Report first issue
-            return VerifyResult.fail(
-                f"Baseline compliance check failed: {reason.value}",
+            return VerifyResult(
+                passed=False,
+                reason=reason,
+                details={"error": "Baseline compliance check failed"},
+                timestamp=datetime.now(),
             )
-        
-        # Extract input signature
-        try:
-            signature = self._extract_signature(baseline)
-        except Exception as exc:
-            return VerifyResult.fail(f"Baseline input signature invalid: {exc}")
-        
-        errors = signature.validate(strict=False)  # Allow simple parameter-based signatures
-        if errors:
-            return VerifyResult.fail(f"Invalid signature: {errors[0]}")
-        
-        sig_hash = signature.hash()
-        
-        # Check cache (unless forced)
-        if not config.force_recache and self.cache.has(sig_hash):
-            golden = self.cache.get(sig_hash)
-            if golden:
-                return VerifyResult.success(
-                    signature_hash=sig_hash,
-                    baseline_checksum=golden.checksum,
-                )
-        
+
         try:
             # Run baseline with deterministic seed
-            outputs, metrics, seed_info, inputs = self._run_with_seed(baseline, config.seed)
+            outputs, metrics, seed_info, inputs, signature = self._run_with_seed(baseline, config.seed)
             try:
                 self._validate_inputs_match_signature(signature, inputs)
             except Exception as exc:
                 return VerifyResult.fail(f"Baseline inputs do not match signature: {exc}")
+
+            errors = signature.validate(strict=False)  # Allow simple parameter-based signatures
+            if errors:
+                return VerifyResult.fail(f"Invalid signature: {errors[0]}")
+
+            sig_hash = signature.hash()
             
             # Capture baseline tolerance (fail-fast)
             try:
@@ -1063,13 +1167,18 @@ class VerifyRunner:
             except Exception as exc:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE.value,
+                    reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE,
                     details={"error": str(exc)},
                     timestamp=datetime.now(),
                 )
             
             if not outputs:
-                return VerifyResult.fail("Baseline produced no extractable outputs")
+                return VerifyResult(
+                    passed=False,
+                    reason=QuarantineReason.MISSING_VERIFY_OUTPUT,
+                    details={"error": "Baseline produced no extractable outputs"},
+                    timestamp=datetime.now(),
+                )
             
             # Create and cache golden output
             golden = GoldenOutput(
@@ -1121,33 +1230,38 @@ class VerifyRunner:
         issues = check_benchmark_compliance(optimized)
         if issues:
             reason = issues[0]
-            return VerifyResult.fail(
-                f"Optimized compliance check failed: {reason.value}",
+            return VerifyResult(
+                passed=False,
+                reason=reason,
+                details={"error": "Optimized compliance check failed"},
+                timestamp=datetime.now(),
             )
-        
-        # Extract input signature
-        try:
-            signature = self._extract_signature(optimized)
-        except Exception as exc:
-            return VerifyResult.fail(f"Optimized input signature invalid: {exc}")
-        
-        sig_hash = signature.hash()
-        
-        # Get golden output
-        golden = self.cache.get(sig_hash)
-        if golden is None:
-            return VerifyResult.fail(
-                f"No golden output cached for signature {sig_hash}. "
-                "Run verify_baseline first."
-            )
-        
+
         try:
             # Run optimized with same seed
-            outputs, metrics, seed_info, inputs = self._run_with_seed(optimized, config.seed)
+            outputs, metrics, seed_info, inputs, signature = self._run_with_seed(optimized, config.seed)
             try:
                 self._validate_inputs_match_signature(signature, inputs)
             except Exception as exc:
                 return VerifyResult.fail(f"Optimized inputs do not match signature: {exc}")
+
+            sig_hash = signature.hash()
+            
+            # Get golden output
+            golden = self.cache.get(sig_hash)
+            if golden is None:
+                return VerifyResult(
+                    passed=False,
+                    reason=QuarantineReason.SIGNATURE_MISMATCH,
+                    signature_hash=sig_hash,
+                    details={
+                        "error": (
+                            f"No golden output cached for signature {sig_hash}. "
+                            "Run verify_baseline first."
+                        )
+                    },
+                    timestamp=datetime.now(),
+                )
             
             if not outputs:
                 return VerifyResult.fail("Optimized produced no extractable outputs")
@@ -1160,7 +1274,7 @@ class VerifyRunner:
                 except Exception as exc:
                     return VerifyResult(
                         passed=False,
-                        reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE.value,
+                        reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE,
                         details={"error": str(exc)},
                         timestamp=datetime.now(),
                     )
@@ -1201,7 +1315,7 @@ class VerifyRunner:
             if not comparison.passed:
                 return VerifyResult(
                     passed=False,
-                    reason="Output mismatch between baseline and optimized",
+                    reason=QuarantineReason.OUTPUT_MISMATCH,
                     signature_hash=sig_hash,
                     comparison_details=comparison,
                 )
@@ -1216,7 +1330,7 @@ class VerifyRunner:
                 if not metrics_match:
                     return VerifyResult(
                         passed=False,
-                        reason="Workload metrics mismatch",
+                        reason=QuarantineReason.WORKLOAD_MISMATCH,
                         signature_hash=sig_hash,
                         workload_delta=deltas,
                     )
@@ -1230,9 +1344,21 @@ class VerifyRunner:
             )
             
             if not fresh_passed:
-                return VerifyResult.fail(f"Fresh-input check failed: {fresh_msg}")
+                return VerifyResult(
+                    passed=False,
+                    reason=QuarantineReason.FRESH_INPUT_FAIL,
+                    signature_hash=sig_hash,
+                    details={"error": fresh_msg},
+                    timestamp=datetime.now(),
+                )
             if not jitter_passed:
-                return VerifyResult.fail(f"Jitter check failed: {jitter_msg}")
+                return VerifyResult(
+                    passed=False,
+                    reason=QuarantineReason.JITTER_FAIL,
+                    signature_hash=sig_hash,
+                    details={"error": jitter_msg},
+                    timestamp=datetime.now(),
+                )
             
             # Compute checksum for optimized
             optimized_checksum = "-".join(
@@ -1310,44 +1436,6 @@ class VerifyRunner:
                     passed=False,
                     reason=QuarantineReason.TIMING_CONFIG_MISMATCH,
                     details={"timing_mismatch": timing_error},
-                    timestamp=datetime.now(),
-                )
-        
-        # Step 0.5: Check for input-output aliasing (pre-filled results detection)
-        if not config.skip_output_validation:
-            # Check baseline
-            try:
-                baseline_no_alias, baseline_alias_error = self._check_input_output_aliasing(baseline)
-                if not baseline_no_alias:
-                    return VerifyResult(
-                        passed=False,
-                        reason=QuarantineReason.INPUT_OUTPUT_ALIASING,
-                        details={"aliasing_error": baseline_alias_error, "benchmark": "baseline"},
-                        timestamp=datetime.now(),
-                    )
-            except Exception as exc:
-                return VerifyResult(
-                    passed=False,
-                    reason=QuarantineReason.MISSING_VERIFY_INPUTS,
-                    details={"error": str(exc), "benchmark": "baseline"},
-                    timestamp=datetime.now(),
-                )
-            
-            # Check optimized
-            try:
-                optimized_no_alias, optimized_alias_error = self._check_input_output_aliasing(optimized)
-                if not optimized_no_alias:
-                    return VerifyResult(
-                        passed=False,
-                        reason=QuarantineReason.INPUT_OUTPUT_ALIASING,
-                        details={"aliasing_error": optimized_alias_error, "benchmark": "optimized"},
-                        timestamp=datetime.now(),
-                    )
-            except Exception as exc:
-                return VerifyResult(
-                    passed=False,
-                    reason=QuarantineReason.MISSING_VERIFY_INPUTS,
-                    details={"error": str(exc), "benchmark": "optimized"},
                     timestamp=datetime.now(),
                 )
         
@@ -1429,7 +1517,7 @@ class VerifyRunner:
         
         # Step 2: Run local verification
         try:
-            outputs, metrics, seed_info, _ = self._run_with_seed(benchmark, config.seed)
+            outputs, metrics, seed_info, _, signature = self._run_with_seed(benchmark, config.seed)
         except Exception as e:
             return VerifyResult.fail(f"Rank {rank} execution failed: {e}")
         
@@ -1458,11 +1546,6 @@ class VerifyRunner:
                     },
                     timestamp=datetime.now(),
                 )
-        
-        # Step 5: Extract signature for caching
-        signature = self._extract_signature(benchmark)
-        if signature is None:
-            return VerifyResult.fail("Distributed benchmark has no valid input signature")
         
         sig_hash = signature.hash()
         

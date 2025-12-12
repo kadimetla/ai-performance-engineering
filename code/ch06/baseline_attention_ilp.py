@@ -60,6 +60,10 @@ class BaselineAttentionILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
                     accum += out.sum()
                     self._synchronize()
                 self._last_sum = accum
+        self._payload_accum = accum
+
+    def capture_verification_payload(self) -> None:
+        accum = self._payload_accum
         self._set_verification_payload(
             inputs={"input": self.input},
             output=(self._last_sum if self._last_sum is not None else accum).float().detach(),

@@ -70,6 +70,8 @@ class BaselineTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self.output is None or self.A is None or self.B is None:
             raise RuntimeError("benchmark_fn() must produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B},
             output=self.output,

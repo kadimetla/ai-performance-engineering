@@ -50,6 +50,8 @@ class OptimizedMemoryHBM3eBenchmark(BaseBenchmark):
             self.result.add_(1.1)  # Combines +1.0 and +0.1 into single op
             self._synchronize()
         self.output = self.result
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"data": self.data},
             output=self.output,

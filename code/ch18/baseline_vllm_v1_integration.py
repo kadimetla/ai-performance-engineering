@@ -182,6 +182,9 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
             dtype=torch.float32,
         )
         self._ran = True
+        self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "batch_size": torch.tensor(self.runner.batch_size),
@@ -193,7 +196,6 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
             precision_flags={"fp16": False, "bf16": True, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
             output_tolerance=(0.1, 1.0),
         )
-        self._synchronize()
 
     def teardown(self) -> None:
         self.runner.cleanup()

@@ -296,17 +296,21 @@ def check_benchmark_compliance(benchmark: Any) -> List[QuarantineReason]:
     if skip_flag:
         issues.append(skip_flag)
     
-    # Check for required methods
+    # Check for required methods. These checks are pre-run safe:
+    # RuntimeError from payload-backed mixins means "not executed yet", not non-compliance.
     if not hasattr(benchmark, "get_input_signature") or not callable(getattr(benchmark, "get_input_signature")):
         issues.append(QuarantineReason.MISSING_INPUT_SIGNATURE)
     else:
-        # Try calling it to ensure it returns a valid signature
         try:
             sig = benchmark.get_input_signature()
             coerce_input_signature(sig)
+        except NotImplementedError:
+            issues.append(QuarantineReason.MISSING_INPUT_SIGNATURE)
+        except RuntimeError:
+            pass
         except Exception:
             issues.append(QuarantineReason.MISSING_INPUT_SIGNATURE)
-    
+
     if not hasattr(benchmark, "get_verify_output") or not callable(getattr(benchmark, "get_verify_output")):
         issues.append(QuarantineReason.MISSING_VERIFY_OUTPUT)
     else:
@@ -314,9 +318,13 @@ def check_benchmark_compliance(benchmark: Any) -> List[QuarantineReason]:
             output = benchmark.get_verify_output()
             if output is None:
                 issues.append(QuarantineReason.MISSING_VERIFY_OUTPUT)
+        except NotImplementedError:
+            issues.append(QuarantineReason.MISSING_VERIFY_OUTPUT)
+        except RuntimeError:
+            pass
         except Exception:
             issues.append(QuarantineReason.MISSING_VERIFY_OUTPUT)
-    
+
     if not hasattr(benchmark, "get_output_tolerance") or not callable(getattr(benchmark, "get_output_tolerance")):
         issues.append(QuarantineReason.MISSING_OUTPUT_TOLERANCE)
     else:
@@ -324,9 +332,13 @@ def check_benchmark_compliance(benchmark: Any) -> List[QuarantineReason]:
             tol = benchmark.get_output_tolerance()
             if tol is None:
                 issues.append(QuarantineReason.MISSING_OUTPUT_TOLERANCE)
+        except NotImplementedError:
+            issues.append(QuarantineReason.MISSING_OUTPUT_TOLERANCE)
+        except RuntimeError:
+            pass
         except Exception:
             issues.append(QuarantineReason.MISSING_OUTPUT_TOLERANCE)
-    
+
     if not hasattr(benchmark, "get_verify_inputs") or not callable(getattr(benchmark, "get_verify_inputs")):
         issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)
     else:
@@ -339,6 +351,10 @@ def check_benchmark_compliance(benchmark: Any) -> List[QuarantineReason]:
                 tensors_present = any(isinstance(v, torch.Tensor) for v in inputs.values())
             if not tensors_present:
                 issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)
+        except NotImplementedError:
+            issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)
+        except RuntimeError:
+            pass
         except Exception:
             issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)
     

@@ -96,6 +96,12 @@ class BaselineV1EngineLoopBenchmark(VerificationPayloadMixin, BaseBenchmark):
             float(verify_core.calls),
             float(len(verify_outputs)),
         ], dtype=torch.float32)
+        return {
+            "steps": self.engine_core.calls,
+            "tokens_generated": len(outputs),
+        }
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"seed": torch.tensor(42)},
             output=self.output,
@@ -104,10 +110,6 @@ class BaselineV1EngineLoopBenchmark(VerificationPayloadMixin, BaseBenchmark):
             precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
             output_tolerance=(0.1, 1.0),
         )
-        return {
-            "steps": self.engine_core.calls,
-            "tokens_generated": len(outputs),
-        }
 
 
 def get_benchmark() -> BaseBenchmark:

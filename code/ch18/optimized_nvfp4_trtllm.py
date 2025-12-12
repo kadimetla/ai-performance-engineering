@@ -90,14 +90,6 @@ class NVFP4TRTLLMBenchmark(VerificationPayloadMixin, BaseBenchmark):
             torch.cuda.synchronize(self.device)
             if self.output is None:
                 raise RuntimeError("TRT-LLM generate did not produce output")
-            self._set_verification_payload(
-                inputs={"inputs": self.inputs},
-                output=self.output,
-                batch_size=self.inputs.shape[0],
-                parameter_count=0,
-                precision_flags={"fp16": False, "bf16": self.output.dtype == torch.bfloat16, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
-                output_tolerance=(0.1, 1.0),
-            )
             return {}
 
         if self.linear is None or self.inputs is None:
@@ -113,6 +105,9 @@ class NVFP4TRTLLMBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.synchronize(self.device)
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output")
+        return {}
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
             output=self.output,
@@ -121,7 +116,6 @@ class NVFP4TRTLLMBenchmark(VerificationPayloadMixin, BaseBenchmark):
             precision_flags={"fp16": self.output.dtype == torch.float16, "bf16": self.output.dtype == torch.bfloat16, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
             output_tolerance=(0.1, 1.0),
         )
-        return {}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

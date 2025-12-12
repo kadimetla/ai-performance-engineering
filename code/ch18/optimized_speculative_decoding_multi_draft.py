@@ -290,15 +290,18 @@ class OptimizedSpeculativeDecodingMultiDraftBenchmark(VerificationPayloadMixin, 
             self._metrics.get("acceptance_rate", 0.0),
             self._metrics.get("tokens_per_sec", 0.0),
         ], dtype=torch.float32)
+        self.output = output
+        self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"batch_size": torch.tensor(4)},
-            output=output,
+            output=self.output,
             batch_size=4,
             parameter_count=0,
             precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
             output_tolerance=(0.1, 1.0),
         )
-        self._synchronize()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=1, warmup=0)

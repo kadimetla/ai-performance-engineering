@@ -113,6 +113,10 @@ class BaselineDataloaderDefaultBenchmark(VerificationPayloadMixin, BaseBenchmark
             raise RuntimeError("benchmark_fn() must produce output for verification")
         # Capture the most recent batch for verification
         inputs = {"data": data, "labels": labels}
+        self._payload_inputs = inputs
+
+    def capture_verification_payload(self) -> None:
+        inputs = self._payload_inputs
         self._set_verification_payload(
             inputs=inputs,
             output=self.output.detach().float().clone(),

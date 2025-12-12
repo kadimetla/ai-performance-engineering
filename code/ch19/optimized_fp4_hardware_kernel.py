@@ -53,6 +53,8 @@ class OptimizedFP4HardwareKernelBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.output = (a @ a).flatten()[:4].float().clone()
         if self.output is None or self._verify_input is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output,

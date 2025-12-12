@@ -116,6 +116,10 @@ class OptimizedEarlyExitBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None or self.x is None:
             raise RuntimeError("benchmark_fn() must produce output")
         dtype = self.output.dtype
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self.x},
             output=self.output,

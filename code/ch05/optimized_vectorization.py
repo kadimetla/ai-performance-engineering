@@ -43,6 +43,8 @@ class OptimizedVectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
             result = self.data[:1000].sum().unsqueeze(0)
             self._synchronize()
         self.output = result
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"data": self.data},
             output=self.output.detach().clone(),

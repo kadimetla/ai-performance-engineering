@@ -133,6 +133,8 @@ class OptimizedPersistentDecodeTritonBenchmark(VerificationPayloadMixin, BaseBen
         self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
         if self.inputs is None or self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "q": self.inputs.q.detach(),

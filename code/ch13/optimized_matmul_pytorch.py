@@ -103,6 +103,8 @@ class OptimizedMatmulCUTLASSBenchmark(VerificationPayloadMixin, BaseBenchmark):
             # CUTLASS-optimized matrix multiplication (via torch.compile)
             self.C = self.compiled_matmul(self.A, self.B, self.bias)
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B, "bias": self.bias},
             output=self.C.float().detach().clone(),

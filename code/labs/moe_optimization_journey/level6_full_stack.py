@@ -257,6 +257,8 @@ class Level6FullStack(VerificationPayloadMixin, BaseBenchmark):
         self.last_tokens_per_sec = total_tokens / (self.last_latency_ms / 1000)
         if self.static_input is None or self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input_ids": self.static_input.detach()},
             output=self.output,

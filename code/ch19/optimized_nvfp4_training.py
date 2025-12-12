@@ -217,6 +217,10 @@ class OptimizedNVFP4TrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
             "fp8": not self.use_nvfp4,
             "tf32": torch.backends.cuda.matmul.allow_tf32,
         }
+        self._payload_precision_flags = precision_flags
+
+    def capture_verification_payload(self) -> None:
+        precision_flags = self._payload_precision_flags
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},
             output=self.output,

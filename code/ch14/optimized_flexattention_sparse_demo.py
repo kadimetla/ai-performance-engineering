@@ -522,6 +522,10 @@ class FlexAttentionSparseDemoBenchmark(VerificationPayloadMixin, BaseBenchmark):
         }
         if block_mask is not None:
             inputs["block_mask"] = block_mask
+        self._payload_inputs = inputs
+
+    def capture_verification_payload(self) -> None:
+        inputs = self._payload_inputs
         self._set_verification_payload(
             inputs=inputs,
             output=self.output,

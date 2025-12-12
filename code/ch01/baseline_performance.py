@@ -150,6 +150,8 @@ class BaselinePerformanceBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Capture verification output AFTER training completes
         with torch.no_grad():
             self._verify_output = self.model(self._verify_input).clone()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},
             output=self._verify_output,

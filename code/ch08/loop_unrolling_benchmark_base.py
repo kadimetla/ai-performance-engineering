@@ -86,6 +86,8 @@ class LoopUnrollingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
             self._invoke_kernel()
         if self.inputs is None or self.weights is None or self.output is None:
             raise RuntimeError("benchmark_fn() must run after setup() initializes tensors")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "inputs": self.inputs,

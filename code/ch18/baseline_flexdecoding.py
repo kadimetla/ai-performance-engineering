@@ -95,6 +95,9 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
         self._history["decode_ms"].extend(decode_times)
         if self._last_output is None or self.prefill_tokens is None or self.decode_token is None:
             raise RuntimeError("benchmark_fn() must produce output")
+        return {"prefill_ms": prefill_times, "decode_ms": decode_times}
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "prefill_tokens": self.prefill_tokens,
@@ -111,7 +114,6 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
             },
             output_tolerance=(1e-1, 10.0),
         )
-        return {"prefill_ms": prefill_times, "decode_ms": decode_times}
 
     # ---------------------------------------------------------------- lifecycle
     def teardown(self) -> None:

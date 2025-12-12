@@ -81,6 +81,8 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
             self.output = torch.stack([k_slice, v_slice], dim=0).detach().float().clone()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "batch_size": torch.tensor([self.batch_size], dtype=torch.int64, device="cpu"),

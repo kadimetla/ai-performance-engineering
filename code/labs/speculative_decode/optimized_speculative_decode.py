@@ -212,6 +212,8 @@ class OptimizedSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmar
         self._synchronize()
         if self.prompt_ids is None or self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"prompt_ids": self.prompt_ids.detach()},
             output=self.output,

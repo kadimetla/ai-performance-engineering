@@ -86,6 +86,8 @@ class OptimizedUmaMemoryReportingBenchmark(VerificationPayloadMixin, BaseBenchma
         if self.metrics is None or tuple(self.metrics.shape) != tuple(summary_tensor.shape):
             self.metrics = torch.randn_like(summary_tensor)
         self.output = (summary_tensor + self.metrics).detach()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"metrics": self.metrics},
             output=self.output,

@@ -472,6 +472,8 @@ class SlidingWindowDemoBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._synchronize()
         if self.output is None or self.x is None:
             raise RuntimeError("benchmark_fn() must produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.x},
             output=self.output,

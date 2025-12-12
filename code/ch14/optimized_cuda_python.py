@@ -352,6 +352,8 @@ class OptimizedCudaPythonBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._run_fused_kernel()
         
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "input": self.input.detach(),

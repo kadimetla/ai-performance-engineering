@@ -151,10 +151,10 @@ class TestExtractNsysMetrics:
     @patch('subprocess.run')
     def test_extract_nsys_metrics_success(self, mock_run):
         """Test successful nsys metrics extraction."""
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="Metric,Value\nTotal GPU Time,123.45"
-        )
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="Metric,Value\nTotal GPU Time,123.45"),
+            Mock(returncode=0, stdout="Metric,Value\nKernel Time,10.0"),
+        ]
         
         nsys_path = Path("/tmp/test.nsys-rep")
         nsys_path.touch()  # Create file
@@ -162,7 +162,7 @@ class TestExtractNsysMetrics:
         metrics = extract_nsys_metrics(nsys_path)
         
         assert metrics.total_gpu_time_ms == 123.45
-        mock_run.assert_called_once()
+        assert mock_run.call_count == 2
     
     @patch('subprocess.run')
     def test_extract_nsys_metrics_file_not_found(self, mock_run):
@@ -186,6 +186,7 @@ class TestExtractNsysMetrics:
         metrics = extract_nsys_metrics(nsys_path)
         
         assert metrics.total_gpu_time_ms is None
+        assert mock_run.call_count == 2
 
 
 class TestExtractNcuMetrics:
@@ -353,4 +354,3 @@ class TestGoldenFileMetrics:
         result3 = _parse_ncu_csv(csv3)
         # Should handle gracefully
         assert isinstance(result3, dict)
-

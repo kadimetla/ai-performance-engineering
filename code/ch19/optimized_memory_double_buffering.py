@@ -138,6 +138,8 @@ class OptimizedMemoryDoubleBufferingBenchmark(VerificationPayloadMixin, BaseBenc
         torch.cuda.synchronize()
         if self.output is None or (self.buffer_a is None and self.buffer_b is None):
             raise RuntimeError("benchmark_fn() must produce output and buffers")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"buffer": self.buffer_a if self.buffer_a is not None else self.buffer_b},
             output=self.output,

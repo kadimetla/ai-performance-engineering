@@ -90,6 +90,12 @@ class BaselineDockerBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         # Store output for verification
         self.output = out.detach()
+        self._payload_x = x
+        self._payload_y = y
+
+    def capture_verification_payload(self) -> None:
+        x = self._payload_x
+        y = self._payload_y
         self._set_verification_payload(
             inputs={"data": x, "target": y},
             output=self.output,

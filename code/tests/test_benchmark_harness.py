@@ -64,6 +64,14 @@ class SimpleBenchmark(BaseBenchmark):
     def get_output_tolerance(self):
         return (1e-5, 1e-8)
 
+    def get_input_signature(self) -> dict:
+        if self.tensor is None:
+            raise RuntimeError("setup() must be called before get_input_signature()")
+        return {
+            "tensor_shape": tuple(self.tensor.shape),
+            "dtype": str(self.tensor.dtype),
+        }
+
 
 class SlowBenchmark(BaseBenchmark):
     """Benchmark that takes a long time - for timeout testing."""
@@ -105,6 +113,14 @@ class SlowBenchmark(BaseBenchmark):
     def get_output_tolerance(self):
         return (1e-5, 1e-8)
 
+    def get_input_signature(self) -> dict:
+        if self.tensor is None:
+            raise RuntimeError("setup() must be called before get_input_signature()")
+        return {
+            "tensor_shape": tuple(self.tensor.shape),
+            "dtype": str(self.tensor.dtype),
+        }
+
 
 class FailingBenchmark(BaseBenchmark):
     """Benchmark that raises an error - for error propagation testing."""
@@ -132,6 +148,9 @@ class FailingBenchmark(BaseBenchmark):
     
     def get_output_tolerance(self):
         return (1e-5, 1e-8)
+
+    def get_input_signature(self) -> dict:
+        return {"scalar": 0.0}
 
 
 class TestSubprocessTimeoutKill:
@@ -306,6 +325,7 @@ class TestEventSyncTimingLoop:
             warmup=5,
             enable_profiling=False,
             enable_memory_tracking=False,
+            adaptive_iterations=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -397,6 +417,7 @@ class TestBenchmarkModes:
             iterations=10,
             warmup=5,
             enable_profiling=False,
+            adaptive_iterations=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -410,6 +431,7 @@ class TestBenchmarkModes:
             iterations=10,
             warmup=5,
             enable_profiling=False,
+            adaptive_iterations=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.PYTORCH, config=config)
         

@@ -124,6 +124,10 @@ class BaselineCUDAGraphBucketingBenchmark(VerificationPayloadMixin, BaseBenchmar
             [float(len(traffic)), float(total_tokens)],
             dtype=torch.float32,
         )
+        self._payload_traffic = traffic
+
+    def capture_verification_payload(self) -> None:
+        traffic = self._payload_traffic
         self._set_verification_payload(
             inputs={
                 "traffic_shape": torch.tensor([len(traffic)], dtype=torch.int64),

@@ -134,6 +134,11 @@ class OptimizedRackPrepBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.output = self.norm(self.device_buffers[self.cur_slot])
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._start_copy(self.cur_slot)
+        self.cur_slot, self.next_slot = self.next_slot, self.cur_slot
+        self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "host_buffer": self.host_buffers[self.cur_slot],
@@ -150,9 +155,6 @@ class OptimizedRackPrepBenchmark(VerificationPayloadMixin, BaseBenchmark):
             },
             output_tolerance=(1.0, 10.0),
         )
-        self._start_copy(self.cur_slot)
-        self.cur_slot, self.next_slot = self.next_slot, self.cur_slot
-        self._synchronize()
 
     def teardown(self) -> None:
         self.host_buffers = []

@@ -128,19 +128,23 @@ class RooflineAnalysisILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 self.analyzer.ridge_point,
             ], dtype=torch.float32)
             self._verify_input = torch.tensor([self.analyzer.ridge_point], dtype=torch.float32)
-            self._set_verification_payload(
-                inputs={"ridge_point": self._verify_input},
-                output=self.output,
-                batch_size=1,
-                parameter_count=0,
-                precision_flags={
-                    "fp16": False,
-                    "bf16": False,
-                    "fp8": False,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32,
-                },
-                output_tolerance=(1e-4, 1e-4),
-            )
+
+    def capture_verification_payload(self) -> None:
+        if self.output is None or self._verify_input is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"ridge_point": self._verify_input},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(1e-4, 1e-4),
+        )
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

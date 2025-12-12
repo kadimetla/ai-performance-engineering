@@ -60,6 +60,9 @@ class BaselineClusterMulticastBenchmark(VerificationPayloadMixin, BaseBenchmark)
         latency_ms = self._record_stop(start)
         if self.output is None or self.inputs is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+        return {"latency_ms": latency_ms}
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.inputs},
             output=self.output.detach().float().clone(),
@@ -72,7 +75,6 @@ class BaselineClusterMulticastBenchmark(VerificationPayloadMixin, BaseBenchmark)
             },
             output_tolerance=(0.5, 5.0),
         )
-        return {"latency_ms": latency_ms}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

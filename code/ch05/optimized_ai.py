@@ -67,6 +67,8 @@ class OptimizedAIBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 out = block(out)
             self._synchronize()
         self.output = out.detach()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"inputs": self.static_input},
             output=self.output,

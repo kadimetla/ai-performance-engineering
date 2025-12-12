@@ -112,6 +112,8 @@ class OptimizedWarpDivergenceILPBenchmark(VerificationPayloadMixin, BaseBenchmar
             # Single compiled call on full tensor - no chunking, no concat
             assert self._compiled_fn is not None
             self.output, self.routing_logits = self._compiled_fn(self.input, self.routing_logits)
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input, "routing_logits": self.routing_logits},
             output=self.output.detach(),

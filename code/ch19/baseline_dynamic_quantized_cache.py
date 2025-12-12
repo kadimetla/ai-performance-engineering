@@ -118,6 +118,9 @@ class _DynamicQuantizedCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
         latency_ms = self._record_stop(start)
         self._history["latency_ms"].append(latency_ms)
         self._history["error"].extend(errors)
+        return {"errors": errors}
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"tensor": self.tensor},
             output=self.tensor,
@@ -125,7 +128,6 @@ class _DynamicQuantizedCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
             parameter_count=0,
             output_tolerance=(0.1, 1.0),
         )
-        return {"errors": errors}
 
     def teardown(self) -> None:
         self.tensor = None

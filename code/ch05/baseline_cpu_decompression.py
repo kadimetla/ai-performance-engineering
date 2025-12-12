@@ -46,6 +46,11 @@ class CPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         import numpy as np
         self.output = torch.from_numpy(np.frombuffer(decompressed, dtype=np.float32).copy())
         compressed_tensor = torch.tensor(list(self.compressed), dtype=torch.uint8)
+        self._payload_compressed_tensor = compressed_tensor
+        return {"latency_ms": latency_ms, "compressed_bytes": len(self.compressed)}
+
+    def capture_verification_payload(self) -> None:
+        compressed_tensor = self._payload_compressed_tensor
         self._set_verification_payload(
             inputs={"compressed": compressed_tensor},
             output=self.output.detach().clone(),
@@ -59,7 +64,6 @@ class CPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             },
             output_tolerance=(0.1, 1.0),
         )
-        return {"latency_ms": latency_ms, "compressed_bytes": len(self.compressed)}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

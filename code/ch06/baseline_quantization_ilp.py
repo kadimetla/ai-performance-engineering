@@ -39,6 +39,8 @@ class BaselineQuantizationILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("baseline_quantization_ilp"):
             self.output = self.input * 2.0 + 1.0
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output.detach(),

@@ -131,6 +131,8 @@ class BaselinePipelineSequentialBenchmark(BaseBenchmark):
                     torch.cuda.synchronize()
             # Capture output for verification
             self.output = x.detach()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
             output=self.output.float() if self.output is not None else None,

@@ -51,6 +51,8 @@ class BaselineStorageCpuBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.data = torch.from_numpy(cpu_loaded).to(self.device)
             self._synchronize()
         self.output = self.data.sum().unsqueeze(0)
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"data": self.data},
             output=self.output.detach().clone(),

@@ -73,6 +73,10 @@ class BaselineInferenceFullBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None or self.inputs is None:
             raise RuntimeError("benchmark_fn() must produce output")
         dtype = self.output.dtype
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self.inputs},
             output=self.output,

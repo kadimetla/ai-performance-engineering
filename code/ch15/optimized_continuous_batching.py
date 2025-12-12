@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import deque
 from typing import Optional
 
 import torch
@@ -18,9 +17,9 @@ class OptimizedContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchma
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None
-        self.sample_queue: Optional[deque] = None
         self.samples: Optional[torch.Tensor] = None
         self._verify_input: Optional[torch.Tensor] = None
+        self._batch_ranges: Optional[list[tuple[int, int]]] = None
         self.max_batch_size = 12
         self.hidden_dim = 1024
         # Match baseline total samples: batch_size(12) * num_batches(12) = 144
@@ -44,6 +43,7 @@ class OptimizedContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchma
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         self.model = nn.Sequential(
             nn.Linear(self.hidden_dim, self.hidden_dim * 2),
@@ -53,13 +53,42 @@ class OptimizedContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchma
 
         # Use the same shared samples ordering as baseline to keep outputs verifiable.
         self.samples = torch.randn(self.num_samples, self.hidden_dim, device=self.device)
-        self.sample_queue = deque(self.samples[i:i + 1] for i in range(self.num_samples))
+        self._verify_input = self.samples[:2].detach()
 
-        self._verify_input = self.samples[:2].detach().clone()
-        output = torch.zeros_like(self._verify_input)
+        # Deterministic "continuous batching" schedule: variable batch sizes that
+        # still cover the same total sample count as baseline.
+        ranges: list[tuple[int, int]] = []
+        start = 0
+        remaining = self.num_samples
+        i = 0
+        min_batch = max(1, self.max_batch_size // 2)
+        while remaining > 0:
+            proposed = min_batch + ((i * 5) % (self.max_batch_size - min_batch + 1))
+            size = min(int(proposed), remaining)
+            end = start + size
+            ranges.append((start, end))
+            start = end
+            remaining -= size
+            i += 1
+        self._batch_ranges = ranges
+        self._synchronize()
+    
+    def benchmark_fn(self) -> None:
+        """Benchmark: continuous batching - dynamic batch composition."""
+        assert self.model is not None and self.samples is not None and self._batch_ranges is not None
+        with self._nvtx_range("optimized_continuous_batching"):
+            with torch.no_grad():
+                outputs = []
+                for start, end in self._batch_ranges:
+                    outputs.append(self.model(self.samples[start:end]))
+                self.output = torch.cat(outputs, dim=0)
+
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self._verify_input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"probe": self._verify_input},
-            output=output,
+            output=self.output,
             batch_size=self.num_samples,
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             precision_flags={
@@ -70,48 +99,12 @@ class OptimizedContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchma
             },
             output_tolerance=(0.5, 5.0),
         )
-        self._synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: continuous batching - dynamic batch composition."""
-        assert self.model is not None and self.sample_queue is not None
-        with self._nvtx_range("optimized_continuous_batching"):
-            with torch.no_grad():
-                while self.sample_queue:
-                    current_batch = []
-                    current_size = 0
-                    while self.sample_queue and current_size < self.max_batch_size:
-                        sample = self.sample_queue.popleft()
-                        current_batch.append(sample)
-                        current_size += 1
-                    if current_batch:
-                        batch = torch.cat(current_batch, dim=0)
-                        out = self.model(batch)
-                        if self.output is None:
-                            self.output = out
-                        else:
-                            self.output = torch.cat([self.output, out], dim=0)
-            if self._verify_input is None or self.output is None:
-                raise RuntimeError("setup() must be called before benchmark_fn()")
-            self._set_verification_payload(
-                inputs={"probe": self._verify_input},
-                output=self.output,
-                batch_size=self.num_samples,
-                parameter_count=sum(p.numel() for p in self.model.parameters()),
-                precision_flags={
-                    "fp16": False,
-                    "bf16": False,
-                    "fp8": False,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                },
-                output_tolerance=(0.5, 5.0),
-            )
-            self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.sample_queue = None
+        self.samples = None
+        self._batch_ranges = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

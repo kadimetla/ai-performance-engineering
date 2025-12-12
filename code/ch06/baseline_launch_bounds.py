@@ -52,6 +52,8 @@ class BaselineLaunchBoundsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             for _ in range(self.extra_passes):
                 self._extension.launch_bounds_baseline(self.input_data, self.output_data, self.iterations)
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input_data},
             output=self.output_data.detach(),

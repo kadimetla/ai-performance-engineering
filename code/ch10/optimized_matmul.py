@@ -81,6 +81,8 @@ class OptimizedTensorCoreBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self.C is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B},
             output=self.C.detach().clone().float(),

@@ -57,6 +57,9 @@ class GPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.synchronize(self.device)
         latency_ms = self._record_stop(start)
         self.output = out.detach().clone()
+        return {"latency_ms": latency_ms, "output_len": int(out.numel())}
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"encoded": self.encoded},
             output=self.output,
@@ -70,7 +73,6 @@ class GPUDecompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             },
             output_tolerance=(0.1, 1.0),
         )
-        return {"latency_ms": latency_ms, "output_len": int(out.numel())}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

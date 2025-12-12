@@ -146,12 +146,15 @@ class GraceCoherentMemoryBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.bandwidth_gb_s = (self._impl.size_mb / 1024) * self._impl.iterations * 2 / elapsed
 
         verify_output = self._impl.gpu_data[:1000].detach().clone()
+        self.output = verify_output
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "cpu_data": self._impl.cpu_data,
                 "gpu_data": self._impl.gpu_data,
             },
-            output=verify_output,
+            output=self.output,
             batch_size=self._impl.cpu_data.shape[0],
             parameter_count=0,
             precision_flags={

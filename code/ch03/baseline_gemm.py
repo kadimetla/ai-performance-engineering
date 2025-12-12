@@ -81,6 +81,8 @@ class BaselineGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output = result
         if self.left is None or self.right is None:
             raise RuntimeError("benchmark_fn() must be called after setup initializes inputs")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"left": self.left, "right": self.right},
             output=self.output.detach().clone(),

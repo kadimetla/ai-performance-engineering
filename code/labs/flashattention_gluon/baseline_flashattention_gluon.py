@@ -63,6 +63,14 @@ class BaselineFlashAttentionGluonBenchmark(VerificationPayloadMixin, BaseBenchma
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+        self._payload_k = k
+        self._payload_q = q
+        self._payload_v = v
+
+    def capture_verification_payload(self) -> None:
+        k = self._payload_k
+        q = self._payload_q
+        v = self._payload_v
         self._set_verification_payload(
             inputs={"q": q.detach(), "k": k.detach(), "v": v.detach()},
             output=self.output,

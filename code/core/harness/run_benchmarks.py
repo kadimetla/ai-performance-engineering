@@ -2969,101 +2969,65 @@ def _test_chapter_impl(
                     result_entry['status'] = 'succeeded'
                     successful += 1
                     
-                    # POST-TIMING VERIFICATION: Compare outputs from the already-run benchmarks
-                    # This is efficient - we don't run benchmarks twice, just compare their outputs
-                    # For subprocess mode, outputs are captured and stored in _subprocess_verify_output
+                    # POST-TIMING VERIFICATION: Strictly compare perf-run outputs
+                    # Uses outputs captured from the timing run (no re-execution).
                     if verify_output and best_opt:
+                        from core.benchmark.verify_runner import VerifyRunner
+
                         try:
-                            # Get outputs - prefer subprocess-captured output, fallback to get_verify_output()
-                            baseline_output = None
-                            optimized_output = None
-                            
-                            # Try subprocess-captured output first (for subprocess execution mode)
-                            if hasattr(baseline_benchmark, '_subprocess_verify_output'):
-                                baseline_output = baseline_benchmark._subprocess_verify_output
-                            elif hasattr(baseline_benchmark, 'get_verify_output'):
-                                try:
-                                    baseline_output = baseline_benchmark.get_verify_output()
-                                except Exception as e:
-                                    logger.warning(f"    ⚠ Baseline get_verify_output() failed: {e}")
-                            
-                            # Same for optimized - prefer subprocess-captured
-                            if hasattr(optimized_benchmark, '_subprocess_verify_output'):
-                                optimized_output = optimized_benchmark._subprocess_verify_output
-                            elif hasattr(optimized_benchmark, 'get_verify_output'):
-                                try:
-                                    optimized_output = optimized_benchmark.get_verify_output()
-                                except Exception as e:
-                                    logger.warning(f"    ⚠ Optimized get_verify_output() failed: {e}")
-                            
-                            if baseline_output is not None and optimized_output is not None:
-                                # Get tolerance from benchmarks
-                                rtol, atol = 1e-3, 1e-3  # Default
-                                if hasattr(baseline_benchmark, 'get_output_tolerance'):
-                                    try:
-                                        rtol, atol = baseline_benchmark.get_output_tolerance()
-                                    except Exception:
-                                        pass
-                                elif hasattr(optimized_benchmark, 'get_output_tolerance'):
-                                    try:
-                                        rtol, atol = optimized_benchmark.get_output_tolerance()
-                                    except Exception:
-                                        pass
-                                
-                                # Compare outputs
-                                if isinstance(baseline_output, torch.Tensor) and isinstance(optimized_output, torch.Tensor):
-                                    if baseline_output.shape != optimized_output.shape:
-                                        result_entry['verification'] = {
-                                            'passed': False,
-                                            'reason': f"Shape mismatch: {baseline_output.shape} vs {optimized_output.shape}",
-                                        }
-                                        logger.error(f"    ✗ VERIFICATION FAILED: Shape mismatch")
-                                        result_entry['status'] = 'failed_verification'
-                                        result_entry['error'] = f"Shape mismatch: {baseline_output.shape} vs {optimized_output.shape}"
-                                        successful -= 1
-                                        failed_error += 1
-                                    elif torch.allclose(baseline_output.float(), optimized_output.float(), rtol=rtol, atol=atol):
-                                        max_diff = (baseline_output.float() - optimized_output.float()).abs().max().item()
-                                        result_entry['verification'] = {
-                                            'passed': True,
-                                            'max_diff': max_diff,
-                                            'rtol': rtol,
-                                            'atol': atol,
-                                        }
-                                        logger.info(f"    ✓ VERIFICATION PASSED: outputs match (max_diff={max_diff:.6f})")
-                                    else:
-                                        max_diff = (baseline_output.float() - optimized_output.float()).abs().max().item()
-                                        result_entry['verification'] = {
-                                            'passed': False,
-                                            'reason': f"Output mismatch: max_diff={max_diff:.6f} (rtol={rtol}, atol={atol})",
-                                            'max_diff': max_diff,
-                                        }
-                                        logger.error(f"    ✗ VERIFICATION FAILED: Output mismatch (max_diff={max_diff:.6f})")
-                                        result_entry['status'] = 'failed_verification'
-                                        result_entry['error'] = f"Output mismatch: max_diff={max_diff:.6f}"
-                                        successful -= 1
-                                        failed_error += 1
-                                else:
-                                    # Non-tensor outputs - just note it
-                                    result_entry['verification'] = {
-                                        'passed': True,
-                                        'verification_type': 'non_tensor',
-                                        'details': {'reason': 'Non-tensor outputs, comparison skipped'},
-                                    }
-                            else:
-                                # Missing get_verify_output - note but don't fail
-                                result_entry['verification'] = {
-                                    'passed': True,
-                                    'verification_type': 'no_verify_output',
-                                    'details': {'reason': 'Benchmarks do not implement get_verify_output()'},
-                                }
-                        except Exception as e:
-                            logger.warning(f"    ⚠ Verification error: {e}")
-                            result_entry['verification'] = {
-                                'passed': True,  # Don't fail on verification errors
-                                'verification_type': 'error',
-                                'details': {'error': str(e)},
+                            runner = _get_verify_runner() or VerifyRunner()
+
+                            def _get_perf_output(bench: Any):
+                                if hasattr(bench, "_subprocess_verify_output"):
+                                    out = getattr(bench, "_subprocess_verify_output")
+                                    if out is None:
+                                        raise RuntimeError("Missing subprocess verify_output")
+                                    return out
+                                return bench.get_verify_output()
+
+                            def _get_perf_tolerance(bench: Any) -> tuple[float, float]:
+                                if hasattr(bench, "_subprocess_output_tolerance"):
+                                    tol = getattr(bench, "_subprocess_output_tolerance")
+                                    if tol is None:
+                                        raise RuntimeError("Missing subprocess output_tolerance")
+                                    return tol
+                                return bench.get_output_tolerance()
+
+                            baseline_output = _get_perf_output(baseline_benchmark)
+                            optimized_output = _get_perf_output(optimized_benchmark)
+                            tol = _get_perf_tolerance(baseline_benchmark)
+
+                            comparison = runner.compare_perf_outputs(baseline_output, optimized_output, tol)
+
+                            result_entry["verification"] = {
+                                "passed": comparison.passed,
+                                "max_diff": comparison.max_diff,
+                                "location": comparison.location,
+                                "rtol": tol[0],
+                                "atol": tol[1],
                             }
+
+                            if comparison.passed:
+                                logger.info(
+                                    "    ✓ VERIFICATION PASSED: outputs match (max_diff=%s)",
+                                    f"{comparison.max_diff:.6f}" if comparison.max_diff is not None else "0.0",
+                                )
+                            else:
+                                reason = "Output mismatch"
+                                if comparison.max_diff is not None:
+                                    reason = f"Output mismatch (max_diff={comparison.max_diff:.6f})"
+                                logger.error("    ✗ VERIFICATION FAILED: %s", reason)
+                                result_entry["status"] = "failed_verification"
+                                result_entry["error"] = reason
+                                successful -= 1
+                                failed_error += 1
+                        except Exception as e:
+                            logger.error("    ✗ VERIFICATION FAILED: %s", e)
+                            result_entry["verification"] = {"passed": False, "reason": str(e)}
+                            result_entry["status"] = "failed_verification"
+                            result_entry["error"] = str(e)
+                            successful -= 1
+                            failed_error += 1
             elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
                 successful += 1

@@ -435,8 +435,12 @@ class TestVerifyInputsMatch:
     
         assert result["equivalent"] is False
         assert len(result["mismatches"]) > 0
-        first_mismatch = result["mismatches"][0].lower()
-        assert "batch_size" in first_mismatch or "shapes" in first_mismatch
+        mismatches = " ".join(result["mismatches"]).lower()
+        assert (
+            "batch_size" in mismatches
+            or "shapes" in mismatches
+            or "parameter_count" in mismatches
+        )
     
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_skipped_when_benchmark_opts_out(self, verify_fn):

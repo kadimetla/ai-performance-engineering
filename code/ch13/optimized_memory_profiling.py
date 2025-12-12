@@ -116,6 +116,8 @@ class OptimizedMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark)
         self._synchronize()
         if self.inputs is None or self.targets is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.inputs, "targets": self.targets},
             output=self.output.detach().float().clone(),

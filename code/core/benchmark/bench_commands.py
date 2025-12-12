@@ -524,7 +524,7 @@ if TYPER_AVAILABLE:
             aisp bench verify --json             # JSON output for CI
         """
         from core.benchmark.verify_runner import VerifyRunner, VerifyConfig
-        from core.benchmark.verification import EnforcementPhase, get_enforcement_phase
+        from core.benchmark.verification import EnforcementPhase, QuarantineReason, get_enforcement_phase
         from core.benchmark.quarantine import QuarantineManager
         from core.discovery import discover_benchmarks
         import importlib.util
@@ -605,9 +605,96 @@ if TYPER_AVAILABLE:
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 return mod
+
+            def _format_reason(reason: object) -> str:
+                if reason is None:
+                    return "unknown"
+                value = getattr(reason, "value", None)
+                if value is not None:
+                    return str(value)
+                return str(reason)
+
+            def _to_quarantine_reason(reason: object) -> Optional[QuarantineReason]:
+                if isinstance(reason, QuarantineReason):
+                    return reason
+                value = getattr(reason, "value", None)
+                if isinstance(value, str):
+                    try:
+                        return QuarantineReason(value)
+                    except Exception:
+                        return None
+                if isinstance(reason, str):
+                    try:
+                        return QuarantineReason(reason)
+                    except Exception:
+                        return None
+                return None
             
             for baseline_path, optimized_paths, example_name in pairs:
-                # For each baseline, verify against all optimized variants
+                # Verify baseline once, then verify all optimized variants against cached golden output.
+                try:
+                    baseline_mod = _load_benchmark_module(baseline_path)
+                except Exception as e:
+                    for optimized_path in optimized_paths:
+                        pair_name = f"{example_name}/{optimized_path.stem.replace('optimized_', '')}"
+                        typer.echo(f"\n  🔍 {pair_name}:")
+                        typer.echo(f"      Baseline:  {baseline_path.name}")
+                        typer.echo(f"      Optimized: {optimized_path.name}")
+                        typer.echo(f"      ❌ ERROR: Failed to load baseline module: {e}")
+                        failed_count += 1
+                        results.append({
+                            "chapter": chapter_slug_name,
+                            "pair": pair_name,
+                            "status": "error",
+                            "reason": f"Failed to load baseline module: {e}",
+                        })
+                    continue
+
+                baseline_cls = getattr(baseline_mod, "Benchmark", None)
+                if not baseline_cls:
+                    for optimized_path in optimized_paths:
+                        pair_name = f"{example_name}/{optimized_path.stem.replace('optimized_', '')}"
+                        typer.echo(f"\n  🔍 {pair_name}:")
+                        typer.echo(f"      Baseline:  {baseline_path.name}")
+                        typer.echo(f"      Optimized: {optimized_path.name}")
+                        typer.echo("      ❌ Missing Benchmark class (baseline)")
+                        failed_count += 1
+                        results.append({
+                            "chapter": chapter_slug_name,
+                            "pair": pair_name,
+                            "status": "failed",
+                            "reason": "Missing Benchmark class (baseline)",
+                        })
+                    continue
+
+                try:
+                    baseline = baseline_cls()
+                except Exception as e:
+                    for optimized_path in optimized_paths:
+                        pair_name = f"{example_name}/{optimized_path.stem.replace('optimized_', '')}"
+                        typer.echo(f"\n  🔍 {pair_name}:")
+                        typer.echo(f"      Baseline:  {baseline_path.name}")
+                        typer.echo(f"      Optimized: {optimized_path.name}")
+                        typer.echo(f"      ❌ ERROR: Failed to instantiate baseline: {e}")
+                        failed_count += 1
+                        results.append({
+                            "chapter": chapter_slug_name,
+                            "pair": pair_name,
+                            "status": "error",
+                            "reason": f"Failed to instantiate baseline: {e}",
+                        })
+                    continue
+
+                baseline_result = verify_runner.verify_baseline(baseline, config=verify_config)
+                baseline_reason = _format_reason(baseline_result.reason)
+                baseline_skipped = (not baseline_result.passed) and baseline_reason.startswith("SKIPPED:")
+
+                if not baseline_result.passed:
+                    if phase in (EnforcementPhase.QUARANTINE, EnforcementPhase.GATE):
+                        qr = _to_quarantine_reason(baseline_result.reason)
+                        if qr is not None:
+                            quarantine_mgr.quarantine(str(baseline_path), qr)
+
                 for optimized_path in optimized_paths:
                     pair_name = f"{example_name}/{optimized_path.stem.replace('optimized_', '')}"
                     typer.echo(f"\n  🔍 {pair_name}:")
@@ -615,14 +702,28 @@ if TYPER_AVAILABLE:
                     typer.echo(f"      Optimized: {optimized_path.name}")
                     
                     try:
-                        # Load benchmarks
-                        baseline_mod = _load_benchmark_module(baseline_path)
+                        if not baseline_result.passed:
+                            status = "skipped" if baseline_skipped else "failed"
+                            if baseline_skipped:
+                                typer.echo(f"      ⏭️  SKIPPED: {baseline_reason}")
+                                skipped_count += 1
+                            else:
+                                typer.echo(f"      ❌ FAILED: {baseline_reason}")
+                                failed_count += 1
+                            results.append({
+                                "chapter": chapter_slug_name,
+                                "pair": pair_name,
+                                "status": status,
+                                "reason": baseline_reason,
+                            })
+                            continue
+
+                        # Load optimized benchmark
                         optimized_mod = _load_benchmark_module(optimized_path)
                         
-                        baseline_cls = getattr(baseline_mod, "Benchmark", None)
                         optimized_cls = getattr(optimized_mod, "Benchmark", None)
                         
-                        if not baseline_cls or not optimized_cls:
+                        if not optimized_cls:
                             typer.echo(f"      ❌ Missing Benchmark class")
                             failed_count += 1
                             results.append({
@@ -633,17 +734,29 @@ if TYPER_AVAILABLE:
                             })
                             continue
                         
-                        # Instantiate and setup
-                        baseline = baseline_cls()
                         optimized = optimized_cls()
-                        baseline.setup()
-                        optimized.setup()
-                        
-                        # Run verification
-                        result = verify_runner.verify_pair(baseline, optimized, config=verify_config)
-                        
-                        baseline.teardown()
-                        optimized.teardown()
+
+                        # Validate timing config matches (anti-gaming)
+                        if not verify_config.skip_timing_validation:
+                            timing_valid, timing_error = verify_runner._validate_timing_config(baseline, optimized)  # noqa: SLF001
+                            if not timing_valid:
+                                typer.echo(f"      ❌ FAILED: {QuarantineReason.TIMING_CONFIG_MISMATCH.value}")
+                                if verbose and timing_error:
+                                    typer.echo(f"         Details: {timing_error}")
+                                failed_count += 1
+                                results.append({
+                                    "chapter": chapter_slug_name,
+                                    "pair": pair_name,
+                                    "status": "failed",
+                                    "reason": QuarantineReason.TIMING_CONFIG_MISMATCH.value,
+                                    "details": timing_error,
+                                })
+                                if phase in (EnforcementPhase.QUARANTINE, EnforcementPhase.GATE):
+                                    quarantine_mgr.quarantine(str(optimized_path), QuarantineReason.TIMING_CONFIG_MISMATCH)
+                                continue
+
+                        # Run verification (baseline golden output already cached)
+                        result = verify_runner.verify_optimized(optimized, config=verify_config)
                         
                         if result.passed:
                             typer.echo(f"      ✅ PASSED")
@@ -654,21 +767,29 @@ if TYPER_AVAILABLE:
                                 "status": "passed",
                             })
                         else:
-                            typer.echo(f"      ❌ FAILED: {result.reason.value if result.reason else 'Unknown'}")
+                            reason_str = _format_reason(result.reason)
+                            is_skipped = reason_str.startswith("SKIPPED:")
+                            if is_skipped:
+                                typer.echo(f"      ⏭️  SKIPPED: {reason_str}")
+                                skipped_count += 1
+                            else:
+                                typer.echo(f"      ❌ FAILED: {reason_str}")
+                                failed_count += 1
                             if verbose and result.details:
-                                typer.echo(f"         Details: {result.details.message}")
-                            failed_count += 1
+                                typer.echo(f"         Details: {result.details}")
                             results.append({
                                 "chapter": chapter_slug_name,
                                 "pair": pair_name,
-                                "status": "failed",
-                                "reason": result.reason.value if result.reason else "unknown",
-                                "details": result.details.message if result.details else None,
+                                "status": "skipped" if is_skipped else "failed",
+                                "reason": reason_str,
+                                "details": result.details,
                             })
                             
                             # Quarantine if in quarantine or gate phase
-                            if phase in (EnforcementPhase.QUARANTINE, EnforcementPhase.GATE) and result.reason:
-                                quarantine_mgr.quarantine(str(optimized_path), result.reason)
+                            if (not is_skipped) and phase in (EnforcementPhase.QUARANTINE, EnforcementPhase.GATE):
+                                qr = _to_quarantine_reason(result.reason)
+                                if qr is not None:
+                                    quarantine_mgr.quarantine(str(optimized_path), qr)
                     
                     except Exception as e:
                         typer.echo(f"      ❌ ERROR: {e}")

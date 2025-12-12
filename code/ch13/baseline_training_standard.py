@@ -187,6 +187,8 @@ class BaselineTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self._verify_input is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input_ids": self._verify_input},
             output=self.output,

@@ -53,6 +53,8 @@ class BaselineFP4HardwareKernelBenchmark(VerificationPayloadMixin, BaseBenchmark
         torch.manual_seed(42)
         a = torch.randn(4, 4)
         self.output = (a @ a).flatten()[:4].float().clone()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output,

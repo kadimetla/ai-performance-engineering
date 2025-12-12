@@ -46,9 +46,12 @@ class OptimizedMemoryTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._synchronize()
 
         verify_output = self.device_data[:1000].detach().clone()
+        self.output = verify_output
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"host_data": self.host_data},
-            output=verify_output,
+            output=self.output,
             batch_size=self.N,
             parameter_count=0,
             precision_flags={

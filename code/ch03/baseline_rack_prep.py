@@ -65,6 +65,8 @@ class BaselineRackPrepBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"host_batch": self.host_batch, "device_batch": self.device_batch},
             output=self.output.detach().clone(),

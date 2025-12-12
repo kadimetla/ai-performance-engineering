@@ -112,6 +112,8 @@ class OptimizedDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with nvtx_range("moe_cuda_decode_kernel_optimized", enable=enable_nvtx):
             run_optimized_kernel(self.input, self.output)
         torch.cuda.synchronize(self.device)
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input.detach()},
             output=self.output.detach().clone(),

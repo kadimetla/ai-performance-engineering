@@ -52,6 +52,8 @@ class OptimizedStorageGdsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.data = cpu_data.to(self.device, non_blocking=True)
             self._synchronize()
         self.output = self.data.sum().unsqueeze(0)
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"data": self.data},
             output=self.output.detach().clone(),

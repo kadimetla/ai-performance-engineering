@@ -62,6 +62,8 @@ class OptimizedILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
             if src is not self.output:
                 self.output.copy_(src)
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output.detach(),

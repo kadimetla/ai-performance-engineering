@@ -122,6 +122,12 @@ class OptimizedKubernetesBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.batch_idx += 1
         self._prefetch_slot(self.next_slot)
         self._synchronize()
+        self._payload_data = data
+        self._payload_target = target
+
+    def capture_verification_payload(self) -> None:
+        data = self._payload_data
+        target = self._payload_target
         self._set_verification_payload(
             inputs={"data": data, "target": target},
             output=self.output,

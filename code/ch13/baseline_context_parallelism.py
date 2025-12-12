@@ -249,6 +249,9 @@ class BaselineContextParallelismBenchmark(VerificationPayloadMixin, BaseBenchmar
         # Use default shapes for a minimal single-GPU check.
         metrics, verify = run_benchmark()
         self._metrics = metrics
+        self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": verify["input"], "mask": verify["mask"]},
             output=verify["output"],
@@ -261,7 +264,6 @@ class BaselineContextParallelismBenchmark(VerificationPayloadMixin, BaseBenchmar
             },
             output_tolerance=(0.1, 1.0),
         )
-        self._synchronize()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=1, warmup=0)

@@ -50,9 +50,12 @@ class OptimizedQuantizationILPBenchmark(VerificationPayloadMixin, BaseBenchmark)
             self.output = self.input * 2.0 + 1.0
             self._synchronize()
         verify_output = self.output.float().detach() if self.output is not None else None
+        self.output = verify_output
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input},
-            output=verify_output,
+            output=self.output,
             batch_size=self.N,
             parameter_count=0,
             output_tolerance=(1e-3, 1e-3),

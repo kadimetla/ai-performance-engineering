@@ -56,6 +56,8 @@ class VectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 t = (t * 1.0001) + 0.0001
             self.output = t.detach()
             torch.cuda.synchronize(self.device)
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"tensor": self.tensor},
             output=self.output,

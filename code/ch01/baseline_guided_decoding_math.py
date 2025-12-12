@@ -34,6 +34,7 @@ class BaselineGuidedDecodingMathBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.input_ids = None
         self.embedded_input = None
         self.memory = None
+        self.output = None
         self._verify_output = None
         self.schema = None
         self.max_length = 20
@@ -95,9 +96,14 @@ class BaselineGuidedDecodingMathBenchmark(VerificationPayloadMixin, BaseBenchmar
                 output = self.model(self.embedded_input, self.memory)
                 _ = output.sum()
             self._synchronize()
+        self.output = output
+
+    def capture_verification_payload(self) -> None:
+        if self.embedded_input is None or self.memory is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"embedded_input": self.embedded_input, "memory": self.memory},
-            output=output,
+            output=self.output,
             batch_size=self.batch_size,
             parameter_count=int(self.parameter_count),
             output_tolerance=(1e-4, 1e-4),

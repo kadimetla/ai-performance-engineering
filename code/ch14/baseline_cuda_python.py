@@ -133,6 +133,8 @@ class BaselineCudaPythonBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.output = masked + self.input
         
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "input": self.input.detach(),

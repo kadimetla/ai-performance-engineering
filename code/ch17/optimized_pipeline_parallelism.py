@@ -207,6 +207,10 @@ class OptimizedPipelineParallelismBenchmark(VerificationPayloadMixin, BaseBenchm
         self.parameter_count = self.parameter_count or sum(
             p.numel() for stage in self.pipeline_stages for p in stage.parameters()
         )
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self.microbatch_inputs[0] if self.microbatch_inputs else torch.zeros(1, self.hidden_size, device=self.device)},
             output=self.output,

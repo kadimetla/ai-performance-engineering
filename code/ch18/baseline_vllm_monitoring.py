@@ -290,9 +290,14 @@ class BaselineVLLMMonitoringBenchmark(VerificationPayloadMixin, BaseBenchmark):
             ],
             device=self._device_override,
         )
+        self.output = output
+        self._payload_thresholds_tensor = thresholds_tensor
+
+    def capture_verification_payload(self) -> None:
+        thresholds_tensor = self._payload_thresholds_tensor
         self._set_verification_payload(
             inputs={"thresholds": thresholds_tensor},
-            output=output,
+            output=self.output,
             batch_size=1,
             parameter_count=0,
             precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},

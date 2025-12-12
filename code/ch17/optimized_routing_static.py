@@ -122,6 +122,10 @@ class OptimizedRoutingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None or self._verify_input is None:
             raise RuntimeError("benchmark_fn() must produce output")
         dtype = self.output.dtype
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},
             output=self.output,

@@ -114,6 +114,11 @@ class BaselineKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
         meta = torch.tensor([self.hidden_size], dtype=torch.int64, device="cpu")
+        self._payload_meta = meta
+        return {"kv_transfer_ms": latencies}
+
+    def capture_verification_payload(self) -> None:
+        meta = self._payload_meta
         self._set_verification_payload(
             inputs={"meta": meta},
             output=self.output,
@@ -122,7 +127,6 @@ class BaselineKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
             precision_flags={},
             output_tolerance=(0.1, 1.0),
         )
-        return {"kv_transfer_ms": latencies}
 
     def teardown(self) -> None:
         self.input_chunks = None

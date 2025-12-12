@@ -85,6 +85,8 @@ class BaselineBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self.output is None or self.input_flat is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input_flat},
             output=self.output.detach().float().clone(),

@@ -10,8 +10,9 @@ SUFFIX = $(TARGET_SUFFIX)
 CUDA_SOURCES := $(wildcard *.cu)
 BASE_TARGETS := $(CUDA_SOURCES:.cu=)
 TARGETS := $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+VERIFY_TARGETS := $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
-.PHONY: all clean test compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all
+.PHONY: all clean test compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all $(VERIFY_TARGETS)
 
 all: $(TARGETS)
 	@echo "Building all Chapter 19 examples with $(ARCH) (CUDA $(CUDA_VERSION))"
@@ -22,9 +23,16 @@ all: $(TARGETS)
 %$(SUFFIX): %.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
 
+# Verify binaries build with -DVERIFY=1 for harness checksum parsing
+%_verify$(SUFFIX): %.cu
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda
+
 # Special rule for files needing cuBLAS
 optimized_fp4_hardware_kernel$(SUFFIX): optimized_fp4_hardware_kernel.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda -lcublasLt -lcublas
+
+optimized_fp4_hardware_kernel_verify$(SUFFIX): optimized_fp4_hardware_kernel.cu
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda -lcublasLt -lcublas
 
 test: all
 	@for exe in $(TARGETS); do timeout 10s ./$$exe >/dev/null 2>&1 && echo "✓ $$exe" || echo "✗ $$exe"; done

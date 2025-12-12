@@ -132,12 +132,12 @@
         "baseline_p75_ms": 84.986496,
         "baseline_throughput.latency_ms": 84.316831,
         "baseline_throughput.requests_per_s": 11.860028278339826,
-        "baseline_time_ms": 84.316831,
+        "baseline_time_ms": 0.0,
         "best_optimized_p75_ms": 4.364096,
         "best_optimized_speedup": 18.63235694915214,
         "best_optimized_throughput.latency_ms": 4.525290666666667,
         "best_optimized_throughput.requests_per_s": 220.98028030906596,
-        "best_optimized_time_ms": 4.525290666666667,
+        "best_optimized_time_ms": 0.0,
         "best_speedup": 18.63235694915214
       },
       "type": "python"
@@ -390,7 +390,7 @@
       "metrics": {
         "baseline_p75_ms": 13.274,
         "baseline_p90_ms": 13.274,
-        "baseline_time_ms": 13.263666666666667,
+        "baseline_time_ms": 9.86,
         "best_optimized_p75_ms": 0.023,
         "best_optimized_p90_ms": 0.023,
         "best_optimized_speedup": 602.8939393939395,

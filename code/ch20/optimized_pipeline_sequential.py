@@ -95,6 +95,8 @@ class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
                 # Capture output for verification
                 self.output = x.detach()
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
             output=self.output.float() if self.output is not None else None,

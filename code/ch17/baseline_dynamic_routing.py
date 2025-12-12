@@ -175,6 +175,16 @@ class _DynamicRoutingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         input_snapshot = (
             self._queue_lengths if (self.vectorized and self._queue_lengths is not None) else torch.tensor([], device=self.output.device)
         )
+        self._payload_input_snapshot = input_snapshot
+        return {
+            "requests": float(len(requests)),
+            "served": float(served),
+            "rejected": float(rejects),
+            "offloaded": float(offloaded),
+        }
+
+    def capture_verification_payload(self) -> None:
+        input_snapshot = self._payload_input_snapshot
         self._set_verification_payload(
             inputs={"queue_lengths": input_snapshot},
             output=self.output,
@@ -183,12 +193,6 @@ class _DynamicRoutingBenchmark(VerificationPayloadMixin, BaseBenchmark):
             precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
             output_tolerance=(0.1, 10.0),
         )
-        return {
-            "requests": float(len(requests)),
-            "served": float(served),
-            "rejected": float(rejects),
-            "offloaded": float(offloaded),
-        }
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=8, warmup=5)

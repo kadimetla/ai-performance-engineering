@@ -279,6 +279,8 @@ class OptimizedIntegratedKVCacheBenchmark(BaseBenchmark):
         self.output = hidden.detach().clone() if hidden is not None else None
         if self._verify_input is None:
             raise RuntimeError("setup() must populate inputs before verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output,

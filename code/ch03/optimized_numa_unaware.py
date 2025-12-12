@@ -77,6 +77,13 @@ class OptimizedNUMAAwareBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.output = torch.sum(self.device_buffers[self.cur_slot]).unsqueeze(0)
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+        # Start copy for current slot (will be ready next iteration)
+        self._start_copy(self.cur_slot)
+        # Swap slots
+        self.cur_slot, self.next_slot = self.next_slot, self.cur_slot
+        self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "host_tensor": self.host_tensor,
@@ -93,11 +100,6 @@ class OptimizedNUMAAwareBenchmark(VerificationPayloadMixin, BaseBenchmark):
             },
             output_tolerance=(1e-3, 1e-3),
         )
-        # Start copy for current slot (will be ready next iteration)
-        self._start_copy(self.cur_slot)
-        # Swap slots
-        self.cur_slot, self.next_slot = self.next_slot, self.cur_slot
-        self._synchronize()
 
     def teardown(self) -> None:
         self.host_tensor = None

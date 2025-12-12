@@ -143,7 +143,7 @@ def extract_nsys_metrics(nsys_rep_path: Path, timeout: int = 60) -> NsysMetrics:
                     raw_metrics[clean_name] = value
                 except (ValueError, AttributeError):
                     pass
-    except (ImportError, Exception):
+    except (ImportError, SystemExit, Exception):
         pass
     
     return NsysMetrics(total_gpu_time_ms=total_gpu_time_ms, raw_metrics=raw_metrics, schemaVersion="1.0")

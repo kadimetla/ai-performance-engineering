@@ -280,6 +280,8 @@ class StaticFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
             self._synchronize()
         if self._verify_input is None or self.output is None:
             raise RuntimeError("Verification input/output not initialized")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.output.detach().clone(),

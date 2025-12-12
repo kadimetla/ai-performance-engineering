@@ -57,6 +57,8 @@ class BaselineAIBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output = out.detach()
         if self.blocks is None:
             raise RuntimeError("Model blocks not initialized")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
             output=self.output,

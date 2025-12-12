@@ -105,6 +105,8 @@ class NvlinkOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.next_start = 0 if end >= self.cfg.max_seq_len else end
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"gpu_cache": self.gpu_cache.detach()},
             output=self.output,

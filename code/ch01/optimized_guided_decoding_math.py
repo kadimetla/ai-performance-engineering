@@ -110,9 +110,12 @@ class OptimizedGuidedDecodingMathBenchmark(VerificationPayloadMixin, BaseBenchma
                 output = self.model(self.embedded_input, self.memory)
                 _ = output.sum()
             self._synchronize()
+        self.output = output
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"embedded_input": self.embedded_input, "memory": self.memory},
-            output=output,
+            output=self.output,
             batch_size=self.batch_size,
             parameter_count=int(self.parameter_count),
             output_tolerance=(1e-4, 1e-4),

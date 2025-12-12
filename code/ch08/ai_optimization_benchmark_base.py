@@ -25,9 +25,6 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        # Kernel outputs are numerically noisy; skip strict output verification.
-        self.skip_output_check = True
-        self.skip_input_check = True
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA required for Chapter 8 AI optimization benchmarks")
         self.device = torch.device("cuda")
@@ -44,7 +41,8 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
             extra_cuda_cflags=["-O3", "--use_fast_math", "-lineinfo"],
         )
 
-        torch.manual_seed(1234)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.inputs = torch.randn(
             self.rows,
             self.cols,
@@ -66,13 +64,13 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
             self._invoke_kernel()
+
+    def capture_verification_payload(self) -> None:
+        """Register verification payload once after timing."""
         if self.inputs is None or self.weights is None or self.output is None:
-            raise RuntimeError("benchmark_fn() must run after setup() initializes tensors")
+            raise RuntimeError("capture_verification_payload() requires initialized tensors")
         self._set_verification_payload(
-            inputs={
-                "inputs": self.inputs,
-                "weights": self.weights,
-            },
+            inputs={"inputs": self.inputs, "weights": self.weights},
             output=self.output.detach(),
             batch_size=self.rows,
             parameter_count=int(self.cols),
@@ -107,9 +105,6 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None:
             return "Output buffer not initialized"
         return None
-
-    def skip_output_verification(self) -> bool:
-        return True
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""

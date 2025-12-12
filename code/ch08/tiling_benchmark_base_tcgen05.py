@@ -43,11 +43,7 @@ class TilingBenchmarkBaseTCGen05(TilingBenchmarkBase):
         if not available:
             raise RuntimeError(reason or "SKIPPED: tcgen05 extension unavailable")
         super().__init__()
-        self.skip_output_check = True
 
     def _load_extension(self) -> None:
         from core.common.tcgen05 import load_tiling_tcgen05_module
         self.extension = load_tiling_tcgen05_module()
-
-    def skip_output_verification(self) -> bool:
-        return True

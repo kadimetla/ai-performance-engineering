@@ -82,7 +82,7 @@ class BaselineIlpBasicBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Low instruction-level parallelism
         
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.output = None
         self.parameter_count = 0
         torch.cuda.synchronize()
     
@@ -112,6 +112,8 @@ class BaselineIlpBasicBenchmark(VerificationPayloadMixin, BaseBenchmark):
             # Sequential dependencies prevent parallel execution
             # Cannot hide instruction latency
         torch.cuda.synchronize(self.device)
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output,

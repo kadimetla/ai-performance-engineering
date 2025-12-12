@@ -48,6 +48,8 @@ class OptimizedLaunchBoundsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("optimized_launch_bounds"):
             self._extension.launch_bounds_optimized(self.input_data, self.output_data, self.iterations)
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input_data},
             output=self.output_data.detach(),

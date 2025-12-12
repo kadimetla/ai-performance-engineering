@@ -82,9 +82,14 @@ class BaselineStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("benchmark_fn() must produce output for verification")
         output = torch.cat(self.host_outputs, dim=0)
         inputs = {"requests": torch.stack(self.host_requests)}
+        self.output = output
+        self._payload_inputs = inputs
+
+    def capture_verification_payload(self) -> None:
+        inputs = self._payload_inputs
         self._set_verification_payload(
             inputs=inputs,
-            output=output.detach().float().clone(),
+            output=self.output.detach().float().clone(),
             batch_size=int(self.num_requests),
             precision_flags={
                 "fp16": True,

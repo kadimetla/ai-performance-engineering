@@ -497,6 +497,10 @@ class FP8PerChannelDemoBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Demo benchmark not initialized")
         with torch.no_grad():
             self.output = self.demo_benchmark.per_channel_linear(verify_input).detach().float().clone()
+        self._payload_verify_input = verify_input
+
+    def capture_verification_payload(self) -> None:
+        verify_input = self._payload_verify_input
         self._set_verification_payload(
             inputs={"input": verify_input},
             output=self.output,

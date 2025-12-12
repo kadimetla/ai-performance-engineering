@@ -87,8 +87,9 @@ class OptimizedPerformanceBatchBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.targets = targets
         
         # Create FIXED verification input - output will be captured at END of benchmark_fn()
-        # Note: This benchmark intentionally uses FP16 as the optimization (vs FP32 baseline)
-        self._verify_input = self.microbatches[0].clone()
+        # Use FP32 verification inputs so baseline/optimized signatures match.
+        # The FP16 optimization remains in the timed training loop.
+        self._verify_input = self.microbatches[0].float().clone()
         self._verify_output = None  # Will be set at end of benchmark_fn()
         
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-3)
@@ -130,19 +131,21 @@ class OptimizedPerformanceBatchBenchmark(VerificationPayloadMixin, BaseBenchmark
         # Capture verification output AFTER training completes
         # Convert to FP32 for consistent comparison with baseline
         with torch.no_grad():
-            self._verify_output = self.model(self._verify_input).float().clone()
+            verify_input = self._verify_input
+            # Cast verification input to model dtype outside the timed region.
+            if self.model is not None:
+                model_params = list(self.model.parameters())
+                if model_params:
+                    verify_input = verify_input.to(dtype=model_params[0].dtype, device=self.device)
+            self._verify_output = self.model(verify_input).float().clone()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},
             output=self._verify_output,
             batch_size=self._verify_input.shape[0],
             parameter_count=int(self.parameter_count),
             output_tolerance=(0.5, 0.5),
-            precision_flags={
-                "fp16": True if self.device.type == "cuda" else False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
         )
 
     

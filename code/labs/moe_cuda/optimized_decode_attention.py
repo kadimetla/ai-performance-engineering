@@ -107,6 +107,11 @@ class OptimizedDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark)
             dtype=torch.int64,
             device="cpu",
         )
+        self._payload_meta = meta
+        return {"decode_ms": self._history["latency_ms"]}
+
+    def capture_verification_payload(self) -> None:
+        meta = self._payload_meta
         self._set_verification_payload(
             inputs={"meta": meta},
             output=self.output,
@@ -115,7 +120,6 @@ class OptimizedDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark)
             precision_flags={"tf32": torch.backends.cuda.matmul.allow_tf32},
             output_tolerance=(0.1, 1.0),
         )
-        return {"decode_ms": self._history["latency_ms"]}
 
     def teardown(self) -> None:
         self.module = None

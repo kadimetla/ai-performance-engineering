@@ -179,6 +179,10 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
         representative_input = self.inputs[0] if self.inputs else None
         if representative_input is None:
             raise RuntimeError("setup() must populate inputs before verification")
+        self._payload_representative_input = representative_input
+
+    def capture_verification_payload(self) -> None:
+        representative_input = self._payload_representative_input
         self._set_verification_payload(
             inputs={"input": representative_input},
             output=self.output,

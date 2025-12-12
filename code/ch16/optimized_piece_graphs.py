@@ -159,6 +159,10 @@ class OptimizedPieceGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.synchronize()
         self.output = tail_output.detach().clone()
         verify_tokens = fresh_tokens.detach().clone()
+        self._payload_verify_tokens = verify_tokens
+
+    def capture_verification_payload(self) -> None:
+        verify_tokens = self._payload_verify_tokens
         self._set_verification_payload(
             inputs={"input": verify_tokens},
             output=self.output,

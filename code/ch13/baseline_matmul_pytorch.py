@@ -86,6 +86,8 @@ class BaselineMatmulPyTorchBenchmark(VerificationPayloadMixin, BaseBenchmark):
             out = torch.matmul(self.A, self.B)
             self.C = torch.relu(out + self.bias)
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B, "bias": self.bias},
             output=self.C.detach().clone(),

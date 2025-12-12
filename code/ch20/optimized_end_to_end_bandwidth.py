@@ -25,6 +25,7 @@ from ch20.inductor_guard import (
     InductorCudagraphState,
 )
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import is_torch_compile_supported_on_device
 
@@ -44,7 +45,7 @@ class SimplePipeline(nn.Module):
         return x
 
 
-class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
+class OptimizedEndToEndBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized end-to-end bandwidth - FP16 + optional compile."""
     
     def __init__(self):
@@ -145,14 +146,16 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
             else:
                 self.output = None
             self._synchronize()
-        if self.inputs is None:
-            raise RuntimeError("setup() must be called before verification")
+
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.inputs is None or self.output is None:
+            raise RuntimeError("capture_verification_payload() requires completed benchmark run")
         stacked_inputs = torch.stack(self.inputs)
         self._set_verification_payload(
             inputs={"inputs": stacked_inputs},
             output=self.output,
-            batch_size=stacked_inputs.shape[0],
-            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            batch_size=int(stacked_inputs.shape[0]),
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
             output_tolerance=(0.1, 1.0),
         )
     
@@ -195,12 +198,6 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
-
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

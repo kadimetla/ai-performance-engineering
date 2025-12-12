@@ -436,14 +436,7 @@ class OptimizedCUDAGraphBucketingBenchmark(VerificationPayloadMixin, BaseBenchma
             ],
             dtype=torch.float32,
         )
-        self._set_verification_payload(
-            inputs={"traffic_shape": torch.tensor([len(traffic)], device=self.device)},
-            output=self.output,
-            batch_size=len(traffic) if len(traffic) > 0 else 1,
-            parameter_count=0,
-            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
-            output_tolerance=(0.0, 0.0),
-        )
+        self._payload_traffic = traffic
         
         self._compile_stats = optimized.run_compile_validation()
         
@@ -462,6 +455,17 @@ class OptimizedCUDAGraphBucketingBenchmark(VerificationPayloadMixin, BaseBenchma
             
             self._graph_stats = self._graph_bucketing.get_stats()
             torch.cuda.synchronize()
+
+    def capture_verification_payload(self) -> None:
+        traffic = self._payload_traffic
+        self._set_verification_payload(
+            inputs={"traffic_shape": torch.tensor([len(traffic)], device=self.device)},
+            output=self.output,
+            batch_size=len(traffic) if len(traffic) > 0 else 1,
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.0, 0.0),
+        )
 
     def teardown(self) -> None:
         """Cleanup resources."""

@@ -56,6 +56,8 @@ class BaselineLlama31_8B(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.model_wrapper.input.detach()},
             output=self.output,

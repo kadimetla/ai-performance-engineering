@@ -153,6 +153,10 @@ class BaselineFullGraphCompileBenchmark(VerificationPayloadMixin, BaseBenchmark)
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+        self._payload_x = x
+
+    def capture_verification_payload(self) -> None:
+        x = self._payload_x
         self._set_verification_payload(
             inputs={"input": x},
             output=self.output.detach().float().clone(),

@@ -78,6 +78,8 @@ class StridedStreamBaseline(VerificationPayloadMixin, BaseBenchmark):
             or self.host_out_chunks is None
         ):
             raise RuntimeError("benchmark_fn() must run after setup() initializes buffers")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"host_input": self.host_input},
             output=self.host_output.detach().clone(),
@@ -212,6 +214,8 @@ class ConcurrentStreamOptimized(VerificationPayloadMixin, BaseBenchmark):
             or self.host_out_chunks is None
         ):
             raise RuntimeError("benchmark_fn() must run after setup() initializes buffers")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"host_input": self.host_input},
             output=self.host_output.detach().clone(),

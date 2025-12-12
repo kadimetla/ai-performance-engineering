@@ -186,7 +186,13 @@ class TestComparisonWorkflowIntegration:
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
-        baseline_result = harness.benchmark(baseline)
+        try:
+            baseline_result = harness.benchmark(baseline)
+        except RuntimeError as e:
+            msg = str(e)
+            if "skipped" in msg.lower() or "requires >=2 gpus" in msg.lower():
+                pytest.skip(msg)
+            raise
         
         # Compare against each optimization
         comparisons = []

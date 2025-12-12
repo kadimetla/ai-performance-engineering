@@ -50,6 +50,8 @@ class BaselineBankConflictsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             for _ in range(self.repeats):
                 self._extension.bank_conflicts(self.output, self.input)
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output.detach(),

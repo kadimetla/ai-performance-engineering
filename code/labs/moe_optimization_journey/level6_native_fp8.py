@@ -168,6 +168,10 @@ class NativeFP8MoE(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
         param_count = int(self.w1_fp8.numel() + self.w2_fp8.numel() + self.w3_fp8.numel())
+        self._payload_param_count = param_count
+
+    def capture_verification_payload(self) -> None:
+        param_count = self._payload_param_count
         self._set_verification_payload(
             inputs={"x": self.x.detach()},
             output=self.output,

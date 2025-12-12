@@ -128,13 +128,9 @@ class BaselineGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Return tolerance for numerical comparison."""
         return (0.1, 1.0)
 
-    def benchmark_fn(self) -> None:
-        """Benchmark fresh kernel launches."""
-        with self._nvtx_range("fresh_kernel_launches"):
-            self._compute_ops()
-        self._synchronize()
+    def capture_verification_payload(self) -> None:
         if self._verify_input is None or self.data is None:
-            raise RuntimeError("Verification input/output not initialized")
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         dtype = self._verify_input.dtype
         self._set_verification_payload(
             inputs={"input": self._verify_input},

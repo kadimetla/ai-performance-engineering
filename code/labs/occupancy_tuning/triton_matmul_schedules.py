@@ -169,24 +169,26 @@ class TritonMatmulProtonBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 # Expose output for harness verification (harness looks for self.output)
                 self.output = self._output
             torch.cuda.synchronize()
-            if self.output is None or self._a is None or self._b is None:
-                raise RuntimeError("benchmark_fn() did not produce output or inputs")
-            self._set_verification_payload(
-                inputs={"a": self._a.detach(), "b": self._b.detach()},
-                output=self.output,
-                batch_size=1,
-                parameter_count=0,
-                precision_flags={
-                    "fp16": self._dtype == torch.float16,
-                    "bf16": self._dtype == torch.bfloat16,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32,
-                },
-                output_tolerance=(0.1, 1.0),
-            )
         except AttributeError as exc:
             if "SymNodeVariable" in str(exc):
                 raise RuntimeError("SKIPPED: Triton/Proton SymNode inference is incompatible on this build.") from exc
             raise
+
+    def capture_verification_payload(self) -> None:
+        if self.output is None or self._a is None or self._b is None:
+            raise RuntimeError("benchmark_fn() did not produce output or inputs")
+        self._set_verification_payload(
+            inputs={"a": self._a.detach(), "b": self._b.detach()},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self._dtype == torch.float16,
+                "bf16": self._dtype == torch.bfloat16,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def validate_result(self) -> Optional[str]:
         if self._reference is None or self._output is None:

@@ -75,6 +75,8 @@ class BaselineCudaGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._synchronize()
         if self.data is None or self._verify_input is None:
             raise RuntimeError("Data or verification input not initialized")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.data.detach().clone(),

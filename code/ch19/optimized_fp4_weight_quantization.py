@@ -406,6 +406,10 @@ class OptimizedFP4WeightQuantizationBenchmark(VerificationPayloadMixin, BaseBenc
             "fp8": False,
             "tf32": False,
         }
+        self._payload_precision_flags = precision_flags
+
+    def capture_verification_payload(self) -> None:
+        precision_flags = self._payload_precision_flags
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output.float() if self.output is not None else None,

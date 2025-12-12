@@ -40,6 +40,10 @@ class CompliantBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with torch.inference_mode():
             self.output = self.model(self.input)
 
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.input is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+
         self._set_verification_payload(
             inputs={"input": self.input},
             output=self.output,

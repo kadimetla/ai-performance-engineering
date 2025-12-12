@@ -60,6 +60,7 @@ class TestMetricsCollectionIntegration:
             iterations=10,
             warmup=5,
             enable_profiling=False,
+            adaptive_iterations=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -138,6 +139,7 @@ class TestMetricsCollectionIntegration:
             iterations=5,
             warmup=5,
             enable_profiling=False,
+            adaptive_iterations=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         

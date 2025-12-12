@@ -135,6 +135,7 @@ def test_ch20_compiled_benchmarks_run_with_subprocess(triton_cfg_guard, benchmar
             warmup=5,
             enable_profiling=False,
             enable_memory_tracking=False,
+            adaptive_iterations=False,
         ),
     )
 
@@ -145,7 +146,7 @@ def test_ch20_compiled_benchmarks_run_with_subprocess(triton_cfg_guard, benchmar
 
     assert result.errors == [], f"Benchmark reported errors: {result.errors}"
     assert result.timing is not None
-    assert result.timing.iterations == 4
+    assert result.timing.iterations == 1
 
 
 def test_inductor_config_restored_after_success(triton_cfg_guard):

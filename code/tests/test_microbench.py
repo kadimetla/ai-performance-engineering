@@ -53,15 +53,14 @@ def test_nsys_ncu_available_keys():
 
 
 def test_mcp_tools_registration():
-    from mcp import server
+    from mcp import mcp_server
 
     required = {
-        "aisp_test_disk",
-        "aisp_test_pcie",
-        "aisp_test_mem_hierarchy",
-        "aisp_test_tensor_core",
-        "aisp_test_sfu",
-        "aisp_test_network_loopback",
+        "aisp_hw_disk",
+        "aisp_hw_pcie",
+        "aisp_hw_cache",
+        "aisp_hw_tc",
+        "aisp_hw_network",
         "aisp_profile_nsys",
         "aisp_profile_ncu",
         "aisp_nsys_summary",
@@ -71,17 +70,16 @@ def test_mcp_tools_registration():
         "aisp_export_pdf",
         "aisp_export_html",
         "aisp_system_capabilities",
-        "aisp_full_system_analysis",
-        "aisp_available_benchmarks",
+        "aisp_system_full",
         "aisp_benchmark_targets",
-        "aisp_nsys_ncu_available",
+        "aisp_run_benchmarks",
     }
-    assert required.issubset(set(server.TOOLS.keys()))
+    assert required.issubset(set(mcp_server.TOOLS.keys()))
 
 
 def test_cli_microbench_disk():
     import subprocess, sys
-    cmd = [sys.executable, "cli/aisp.py", "microbench", "disk", "--size-mb", "1", "--block-kb", "64"]
+    cmd = [sys.executable, "cli/aisp.py", "hw", "disk", "--size-mb", "1", "--block-kb", "64"]
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT)}
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
     assert result.returncode == 0, f"CLI failed: {result.stderr}"

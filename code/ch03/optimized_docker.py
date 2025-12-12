@@ -130,6 +130,8 @@ class OptimizedDockerBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         # Store output for verification
         self.output = out.detach()
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"data": inputs, "target": targets},
             output=self.output,

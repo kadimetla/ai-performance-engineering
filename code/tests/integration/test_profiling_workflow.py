@@ -76,6 +76,7 @@ class TestProfilingWorkflowIntegration:
             enable_profiling=False,  # Profiling disabled
             enable_nsys=False,
             enable_ncu=False,
+            adaptive_iterations=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -118,6 +119,7 @@ class TestProfilingWorkflowIntegration:
             enable_profiling=True,
             enable_nsys=True,
             enable_ncu=True,
+            adaptive_iterations=False,
         )
         harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
         
@@ -166,4 +168,3 @@ class TestProfilingWorkflowIntegration:
         # Note: Full profiling test would require running actual nsys,
         # which is slow and may not be available in test environment
         # This test verifies the integration path exists and doesn't crash
-

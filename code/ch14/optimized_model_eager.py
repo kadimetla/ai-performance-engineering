@@ -160,6 +160,10 @@ class OptimizedModelCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None or self.input_ids is None:
             raise RuntimeError("benchmark_fn() must produce output")
         dtype = self.output.dtype
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input_ids": self.input_ids},
             output=self.output,

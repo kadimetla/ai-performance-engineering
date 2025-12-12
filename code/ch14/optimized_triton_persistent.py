@@ -84,6 +84,8 @@ class OptimizedTritonPersistentBenchmark(VerificationPayloadMixin, BaseBenchmark
         self._synchronize()
         if self.output is None or self.a is None or self.b is None:
             raise RuntimeError("benchmark_fn() must produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"a": self.a, "b": self.b},
             output=self.output,

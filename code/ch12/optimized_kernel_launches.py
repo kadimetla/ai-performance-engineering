@@ -96,6 +96,10 @@ class OptimizedKernelLaunchesBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self._verify_input is None or self.x_capture is None:
             raise RuntimeError("Verification input or captured output missing")
         dtype = self._verify_input.dtype
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.x_capture.detach().clone(),

@@ -84,6 +84,8 @@ class OptimizedExpertParallelismBenchmark(VerificationPayloadMixin, BaseBenchmar
         self._synchronize()
         if self.input_data is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"input": self.input_data},
             output=self.output.detach().float().clone(),

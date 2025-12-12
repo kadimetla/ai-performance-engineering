@@ -72,6 +72,8 @@ class BaselineKernelFusionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
         if self.data is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"data": self.data},
             output=self.data.detach().clone(),

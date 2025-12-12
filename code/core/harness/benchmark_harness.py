@@ -826,6 +826,16 @@ class BaseBenchmark:
         Subclasses must override this method to implement their benchmark logic.
         """
         raise NotImplementedError("Subclasses must implement benchmark_fn()")
+
+    def capture_verification_payload(self) -> None:
+        """Optional post-timing hook to set verification payload.
+
+        Benchmarks that want to keep the timed hot path clean can override this
+        method and call ``_set_verification_payload()`` using tensors already
+        produced by the timing run. The harness calls this once after
+        measurement (and VerifyRunner calls it after verify runs).
+        """
+        return None
     
     def teardown(self) -> None:
         """Cleanup phase.
@@ -1068,101 +1078,6 @@ class BaseBenchmark:
     def _infer_workload_metadata(self) -> Optional[WorkloadMetadata]:
         """Workload inference is disabled; benchmarks must register explicitly."""
         return None
-
-        def _collect_numeric_attrs() -> Dict[str, float]:
-            values: Dict[str, float] = {}
-            for attr in dir(self):
-                if attr.startswith("_"):
-                    continue
-                try:
-                    value = getattr(self, attr)
-                except Exception:
-                    continue
-                if isinstance(value, bool):
-                    continue
-                if isinstance(value, (int, float)):
-                    values[attr] = float(value)
-            return values
-
-        numeric_attrs = _collect_numeric_attrs()
-        if not numeric_attrs:
-            return None
-
-        def _pick(*names: str) -> Optional[float]:
-            for name in names:
-                if name in numeric_attrs:
-                    return numeric_attrs[name]
-            return None
-
-        requests = _pick(
-            "requests_per_iteration",
-            "num_requests",
-            "request_count",
-            "requests",
-            "batches_per_iteration",
-            "microbatch_size",
-            "micro_batch_size",
-            "batch_size",
-            "B",
-        )
-
-        tokens = _pick(
-            "tokens_per_iteration",
-            "token_count",
-            "tokens",
-            "num_tokens",
-            "total_tokens",
-            "elements_per_iteration",
-        )
-
-        def _product(names: Tuple[str, ...]) -> Optional[float]:
-            prod = 1.0
-            found = False
-            for name in names:
-                value = numeric_attrs.get(name)
-                if value is None:
-                    return None
-                prod *= value
-                found = True
-            return prod if found else None
-
-        if tokens is None:
-            combo_candidates = [
-                ("batch_size", "tokens_per_step", "decode_steps"),
-                ("batch_size", "sequence_length"),
-                ("batch_size", "seq_len"),
-                ("batch_size", "hidden_size"),
-                ("microbatch_size", "hidden_size"),
-                ("micro_batch_size", "hidden_size"),
-                ("batch_size", "input_len"),
-                ("batch_size", "model_dim"),
-                ("batch_size", "embedding_dim"),
-                ("N", "N"),
-                ("N", "K"),
-                ("M", "N"),
-                ("rows", "cols"),
-                ("size", "size"),
-            ]
-            for combo in combo_candidates:
-                prod = _product(combo)
-                if prod is not None and prod > 0:
-                    tokens = prod
-                    break
-
-        bytes_per_iter = _pick(
-            "bytes_per_iteration",
-            "byte_count",
-            "total_bytes",
-        )
-
-        if tokens is None and bytes_per_iter is None and requests is None:
-            return None
-
-        return WorkloadMetadata(
-            requests_per_iteration=requests if requests is not None else 1.0,
-            tokens_per_iteration=tokens,
-            bytes_per_iteration=bytes_per_iter,
-        )
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         """Benchmarks can override to expose custom metrics."""
@@ -1759,38 +1674,56 @@ class BenchmarkHarness:
             bench_config.warmup = None  # type: ignore[assignment]
         if bench_config:
             # Override with benchmark-specific settings
+            default_bench_config = BenchmarkConfig()
             for key, value in bench_config.__dict__.items():
-                if value is not None:
-                    # Never allow benchmarks to re-enable subprocess mode when we're already
-                    # running inside an isolated subprocess (prevents recursive launches).
-                    if key in ("use_subprocess", "execution_mode") and self.config.use_subprocess is False:
+                # Skip private/internal fields and None values.
+                if key.startswith("_") or value is None:
+                    continue
+
+                # Never allow benchmarks to re-enable subprocess mode when we're already
+                # running inside an isolated subprocess (prevents recursive launches).
+                if key in ("use_subprocess", "execution_mode") and self.config.use_subprocess is False:
+                    continue
+
+                # Merge target-specific extra args.
+                if key == "target_extra_args":
+                    if value:
+                        config.target_extra_args = {
+                            **(getattr(config, "target_extra_args", {}) or {}),
+                            **value,
+                        }
+                    continue
+
+                # Preserve caller-specified launcher when benchmark config only supplies the default.
+                if key == "launch_via":
+                    default_launch = _get_default_value("launch_via", None)
+
+                    def _norm(val):
+                        if val is None:
+                            return None
+                        if hasattr(val, "value"):
+                            return str(getattr(val, "value")).lower()
+                        return str(val).lower()
+
+                    if (
+                        _norm(config.launch_via) is not None
+                        and _norm(default_launch) is not None
+                        and _norm(config.launch_via) != _norm(default_launch)
+                        and _norm(value) == _norm(default_launch)
+                    ):
                         continue
-                    if key == "target_extra_args":
-                        if value:
-                            config.target_extra_args = {
-                                **(getattr(config, "target_extra_args", {}) or {}),
-                                **value,
-                            }
+
+                if key == "env_passthrough" and not value:
+                    continue
+
+                # Benchmarks only override harness settings when the harness is still at defaults.
+                if hasattr(default_bench_config, key):
+                    default_val = getattr(default_bench_config, key)
+                    current_val = getattr(config, key, default_val)
+                    if current_val != default_val:
+                        # Caller already chose a non-default value; keep it.
                         continue
-                    if key == "launch_via":
-                        default_launch = _get_default_value("launch_via", None)
-                        def _norm(val):
-                            if val is None:
-                                return None
-                            if hasattr(val, "value"):
-                                return str(getattr(val, "value")).lower()
-                            return str(val).lower()
-                        if (
-                            _norm(config.launch_via) is not None
-                            and _norm(default_launch) is not None
-                            and _norm(config.launch_via) != _norm(default_launch)
-                            and _norm(value) == _norm(default_launch)
-                        ):
-                            # Preserve caller-specified launcher when benchmark config only supplies the default
-                            continue
-                    if key == "env_passthrough" and not value:
-                        continue
-                    setattr(config, key, value)
+                setattr(config, key, value)
         config._sync_execution_mode()
         config._sync_launch_via()
         print(f"[harness] execution_mode={config.execution_mode} launch_via={config.launch_via}", flush=True)
@@ -1919,9 +1852,15 @@ class BenchmarkHarness:
     
     def _validate_jitter_signature(self, benchmark: BaseBenchmark) -> None:
         """Fail fast if get_input_signature() cannot support jitter checks."""
-        sig = benchmark.get_input_signature()
-        if not isinstance(sig, dict) or not sig:
-            raise RuntimeError("get_input_signature() must return a non-empty dict for jitter compliance.")
+        from core.benchmark.verification import coerce_input_signature, select_jitter_dimension
+
+        try:
+            sig_payload = benchmark.get_input_signature()
+        except RuntimeError:
+            # Payload-backed signatures may only be available post-run; defer validation.
+            return
+
+        signature = coerce_input_signature(sig_payload)
 
         # Allow skips only for sanctioned cases (multi-GPU or config-generation benchmarks).
         def _maybe_skip(reason: str) -> None:
@@ -1942,18 +1881,10 @@ class BenchmarkHarness:
         if not_applicable:
             _maybe_skip(not_applicable)
 
-        shapes = sig.get("shapes")
-        if shapes is None:
-            raise RuntimeError("Jitter check requires get_input_signature() to include a 'shapes' entry with at least one 2D shape.")
-        shape_list: List[Tuple[int, ...]] = []
-        if isinstance(shapes, dict):
-            for value in shapes.values():
-                if isinstance(value, (list, tuple)):
-                    shape_list.append(tuple(value))
-        elif isinstance(shapes, (list, tuple)):
-            shape_list.append(tuple(shapes))
-        if not shape_list or not any(len(shape) > 1 for shape in shape_list):
-            raise RuntimeError("Jitter check requires at least one shape with length >=2 in get_input_signature()['shapes'].")
+        if select_jitter_dimension(signature) is None:
+            raise RuntimeError(
+                "Jitter check requires get_input_signature() to include at least one tensor shape with >=2 dims."
+            )
     
     def verify(
         self,
@@ -2081,37 +2012,6 @@ class BenchmarkHarness:
             # Fallback to threading if module file doesn't exist
             return self._benchmark_with_threading(benchmark, config)
         
-        # Prepare config dict (serialize only simple types)
-        config_dict = {}
-        for key in ['iterations', 'warmup', 'min_run_time_ms', 'percentiles', 'enable_memory_tracking',
-                   'deterministic', 'seed', 'enable_profiling', 'enable_nsys', 'enable_ncu', 'enable_proton',
-                   'profiling_output_dir', 'enable_nvtx', 'enable_cleanup', 
-                   'timeout_seconds', 'measurement_timeout_seconds', 'setup_timeout_seconds',
-                   'warmup_timeout_seconds', 'profiling_timeout_seconds',
-                   'nsys_timeout_seconds', 'ncu_timeout_seconds', 'proton_timeout_seconds', 'timeout_multiplier',
-                   'execution_mode', 'launch_via', 'nproc_per_node', 'nnodes', 'rdzv_backend',
-                   'rdzv_endpoint', 'env_passthrough', 'target_extra_args', 'multi_gpu_required',
-                   'target_label']:
-            value = getattr(config, key, None)
-            # For percentiles, CRITICAL: always include it and ensure it's a list (never None)
-            if key == 'percentiles':
-                # Ensure percentiles is always a list before serialization
-                if value is None or not isinstance(value, list):
-                    value = [25, 50, 75, 99]
-                config_dict[key] = value
-            elif key == 'execution_mode':
-                if value is not None:
-                    config_dict[key] = value.value if isinstance(value, ExecutionMode) else value
-            elif key == 'launch_via':
-                if value is not None:
-                    config_dict[key] = value.value if isinstance(value, LaunchVia) else value
-            elif value is not None:
-                config_dict[key] = value
-        
-        # CRITICAL: Ensure percentiles is always in config_dict
-        if 'percentiles' not in config_dict:
-            config_dict['percentiles'] = [25, 50, 75, 99]
-        
         def _is_simple(value: Any) -> bool:
             """Return True for JSON-serializable scalar/collection values."""
             if isinstance(value, (str, int, float, bool)) or value is None:
@@ -2125,6 +2025,32 @@ class BenchmarkHarness:
                 )
             return False
 
+        # Prepare config dict (serialize all simple public fields).
+        # This must mirror in-process config exactly so protections match across modes.
+        config_dict: Dict[str, Any] = {}
+        for key, value in config.__dict__.items():
+            if str(key).startswith("_") or key == "device":
+                continue
+            if value is None:
+                continue
+            if key == "percentiles":
+                if not isinstance(value, list):
+                    value = [25, 50, 75, 99]
+                config_dict[key] = value
+                continue
+            if key == "execution_mode":
+                config_dict[key] = value.value if isinstance(value, ExecutionMode) else value
+                continue
+            if key == "launch_via":
+                config_dict[key] = value.value if isinstance(value, LaunchVia) else value
+                continue
+            if _is_simple(value):
+                config_dict[key] = value
+
+        # CRITICAL: Ensure percentiles is always in config_dict
+        if 'percentiles' not in config_dict:
+            config_dict['percentiles'] = [25, 50, 75, 99]
+
         initial_state = {
             key: value
             for key, value in getattr(benchmark, "__dict__", {}).items()
@@ -2136,6 +2062,7 @@ class BenchmarkHarness:
             "benchmark_module_path": str(module_path),
             "benchmark_class_name": benchmark_class,
             "config_dict": config_dict,
+            "mode": self.mode.value,
             "device": str(self.device) if self.device else None,
             "initial_state": initial_state or None,
         }
@@ -2276,24 +2203,52 @@ class BenchmarkHarness:
                             if benchmark_result.profiler_metrics.proton:
                                 proton_metrics = benchmark_result.profiler_metrics.proton.to_dict()
                         
-                        # Extract verify_output from subprocess and store on benchmark
+                        # Extract verify_output/tolerance/signature from subprocess and store on benchmark
                         verify_output_data = result_dict.get("verify_output")
                         if verify_output_data is not None:
                             try:
                                 import torch
-                                # Reconstruct tensor from serialized data
-                                data = verify_output_data.get("data")
-                                shape = verify_output_data.get("shape")
-                                dtype_str = verify_output_data.get("dtype", "torch.float32")
-                                if data is not None:
+
+                                def _deserialize_tensor(obj: Dict[str, Any]) -> torch.Tensor:
+                                    data = obj.get("data")
+                                    shape = obj.get("shape")
+                                    if data is None:
+                                        raise ValueError("verify_output missing 'data'")
                                     tensor = torch.tensor(data, dtype=torch.float32)
                                     if shape:
                                         tensor = tensor.view(*shape)
-                                    # Store on the benchmark object for verification
-                                    benchmark._subprocess_verify_output = tensor
+                                    return tensor
+
+                                kind = verify_output_data.get("kind") or "tensor"
+                                if kind == "tensor":
+                                    benchmark._subprocess_verify_output = _deserialize_tensor(verify_output_data)
+                                elif kind == "dict":
+                                    tensors_obj = verify_output_data.get("tensors")
+                                    if not isinstance(tensors_obj, dict) or not tensors_obj:
+                                        raise ValueError("verify_output kind='dict' missing tensors")
+                                    benchmark._subprocess_verify_output = {
+                                        name: _deserialize_tensor(tensor_dict)
+                                        for name, tensor_dict in tensors_obj.items()
+                                    }
+                                else:
+                                    raise ValueError(f"Unknown verify_output kind '{kind}'")
                             except Exception as e:
-                                if LOGGER_AVAILABLE:
-                                    logger.debug(f"Failed to reconstruct verify_output: {e}")
+                                errors.append(f"Failed to reconstruct verify_output from subprocess: {e}")
+                                raise
+
+                        tol_data = result_dict.get("output_tolerance")
+                        if tol_data is not None:
+                            try:
+                                rtol = float(tol_data.get("rtol"))
+                                atol = float(tol_data.get("atol"))
+                                benchmark._subprocess_output_tolerance = (rtol, atol)
+                            except Exception as e:
+                                errors.append(f"Failed to parse output_tolerance from subprocess: {e}")
+                                raise
+
+                        sig_data = result_dict.get("input_signature")
+                        if sig_data is not None:
+                            benchmark._subprocess_input_signature = sig_data
                     else:
                         errors.extend(result_dict.get("errors", ["Subprocess execution failed"]))
                         times_ms = cast(List[float], [])
@@ -2899,6 +2854,13 @@ class BenchmarkHarness:
                             raise TypeError(f"Expected MemoryStats, got {type(mem_result)}")
                         memory_peak_mb = mem_result.peak_mb
                         memory_allocated_mb = mem_result.allocated_mb
+
+                    # Allow benchmarks to register verification payload post-timing
+                    try:
+                        benchmark.capture_verification_payload()
+                    except Exception as exc:
+                        errors.append(f"capture_verification_payload() failed: {exc}")
+                        raise
                     
                     # Validate result
                     validation_error = benchmark.validate_result()
@@ -3373,8 +3335,8 @@ class BenchmarkHarness:
         range_name = getattr(config, "name", None) or getattr(fn, "__name__", "benchmark_fn")
         
         # ===== VALIDITY PROTECTIONS (Pre-benchmark) =====
-        # These checks address remaining benchmark validity issues
-        # See docs/remaining_protections.md for full list
+        # These checks address benchmark validity issues.
+        # See AGENTS.md and docs/implementation_status.md for the checklist.
         
         from core.harness.validity_checks import (
             reset_cuda_memory_pool, capture_gpu_state, gc_disabled,
@@ -3467,6 +3429,7 @@ class BenchmarkHarness:
             cuda_graph = None
             cuda_graph_captured = False
             graph_cheat_detector = GraphCaptureCheatDetector(self.device) if use_cuda_graph else None
+            internal_stream_ids: Set[int] = set()
             
             def _run_single_iteration():
                 """Helper to run a single benchmark iteration and return timing."""
@@ -3560,33 +3523,38 @@ class BenchmarkHarness:
             
             def _capture_cuda_graph():
                 """Capture the benchmark function as a CUDA graph for fast replay."""
-                nonlocal cuda_graph, cuda_graph_captured
+                nonlocal cuda_graph, cuda_graph_captured, internal_stream_ids
                 
                 try:
-                    # Warm up the stream with a few iterations before capture
-                    # This ensures CUDA kernels are compiled and warmed
+                    # CUDA graphs must be captured on a non-default stream. Capturing on
+                    # the default stream can leave RNG in an invalid state on failure.
                     graph_warmup_iters = getattr(config, 'cuda_graph_warmup_iters', 3)
+                    capture_stream = torch.cuda.Stream(device=self.device)
+                    internal_stream_ids.add(int(capture_stream.cuda_stream))
+                    # Ensure capture stream sees prior work.
+                    capture_stream.wait_stream(torch.cuda.current_stream(self.device))
                     for _ in range(graph_warmup_iters):
-                        fn()
+                        with torch.cuda.stream(capture_stream):
+                            fn()
                         torch.cuda.synchronize(self.device)
                     
                     # Capture the CUDA graph
                     # Note: The benchmark function must be deterministic and have no CPU work
-                    stream = torch.cuda.current_stream(self.device)
                     cuda_graph = torch.cuda.CUDAGraph()
                     
                     # Warm up before capture (ensures allocations are complete)
-                    with torch.cuda.stream(stream):
+                    with torch.cuda.stream(capture_stream):
                         fn()
                     torch.cuda.synchronize(self.device)
                     
                     # Capture the graph
                     if graph_cheat_detector is not None:
                         graph_cheat_detector.start_capture()
-                    with torch.cuda.graph(cuda_graph, stream=stream):
+                    with torch.cuda.graph(cuda_graph, stream=capture_stream):
                         fn()
                     if graph_cheat_detector is not None:
                         graph_cheat_detector.end_capture()
+                    torch.cuda.synchronize(self.device)
                     
                     cuda_graph_captured = True
                 except Exception as e:
@@ -3686,6 +3654,8 @@ class BenchmarkHarness:
                         declared_ids = set(post_streams)
                         if info.default_stream_id is not None:
                             declared_ids.add(info.default_stream_id)
+                        if internal_stream_ids:
+                            declared_ids.update(internal_stream_ids)
                         if getattr(benchmark_obj, "declare_all_streams", False):
                             declared_ids.update(info.stream_ids)
                         elif declared_streams:

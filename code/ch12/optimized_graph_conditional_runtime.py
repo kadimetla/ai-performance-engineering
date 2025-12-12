@@ -131,6 +131,10 @@ class OptimizedGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self._verify_input is None or self.data is None:
             raise RuntimeError("Verification input/output not initialized")
         dtype = self._verify_input.dtype
+        self._payload_dtype = dtype
+
+    def capture_verification_payload(self) -> None:
+        dtype = self._payload_dtype
         self._set_verification_payload(
             inputs={"input": self._verify_input},
             output=self.data.detach().clone(),

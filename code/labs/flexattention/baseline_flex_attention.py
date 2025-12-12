@@ -79,6 +79,8 @@ class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.output = output_tensor.detach().float().clone()
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={
                 "q": self.inputs.q.detach(),

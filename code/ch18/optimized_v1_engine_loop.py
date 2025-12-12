@@ -92,6 +92,8 @@ class OptimizedV1EngineLoopBenchmark(VerificationPayloadMixin, BaseBenchmark):
             float(self._engine_core.calls),
             float(len(self._outputs)),
         ], dtype=torch.float32)
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"seed": torch.tensor(42)},
             output=self.output,

@@ -80,6 +80,9 @@ class OptimizedPagedAttnBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.synchronize(self.device)
         if self.output is None or self.qkv is None:
             raise RuntimeError("benchmark_fn() must produce output")
+        return {}
+
+    def capture_verification_payload(self) -> None:
         self._set_verification_payload(
             inputs={"qkv": self.qkv},
             output=self.output,
@@ -93,7 +96,6 @@ class OptimizedPagedAttnBenchmark(VerificationPayloadMixin, BaseBenchmark):
             },
             output_tolerance=(0.1, 1.0),
         )
-        return {}
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
