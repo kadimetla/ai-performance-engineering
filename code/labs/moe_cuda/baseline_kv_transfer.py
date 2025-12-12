@@ -12,23 +12,29 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
-class BaselineKVTransferBenchmark(BaseBenchmark):
+class BaselineKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Sequential KV transfers (no overlap between compute and NVLink copies)."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.batch_size = 8
-        self.hidden_size = 1024
-        self.seq_len = 512
-        self.kv_cache: Optional[torch.Tensor] = None
-        self.decode_inputs: Optional[List[torch.Tensor]] = None
-        tokens = self.batch_size * (self.hidden_size + self.seq_len)
+        self.hidden_size = 1024  # Must match optimized variants
+        self.chunk_size = 256
+        # Baseline for both overlap and graphs variants.
+        self.num_chunks = 32
+        self.dtype = torch.float16
+        self.input_chunks: Optional[torch.Tensor] = None
+        self.weight: Optional[torch.Tensor] = None
+        self.workspace: Optional[torch.Tensor] = None
+        self.kv_dest: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        tokens = self.num_chunks * self.chunk_size
         self._workload = WorkloadMetadata(
-            requests_per_iteration=float(self.batch_size),
+            requests_per_iteration=float(self.num_chunks),
             tokens_per_iteration=float(tokens),
         )
         self._history: Dict[str, List[float]] = {"latency_ms": []}
@@ -59,7 +65,7 @@ class BaselineKVTransferBenchmark(BaseBenchmark):
             gen = torch.cuda.default_generators[device_idx]
             # set_offset(0) properly resets the graph capture state
             gen.set_offset(0)
-            gen.manual_seed(0)
+            gen.manual_seed(42)
         except Exception:
             pass
         
@@ -73,45 +79,57 @@ class BaselineKVTransferBenchmark(BaseBenchmark):
         except Exception:
             pass
 
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # Create tensors using CPU randn + to(device) to avoid CUDA RNG graph capture issues
-        self.kv_cache = torch.randn(
-            self.batch_size,
-            self.seq_len,
+        self.input_chunks = torch.randn(
+            self.num_chunks,
+            self.chunk_size,
             self.hidden_size,
-            dtype=torch.float16,
+            dtype=self.dtype,
         ).to(self.device)
-        self.decode_inputs = [
-            torch.randn(
-                self.batch_size,
-                1,
-                self.hidden_size,
-                dtype=torch.float16,
-            ).to(self.device)
-            for _ in range(self.seq_len)
-        ]
+        self.weight = torch.randn(self.hidden_size, self.hidden_size, dtype=self.dtype).to(self.device)
+        self.workspace = torch.zeros_like(self.input_chunks)
+        self.kv_dest = torch.zeros_like(self.input_chunks)
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> Dict[str, List[float]]:
-        if self.kv_cache is None or self.decode_inputs is None:
-            raise RuntimeError("KV cache or decode inputs missing")
+        if any(t is None for t in (self.input_chunks, self.weight, self.workspace, self.kv_dest)):
+            raise RuntimeError("Buffers not initialized")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("moe_cuda_kv_baseline", enable=enable_nvtx):
             latencies: List[float] = []
-            for decode_tensor in self.decode_inputs:
+            for i in range(self.num_chunks):
                 start = self._record_start()
-                # Simulate copy then compute
-                copied = self.kv_cache[:, -1:, :].clone()
-                _ = decode_tensor + copied
+                chunk = self.input_chunks[i]
+                out = torch.matmul(chunk, self.weight)
+                self.workspace[i].copy_(out)
+                self.kv_dest[i].copy_(self.workspace[i])
                 torch.cuda.synchronize(self.device)
                 latencies.append(self._record_stop(start))
             self._history["latency_ms"].extend(latencies)
-            return {"kv_transfer_ms": latencies}
+        # Verification: capture first chunk output (common across optimized variants)
+        self.output = self.kv_dest[0, :1, : min(8, self.hidden_size)].detach().float().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        meta = torch.tensor([self.hidden_size], dtype=torch.int64, device="cpu")
+        self._set_verification_payload(
+            inputs={"meta": meta},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={},
+            output_tolerance=(0.1, 1.0),
+        )
+        return {"kv_transfer_ms": latencies}
 
     def teardown(self) -> None:
-        self.kv_cache = None
-        self.decode_inputs = None
+        self.input_chunks = None
+        self.weight = None
+        self.workspace = None
+        self.kv_dest = None
+        self.output = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -126,24 +144,9 @@ class BaselineKVTransferBenchmark(BaseBenchmark):
         return {"kv_transfer.mean_ms": float(sum(self._history["latency_ms"]) / len(self._history["latency_ms"]))}
 
     def validate_result(self) -> Optional[str]:
-        if self.kv_cache is None or self.decode_inputs is None:
-            return "KV cache or decode inputs missing"
+        if any(t is None for t in (self.input_chunks, self.weight, self.workspace, self.kv_dest)):
+            return "Buffers not initialized"
         return None
-
-    def get_input_signature(self) -> Dict[str, int]:
-        """Return workload signature for verification.
-        
-        Only hidden_size is compared since baseline/optimized use different
-        batching strategies (sequential vs pipelined) by design.
-        """
-        return {
-            "hidden_size": self.hidden_size,
-            "dtype": "float16",
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
 
 

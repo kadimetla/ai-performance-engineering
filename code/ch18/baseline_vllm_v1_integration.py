@@ -25,7 +25,7 @@ import numba  # noqa: F401
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, ExecutionMode
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
@@ -203,10 +203,9 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
         return BenchmarkConfig(
             iterations=1,
             warmup=0,
-            use_subprocess=False,
-            execution_mode=ExecutionMode.THREAD,
-            warmup_timeout_seconds=300,
-            measurement_timeout_seconds=900,
+            use_subprocess=True,
+            setup_timeout_seconds=600,
+            measurement_timeout_seconds=600,
         )
 
     def get_custom_metrics(self) -> Dict[str, Any]:

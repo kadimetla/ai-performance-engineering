@@ -28,6 +28,7 @@ from core.harness.benchmark_harness import (
     WorkloadMetadata,
 )
 from core.utils.logger import get_logger
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 logger = get_logger(__name__)
 
@@ -206,7 +207,7 @@ def run_benchmark(
     return {"mean_time_ms": result.timing.mean_ms, **metrics}
 
 
-class _DisaggregatedNVLinkPoolBenchmark(BaseBenchmark):
+class _DisaggregatedNVLinkPoolBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrapper benchmark for disaggregated NVLink pool - requires multi-GPU."""
 
     def __init__(self) -> None:
@@ -232,15 +233,6 @@ class _DisaggregatedNVLinkPoolBenchmark(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=1, warmup=5, multi_gpu_required=True)
-
-    def get_verify_output(self) -> torch.Tensor:
-        return super().get_verify_output()
-
-    def get_input_signature(self) -> dict:
-        return super().get_input_signature()
-
-    def get_output_tolerance(self) -> tuple:
-        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

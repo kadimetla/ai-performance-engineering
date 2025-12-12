@@ -12,11 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
-class OptimizedKVTransferBenchmark(BaseBenchmark):
+class OptimizedKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Prefill compute + KV transfer with CUDA-stream pipelining."""
 
     def __init__(self) -> None:
@@ -64,7 +65,7 @@ class OptimizedKVTransferBenchmark(BaseBenchmark):
             gen = torch.cuda.default_generators[device_idx]
             # set_offset(0) properly resets the graph capture state
             gen.set_offset(0)
-            gen.manual_seed(0)
+            gen.manual_seed(42)
         except Exception:
             pass
         
@@ -78,7 +79,8 @@ class OptimizedKVTransferBenchmark(BaseBenchmark):
         except Exception:
             pass
         
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # Create tensors using CPU randn + to(device) to avoid CUDA RNG graph capture issues
         # This is safer because CPU randn doesn't interact with CUDA graph capture state
         self.input_chunks = torch.randn(
@@ -126,6 +128,18 @@ class OptimizedKVTransferBenchmark(BaseBenchmark):
             torch.cuda.current_stream().wait_stream(self.compute_stream)
             torch.cuda.current_stream().wait_stream(self.copy_stream)
         torch.cuda.synchronize(self.device)
+        if self.kv_dest is None:
+            raise RuntimeError("KV destination missing")
+        self.output = self.kv_dest[0, :1, : min(8, self.hidden_size)].detach().float().clone()
+        meta = torch.tensor([self.hidden_size], dtype=torch.int64, device="cpu")
+        self._set_verification_payload(
+            inputs={"meta": meta},
+            output=self.output,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.input_chunks = None
@@ -159,23 +173,6 @@ class OptimizedKVTransferBenchmark(BaseBenchmark):
         if any(t is None for t in (self.input_chunks, self.weight, self.workspace, self.kv_dest)):
             return "Buffers not initialized"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for verification.
-        
-        Only hidden_size is compared since baseline/optimized use different
-        batching strategies (sequential vs pipelined) by design.
-        """
-        return {
-            "hidden_size": self.hidden_size,
-            "dtype": "float16",
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedKVTransferBenchmark()

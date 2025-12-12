@@ -6,6 +6,7 @@ from typing import Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from labs.flashattention_gluon.flashattention_gluon_common import (
     FlashAttentionInputs,
@@ -13,7 +14,7 @@ from labs.flashattention_gluon.flashattention_gluon_common import (
 )
 
 
-class BaselineFlashAttentionGluonBenchmark(BaseBenchmark):
+class BaselineFlashAttentionGluonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Naive attention: QK^T -> softmax -> matmul V (no fusion, no warp specialization)."""
 
     def __init__(self) -> None:
@@ -32,7 +33,9 @@ class BaselineFlashAttentionGluonBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self.inputs = build_flashattention_inputs(
             batch=self.batch,
             seq_len=self.seq_len,
@@ -58,6 +61,16 @@ class BaselineFlashAttentionGluonBenchmark(BaseBenchmark):
                 result = torch.matmul(probs, v)
                 self.output = result.detach().float().clone()
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"q": q.detach(), "k": k.detach(), "v": v.detach()},
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=0,
+            precision_flags={"fp16": True, "bf16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.inputs = None
@@ -81,32 +94,6 @@ class BaselineFlashAttentionGluonBenchmark(BaseBenchmark):
         if self.inputs is None:
             return "FlashAttention inputs are not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "batch": self.batch,
-            "seq_len": self.seq_len,
-            "heads": self.heads,
-            "head_dim": self.head_dim,
-            "shapes": {
-                "q": (self.batch, self.heads, self.seq_len, self.head_dim),
-                "k": (self.batch, self.heads, self.seq_len, self.head_dim),
-                "v": (self.batch, self.heads, self.seq_len, self.head_dim),
-            },
-            "dtypes": {"q": str(self.dtype), "k": str(self.dtype), "v": str(self.dtype)},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineFlashAttentionGluonBenchmark()

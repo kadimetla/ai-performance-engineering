@@ -22,12 +22,13 @@ from core.harness.benchmark_harness import (
     BenchmarkConfig,
     BenchmarkMode,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class OptimizedKVFP8Compressed(BaseBenchmark):
+class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
     """Optimized FP8 compressed KV cache."""
 
     def __init__(

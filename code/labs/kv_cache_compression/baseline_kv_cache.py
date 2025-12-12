@@ -7,6 +7,7 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from labs.kv_cache_compression.kv_cache_common import (
     KVCache,
@@ -33,7 +34,7 @@ except Exception as exc:  # pragma: no cover
     TELinear = TELayerNorm = te_autocast = quantized_model_init = te_recipe = None  # type: ignore
 
 
-class BaselineKVCacheBenchmark(BaseBenchmark):
+class BaselineKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """MXFP8 KV-cache benchmark (prefill + decode)."""
 
     def __init__(self) -> None:
@@ -127,10 +128,10 @@ class BaselineKVCacheBenchmark(BaseBenchmark):
                 offset += decode.shape[1]
         torch.cuda.synchronize()
         # Capture a slice of the cache as verification output
-        if self.cache and self.cache.kv is not None:
-            # kv is [2, B, H, T, D]
-            view = self.cache.kv[0, :, :, : min(1, self.cache.kv.shape[3]), : min(8, self.cache.kv.shape[4])]
-            self.output = view.detach().float().clone()
+        if self.cache is not None:
+            k_slice = self.cache.cache_k[:, : min(1, self.cache.cache_k.shape[1]), :1, : min(8, self.cache.cache_k.shape[-1])]
+            v_slice = self.cache.cache_v[:, : min(1, self.cache.cache_v.shape[1]), :1, : min(8, self.cache.cache_v.shape[-1])]
+            self.output = torch.stack([k_slice, v_slice], dim=0).detach().float().clone()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
         self._set_verification_payload(

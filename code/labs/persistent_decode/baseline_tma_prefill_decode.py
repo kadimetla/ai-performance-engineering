@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.blackwell_requirements import ensure_blackwell_tma_supported
 from labs.persistent_decode.persistent_decode_common import (
@@ -27,7 +28,7 @@ from labs.persistent_decode.persistent_decode_common import (
 )
 
 
-class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
+class BaselineTmaPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Sequential copy/compute prefill followed by host-driven decode."""
 
     def __init__(self) -> None:
@@ -42,6 +43,9 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         ensure_blackwell_tma_supported("baseline_tma_prefill_decode")
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self.inputs = build_inputs(self.device)
         self.prefill_src = torch.randn(
             self.prefill_chunks, self.prefill_chunk_elems, device=self.device
@@ -77,6 +81,24 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         self._synchronize()
         if self.inputs is not None:
             self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
+        if self.inputs is None or self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={
+                "q": self.inputs.q.detach(),
+                "k": self.inputs.k.detach(),
+                "v": self.inputs.v.detach(),
+            },
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.inputs.q.dtype == torch.float16,
+                "bf16": self.inputs.q.dtype == torch.bfloat16,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()
@@ -106,35 +128,6 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         if not torch.isfinite(self.inputs.out).all():
             return "Non-finite output detected"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "batch": self.batch,
-            "seq_len": self.seq_len,
-            "head_dim": self.head_dim,
-            "prefill_chunks": self.prefill_chunks,
-            "prefill_chunk_elems": self.prefill_chunk_elems,
-            "shapes": {
-                "prefill_src": (self.prefill_chunks, self.prefill_chunk_elems),
-                "prefill_dst": (self.prefill_chunks, self.prefill_chunk_elems),
-                "q": (self.batch, self.seq_len, self.head_dim),
-                "k": (self.batch, self.seq_len, self.head_dim),
-                "v": (self.batch, self.seq_len, self.head_dim),
-                "out": (self.batch, self.seq_len, self.head_dim),
-            },
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineTmaPrefillDecodeBenchmark()

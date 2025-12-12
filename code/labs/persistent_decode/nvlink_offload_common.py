@@ -7,6 +7,7 @@ from typing import Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
@@ -24,7 +25,7 @@ class OffloadConfig:
     dtype: torch.dtype = torch.float16
 
 
-class NvlinkOffloadBenchmark(BaseBenchmark):
+class NvlinkOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Measure H2D/D2H swap time for a KV-cache slice."""
 
     def __init__(self, cfg: Optional[OffloadConfig] = None, label: str = "nvlink_offload"):
@@ -41,7 +42,9 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
-        torch.manual_seed(2025)
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         shape = (
             self.cfg.num_layers,
             2,  # k/v
@@ -100,6 +103,20 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
         # Capture a representative slice for verification (GPU slice to avoid host sync patterns)
         self.output = self.gpu_cache[..., : min(1, self.cfg.max_seq_len), : min(8, self.cfg.head_dim)].detach().float().clone()
         self.next_start = 0 if end >= self.cfg.max_seq_len else end
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"gpu_cache": self.gpu_cache.detach()},
+            output=self.output,
+            batch_size=self.cfg.batch_size,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.cfg.dtype == torch.float16,
+                "bf16": self.cfg.dtype == torch.bfloat16,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.cpu_cache = None
@@ -129,45 +146,4 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
             f"{self.label}.non_blocking": float(self.cfg.non_blocking),
         }
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "label": self.label,
-            "batch_size": self.cfg.batch_size,
-            "num_layers": self.cfg.num_layers,
-            "num_heads": self.cfg.num_heads,
-            "head_dim": self.cfg.head_dim,
-            "max_seq_len": self.cfg.max_seq_len,
-            "chunk_tokens": self.cfg.chunk_tokens,
-            "use_pinned": self.cfg.use_pinned,
-            "use_copy_stream": self.cfg.use_copy_stream,
-            "shapes": {
-                "cpu_cache": (
-                    self.cfg.num_layers,
-                    2,
-                    self.cfg.batch_size,
-                    self.cfg.num_heads,
-                    self.cfg.max_seq_len,
-                    self.cfg.head_dim,
-                ),
-                "gpu_cache": (
-                    self.cfg.num_layers,
-                    2,
-                    self.cfg.batch_size,
-                    self.cfg.num_heads,
-                    self.cfg.max_seq_len,
-                    self.cfg.head_dim,
-                ),
-            },
-            "dtypes": {"cache": str(self.cfg.dtype)},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+ 

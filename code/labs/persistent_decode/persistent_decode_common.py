@@ -114,22 +114,22 @@ def build_inputs(
     if batch is None or seq_len is None or head_dim is None:
         batch, seq_len, head_dim = resolve_shapes()
 
-    torch.manual_seed(0)
+    generator = torch.Generator(device=device).manual_seed(42)
 
     quant = _OPTIONS.quantization.lower()
     dtype = torch.float32 if quant == "fp32" else torch.float16
 
-    q = torch.randn(batch, seq_len, head_dim, device=device, dtype=dtype)
-    k = torch.randn_like(q)
-    v = torch.randn_like(q)
+    q = torch.randn(batch, seq_len, head_dim, device=device, dtype=dtype, generator=generator)
+    k = torch.randn_like(q, generator=generator)
+    v = torch.randn_like(q, generator=generator)
 
     if quant == "int4":
         q = _fake_int4(q)
         k = _fake_int4(k)
         v = _fake_int4(v)
 
-    # Output is aggregated per sequence (batch, head_dim)
-    out = torch.zeros(batch, head_dim, device=device, dtype=dtype)
+    # Output buffer matches q/k/v shape for per-token decode writes.
+    out = torch.zeros(batch, seq_len, head_dim, device=device, dtype=dtype)
 
     work_seq_ids = torch.arange(batch, device=device, dtype=torch.int32)
     work_steps = torch.full((batch,), seq_len, device=device, dtype=torch.int32)

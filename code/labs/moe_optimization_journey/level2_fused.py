@@ -25,19 +25,12 @@ class Level2Fused(MoEJourneyBenchmark):
     """Level 2: + Triton fused SiLU*up."""
     LEVEL = 2
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> Level2Fused:
     return Level2Fused()
 
 
 if __name__ == "__main__":
     run_level(2)
-
 
 
 

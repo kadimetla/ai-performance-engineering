@@ -18,6 +18,7 @@ if str(repo_root) not in sys.path:
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -43,7 +44,7 @@ LEVEL_DESCRIPTIONS = {
 }
 
 
-class MoEJourneyBenchmark(BaseBenchmark):
+class MoEJourneyBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Base benchmark for MoE optimization journey.
     
     Subclasses just need to set LEVEL class variable.
@@ -73,6 +74,8 @@ class MoEJourneyBenchmark(BaseBenchmark):
         self.opts: Optional[MoEOptimizations] = None
         self.last_latency_ms: float = 0.0
         self.last_tokens_per_sec: float = 0.0
+        self.output: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
         
         total_tokens = self.BATCH_SIZE * self.SEQ_LEN
         self._workload = WorkloadMetadata(
@@ -101,7 +104,7 @@ class MoEJourneyBenchmark(BaseBenchmark):
                 device_idx = torch.cuda.current_device()
                 gen = torch.cuda.default_generators[device_idx]
                 gen.set_offset(0)
-                gen.manual_seed(0)
+                gen.manual_seed(42)
             except Exception:
                 pass
             
@@ -134,6 +137,9 @@ class MoEJourneyBenchmark(BaseBenchmark):
                 print(f"    Level {l}: {opt_desc}")
         print()
         
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         # Create model with optimizations up to this level
         self.model, self.opts = create_model(
             level=level,
@@ -147,9 +153,8 @@ class MoEJourneyBenchmark(BaseBenchmark):
         )
         self.model = self.model.to(self.device).to(torch.bfloat16)
         self.model.eval()
-        
-        params = sum(p.numel() for p in self.model.parameters())
-        print(f"  Parameters: {params / 1e6:.1f}M")
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
+        print(f"  Parameters: {self.parameter_count / 1e6:.1f}M")
         print(f"  Batch: {self.BATCH_SIZE} x {self.SEQ_LEN} = {self.BATCH_SIZE * self.SEQ_LEN} tokens")
         
         # Apply torch.compile if enabled (Level 5)
@@ -182,13 +187,25 @@ class MoEJourneyBenchmark(BaseBenchmark):
         
         with self._nvtx_range(f"level{self.LEVEL}"):
             with torch.no_grad():
-                _ = self.compiled_model(self.input_ids)
+                logits = self.compiled_model(self.input_ids)
+        # Capture a lightweight slice of logits for verification.
+        self.output = logits[:, :1, : min(8, logits.shape[-1])].detach().float().clone()
         
         torch.cuda.synchronize()
         self.last_latency_ms = (time.perf_counter() - start) * 1000
         
         total_tokens = self.BATCH_SIZE * self.SEQ_LEN
         self.last_tokens_per_sec = total_tokens / (self.last_latency_ms / 1000)
+        if self.input_ids is None or self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"input_ids": self.input_ids.detach()},
+            output=self.output,
+            batch_size=self.BATCH_SIZE,
+            parameter_count=self.parameter_count,
+            precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         del self.compiled_model
@@ -224,22 +241,7 @@ class MoEJourneyBenchmark(BaseBenchmark):
             "use_compile": float(self.opts.use_compile if self.opts else 0),
         }
     
-    def get_input_signature(self) -> Optional[Dict[str, Any]]:
-        """Return input signature for verification.
-        
-        Captures MoE-specific workload parameters to ensure baseline and
-        optimized benchmarks operate on equivalent workloads.
-        """
-        return {
-            "batch_size": self.BATCH_SIZE,
-            "seq_len": self.SEQ_LEN,
-            "hidden_size": self.HIDDEN_SIZE,
-            "intermediate_size": self.INTERMEDIATE_SIZE,
-            "num_experts": self.NUM_EXPERTS,
-            "num_experts_per_tok": self.NUM_EXPERTS_PER_TOK,
-            "vocab_size": self.VOCAB_SIZE,
-            "num_heads": self.NUM_HEADS,
-        }
+    
 
 
 def run_level(level: int) -> None:

@@ -25,6 +25,7 @@ from typing import Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import enable_tf32
 from labs.flexattention.flexattention_common import build_qkv_inputs
@@ -37,7 +38,7 @@ except Exception as exc:  # pragma: no cover - import guard
     ) from exc
 
 
-class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
+class OptimizedFlexAttentionCuteBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """CuTe DSL FlexAttention - the CuTe kernel IS the optimization.
     
     The CuTe DSL backend in flash-attn uses NVIDIA's CuTe template library
@@ -68,6 +69,9 @@ class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         enable_tf32()
 
         self.q, self.k, self.v = build_qkv_inputs(
@@ -95,6 +99,16 @@ class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
             self._synchronize()
             output_tensor = result[0] if isinstance(result, (tuple, list)) else result
             self.output = output_tensor.detach().float().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"q": self.q.detach(), "k": self.k.detach(), "v": self.v.detach()},
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=0,
+            precision_flags={"bf16": True, "fp16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         # Clear tensors first
@@ -129,34 +143,6 @@ class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
 
     def validate_result(self) -> Optional[str]:
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "batch": self.batch,
-            "seq_len": self.seq_len,
-            "heads": self.heads,
-            "head_dim": self.head_dim,
-            "block_size": self.block_size,
-            "doc_span": self.doc_span,
-            "shapes": {
-                "q": (self.batch, self.heads, self.seq_len, self.head_dim),
-                "k": (self.batch, self.heads, self.seq_len, self.head_dim),
-                "v": (self.batch, self.heads, self.seq_len, self.head_dim),
-            },
-            "dtypes": {"q": str(self.dtype), "k": str(self.dtype), "v": str(self.dtype)},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedFlexAttentionCuteBenchmark()

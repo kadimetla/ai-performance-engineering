@@ -23,12 +23,6 @@ class Level5ExpertParallel(MoEJourneyBenchmark):
 
     LEVEL = 5  # Reuse Level 5 stack (BMM fusion) but keep baseline shapes.
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> Level5ExpertParallel:
     return Level5ExpertParallel()
 

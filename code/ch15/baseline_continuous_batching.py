@@ -8,15 +8,18 @@ import torch
 import torch.nn as nn
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
-class BaselineContinuousBatchingBenchmark(BaseBenchmark):
+class BaselineContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline: static batching, sequential processing."""
     
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.batches: Optional[list[torch.Tensor]] = None
+        self.samples: Optional[torch.Tensor] = None
+        self._verify_input: Optional[torch.Tensor] = None
         self.batch_size = 12
         self.hidden_dim = 1024
         self.num_batches = 12
@@ -40,17 +43,21 @@ class BaselineContinuousBatchingBenchmark(BaseBenchmark):
             nn.ReLU(),
             nn.Linear(self.hidden_dim * 2, self.hidden_dim),
         ).to(self.device).eval()
-        
+
+        # Generate a single shared sample buffer so baseline/optimized can verify
+        # equivalent workloads under identical inputs.
+        self.samples = torch.randn(self.num_samples, self.hidden_dim, device=self.device)
         self.batches = [
-            torch.randn(self.batch_size, self.hidden_dim, device=self.device)
-            for _ in range(self.num_batches)
+            self.samples[i * self.batch_size:(i + 1) * self.batch_size]
+            for i in range(self.num_batches)
         ]
-        probe = torch.randn(2, self.hidden_dim, device=self.device)
-        output = torch.zeros(2, self.hidden_dim, device=self.device)
+
+        self._verify_input = self.samples[:2].detach().clone()
+        output = torch.zeros_like(self._verify_input)
         self._set_verification_payload(
-            inputs={"probe": probe},
+            inputs={"probe": self._verify_input},
             output=output,
-            batch_size=probe.shape[0],
+            batch_size=self.num_samples,
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             precision_flags={
                 "fp16": False,
@@ -58,6 +65,7 @@ class BaselineContinuousBatchingBenchmark(BaseBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
+            output_tolerance=(0.5, 5.0),
         )
         self._synchronize()
     
@@ -70,6 +78,21 @@ class BaselineContinuousBatchingBenchmark(BaseBenchmark):
                 for batch in self.batches:
                     outputs.append(self.model(batch))
                 self.output = torch.cat(outputs, dim=0)
+            if self._verify_input is None or self.output is None:
+                raise RuntimeError("setup() must be called before benchmark_fn()")
+            self._set_verification_payload(
+                inputs={"probe": self._verify_input},
+                output=self.output,
+                batch_size=self.num_samples,
+                parameter_count=sum(p.numel() for p in self.model.parameters()),
+                precision_flags={
+                    "fp16": False,
+                    "bf16": False,
+                    "fp8": False,
+                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                },
+                output_tolerance=(0.5, 5.0),
+            )
             self._synchronize()
     
     def teardown(self) -> None:
@@ -105,13 +128,6 @@ class BaselineContinuousBatchingBenchmark(BaseBenchmark):
         if self.batches is None:
             return "Batches not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        return super().get_verify_output()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison - wider due to batching order differences."""
-        return (0.5, 5.0)
 
 
 def get_benchmark() -> BaseBenchmark:

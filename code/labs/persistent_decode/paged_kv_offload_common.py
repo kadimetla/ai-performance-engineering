@@ -28,6 +28,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 try:  # Prefer the Blackwell-aware SDPA selector when available.
@@ -110,7 +111,7 @@ class PagedKVConfig:
     prefetch_next_page: bool = False
 
 
-class PagedKVOffloadBenchmark(BaseBenchmark):
+class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Synthetic decode microbenchmark with paged KV offload and FP8 gating."""
 
     def __init__(self, cfg: Optional[PagedKVConfig] = None, label: str = "paged_kv_offload"):
@@ -197,7 +198,9 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
             )
 
     def setup(self) -> None:
-        torch.manual_seed(7)
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self.runtime_dtype = self._select_runtime_dtype()
         self.enable_flash = _supports_fused_fp8_attention() or self.runtime_dtype in (torch.float16, torch.bfloat16)
 
@@ -299,6 +302,23 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
         self.page_cursor = (start + self.cfg.page_tokens) % self.cfg.max_seq_len
         # Capture a slice of attention output for verification
         self.output = attn_out[:, :, :1, : min(8, attn_out.shape[-1])].detach().float().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        fp8_dtype = getattr(torch, "float8_e4m3fn", None)
+        fp8_enabled = fp8_dtype is not None and self.runtime_dtype == fp8_dtype
+        self._set_verification_payload(
+            inputs={"q": q.detach(), "k": k.detach(), "v": v.detach()},
+            output=self.output,
+            batch_size=self.cfg.batch_size,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.runtime_dtype == torch.float16,
+                "bf16": self.runtime_dtype == torch.bfloat16,
+                "fp8": fp8_enabled,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     # -------------------- Teardown --------------------
 
@@ -355,48 +375,4 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
             f"{self.label}.use_async": float(self.cfg.use_async_stream),
         }
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "batch_size": self.cfg.batch_size,
-            "num_heads": self.cfg.num_heads,
-            "head_dim": self.cfg.head_dim,
-            "max_seq_len": self.cfg.max_seq_len,
-            "page_tokens": self.cfg.page_tokens,
-            "decode_tokens": self.cfg.decode_tokens,
-            "use_pinned_stage": self.cfg.use_pinned_stage,
-            "use_async_stream": self.cfg.use_async_stream,
-            "use_memmap": self.cfg.use_memmap,
-            "shapes": {
-                "host_cache": (
-                    2,
-                    self.cfg.batch_size,
-                    self.cfg.num_heads,
-                    self.cfg.max_seq_len,
-                    self.cfg.head_dim,
-                ),
-                "hot_k": (
-                    self.cfg.batch_size,
-                    self.cfg.num_heads,
-                    self.cfg.page_tokens,
-                    self.cfg.head_dim,
-                ),
-                "hot_v": (
-                    self.cfg.batch_size,
-                    self.cfg.num_heads,
-                    self.cfg.page_tokens,
-                    self.cfg.head_dim,
-                ),
-            },
-            "dtypes": {"hot_cache": str(self.runtime_dtype)},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+ 

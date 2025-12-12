@@ -27,6 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from labs.moe_optimization_journey.moe_config import MoEConfig, get_config
 
@@ -148,7 +149,7 @@ class CUDAGraphMoEModel(nn.Module):
         return self.lm_head(x)
 
 
-class Level6FullStack(BaseBenchmark):
+class Level6FullStack(VerificationPayloadMixin, BaseBenchmark):
     """Level 6: Full Stack with CUDA Graphs."""
     
     LEVEL = 6
@@ -173,6 +174,8 @@ class Level6FullStack(BaseBenchmark):
         self.static_input: Optional[torch.Tensor] = None
         self.graph: Optional[torch.cuda.CUDAGraph] = None
         self.graph_output: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
         self.last_latency_ms: float = 0.0
         self.last_tokens_per_sec: float = 0.0
         
@@ -183,6 +186,9 @@ class Level6FullStack(BaseBenchmark):
         )
     
     def setup(self) -> None:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         print("=" * 60)
         print(f"Level {self.LEVEL}: {self.NAME}")
         print("=" * 60)
@@ -198,8 +204,8 @@ class Level6FullStack(BaseBenchmark):
         self.model = CUDAGraphMoEModel(self.config).to(self.device).to(torch.bfloat16)
         self.model.eval()
         
-        params = sum(p.numel() for p in self.model.parameters())
-        print(f"  Parameters: {params / 1e6:.1f}M")
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
+        print(f"  Parameters: {self.parameter_count / 1e6:.1f}M")
         
         # Create input tensor
         self.input_ids = torch.randint(
@@ -241,13 +247,24 @@ class Level6FullStack(BaseBenchmark):
         with self._nvtx_range("level6_cuda_graphs"):
             # torch.compile with reduce-overhead handles graph replay internally
             with torch.no_grad():
-                _ = self.compiled_model(self.static_input)
+                logits = self.compiled_model(self.static_input)
+        self.output = logits[:, :1, : min(8, logits.shape[-1])].detach().float().clone()
         
         torch.cuda.synchronize()
         self.last_latency_ms = (time.perf_counter() - start) * 1000
         
         total_tokens = self.config.batch_size * self.config.seq_len
         self.last_tokens_per_sec = total_tokens / (self.last_latency_ms / 1000)
+        if self.static_input is None or self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"input_ids": self.static_input.detach()},
+            output=self.output,
+            batch_size=self.config.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         del self.graph
@@ -282,25 +299,6 @@ class Level6FullStack(BaseBenchmark):
             "tokens_per_sec": self.last_tokens_per_sec,
             "cuda_graphs": 1.0,
         }
-
-    def get_input_signature(self) -> Dict[str, Any]:
-        """Align CUDA-graphs variant with baseline MoE workload parameters."""
-        return {
-            "batch_size": self.batch_size,
-            "seq_len": self.seq_len,
-            "hidden_size": self.hidden_size,
-            "intermediate_size": self.intermediate_size,
-            "num_experts": self.num_experts,
-            "num_experts_per_tok": self.num_experts_per_tok,
-            "vocab_size": self.vocab_size,
-            "num_heads": self.num_heads,
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
 
 def get_benchmark() -> BaseBenchmark:
     return Level6FullStack()

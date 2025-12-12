@@ -23,16 +23,9 @@ class Level1Batched(MoEJourneyBenchmark):
     """Level 1: + Batched expert execution."""
     LEVEL = 1
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> Level1Batched:
     return Level1Batched()
 
 
 if __name__ == "__main__":
     run_level(1)
-

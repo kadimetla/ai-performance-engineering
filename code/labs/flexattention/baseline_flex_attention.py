@@ -14,6 +14,7 @@ from typing import Optional
 import torch
 from torch.nn.attention.flex_attention import flex_attention
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from labs.flexattention.flexattention_common import (
     build_flex_attention_inputs,
@@ -22,7 +23,7 @@ from labs.flexattention.flexattention_common import (
 )
 
 
-class BaselineFlexAttentionBenchmark(BaseBenchmark):
+class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Eager FlexAttention using the DSL score_mod + block_mask."""
 
     def __init__(self) -> None:
@@ -44,6 +45,9 @@ class BaselineFlexAttentionBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self.inputs = build_flex_attention_inputs(
             batch=self.batch,
             heads=self.heads,
@@ -73,6 +77,20 @@ class BaselineFlexAttentionBenchmark(BaseBenchmark):
             self._synchronize()
             output_tensor = result[0] if isinstance(result, (tuple, list)) else result
             self.output = output_tensor.detach().float().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={
+                "q": self.inputs.q.detach(),
+                "k": self.inputs.k.detach(),
+                "v": self.inputs.v.detach(),
+            },
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=0,
+            precision_flags={"bf16": True, "fp16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()
@@ -110,34 +128,6 @@ class BaselineFlexAttentionBenchmark(BaseBenchmark):
         if self.inputs is None or self.score_mod is None:
             return "FlexAttention inputs are not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "batch": self.batch,
-            "seq_len": self.seq_len,
-            "heads": self.heads,
-            "head_dim": self.head_dim,
-            "block_size": self.block_size,
-            "doc_span": self.doc_span,
-            "shapes": {
-                "q": (self.batch, self.heads, self.seq_len, self.head_dim),
-                "k": (self.batch, self.heads, self.seq_len, self.head_dim),
-                "v": (self.batch, self.heads, self.seq_len, self.head_dim),
-            },
-            "dtypes": {"q": str(self.dtype), "k": str(self.dtype), "v": str(self.dtype)},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineFlexAttentionBenchmark()

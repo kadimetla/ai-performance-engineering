@@ -13,9 +13,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 from core.harness.benchmark_harness import WorkloadMetadata
+from core.utils.compile_utils import enable_tf32
+from labs.moe_cuda.optimized_router_vectorized import VectorizedTopKMoE
 
 
 class Expert(nn.Module):
@@ -49,13 +52,14 @@ class DenseRouterMoE(nn.Module):
         return output / len(self.experts)
 
 
-class BaselineRouterDenseBenchmark(BaseBenchmark):
-    """Executes the dense MoE router on a single GPU."""
+class BaselineRouterDenseBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Baseline top-k MoE router using an eager VectorizedTopKMoE forward."""
 
     def __init__(self) -> None:
         super().__init__()
         self.hidden_size = 1024
         self.num_experts = 32
+        self.top_k = 2
         self.batch_size = 4096
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
@@ -88,7 +92,7 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
             device_idx = torch.cuda.current_device()
             gen = torch.cuda.default_generators[device_idx]
             gen.set_offset(0)
-            gen.manual_seed(0)
+            gen.manual_seed(42)
         except Exception:
             pass
         
@@ -102,8 +106,11 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
         except Exception:
             pass
 
-        torch.manual_seed(0)
-        model = DenseRouterMoE(self.hidden_size, self.num_experts).to(self.device)
+        enable_tf32()
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        model = VectorizedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)
+        model = model.to(self.device, dtype=torch.bfloat16)
         model.eval()
         self.model = model
 
@@ -111,7 +118,7 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
         self.inputs = torch.randn(
             self.batch_size,
             self.hidden_size,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
         ).to(self.device)
         torch.cuda.synchronize(self.device)
         self.output = None
@@ -126,6 +133,16 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
                 out = self.model(self.inputs)
                 self.output = out.detach().float().clone()
         torch.cuda.synchronize(self.device)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"input": self.inputs.detach()},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         if torch.cuda.is_available():
@@ -161,30 +178,6 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
         if self.inputs is None:
             return "Inputs missing"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "num_experts": self.num_experts,
-            "batch_size": self.batch_size,
-            "hidden_size": self.hidden_size,
-            "shapes": {
-                "input": (self.batch_size, self.hidden_size),
-                "output": (self.batch_size, self.hidden_size),
-            },
-            "dtypes": {"input": "float32"},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineRouterDenseBenchmark()

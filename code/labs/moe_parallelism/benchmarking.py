@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin  # noqa: E402
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -58,7 +59,7 @@ def get_plan_error() -> Optional[str]:
     return _PLAN_ERROR
 
 
-class _SkipPlanBenchmark(BaseBenchmark):
+class _SkipPlanBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Skip benchmark when plan module is not available."""
     
     def __init__(self) -> None:
@@ -66,6 +67,7 @@ class _SkipPlanBenchmark(BaseBenchmark):
         self.metrics = torch.randn((1, 1), dtype=torch.float32)
         self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
+        self.verification_not_applicable_reason = _PLAN_ERROR or "moe_parallelism plan module unavailable"
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=1, warmup=5)
@@ -73,22 +75,13 @@ class _SkipPlanBenchmark(BaseBenchmark):
     def benchmark_fn(self) -> None:
         raise RuntimeError(f"SKIPPED: {_PLAN_ERROR or 'moe_parallelism plan module unavailable'}")
 
-    def get_verify_output(self) -> torch.Tensor:
-        raise RuntimeError("benchmark_fn() must be called before verification")
-
-    def get_input_signature(self) -> dict:
-        return {"type": "skip", "shapes": {"metrics": (1, 1)}}
-
-    def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
-
 
 def get_skip_benchmark() -> BaseBenchmark:
     """Return a skip benchmark for use when plan is unavailable."""
     return _SkipPlanBenchmark()
 
 
-class PlanBenchmark(BaseBenchmark):
+class PlanBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """CPU-only benchmark that emits a plan analysis report."""
 
     def __init__(

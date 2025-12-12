@@ -8,6 +8,7 @@ from typing import Callable, Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from labs.occupancy_tuning import triton_matmul
 
@@ -81,7 +82,7 @@ def _ensure_inductor_env() -> None:
     os.environ.setdefault("TORCHINDUCTOR_MAX_AUTOTUNE_GEMM", "1")
 
 
-class TritonMatmulProtonBenchmark(BaseBenchmark):
+class TritonMatmulProtonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrap a Triton matmul run so the harness can drive Proton automatically."""
 
     def __init__(
@@ -128,7 +129,9 @@ class TritonMatmulProtonBenchmark(BaseBenchmark):
         device = torch.device("cuda")
         _ensure_inductor_env()
 
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self._a = torch.randn((self._size_m, self._size_k), dtype=self._dtype, device=device)
         self._b = torch.randn((self._size_k, self._size_n), dtype=self._dtype, device=device)
         self._scratch = torch.empty((self._size_m, self._size_n), dtype=self._dtype, device=device)
@@ -166,6 +169,20 @@ class TritonMatmulProtonBenchmark(BaseBenchmark):
                 # Expose output for harness verification (harness looks for self.output)
                 self.output = self._output
             torch.cuda.synchronize()
+            if self.output is None or self._a is None or self._b is None:
+                raise RuntimeError("benchmark_fn() did not produce output or inputs")
+            self._set_verification_payload(
+                inputs={"a": self._a.detach(), "b": self._b.detach()},
+                output=self.output,
+                batch_size=1,
+                parameter_count=0,
+                precision_flags={
+                    "fp16": self._dtype == torch.float16,
+                    "bf16": self._dtype == torch.bfloat16,
+                    "tf32": torch.backends.cuda.matmul.allow_tf32,
+                },
+                output_tolerance=(0.1, 1.0),
+            )
         except AttributeError as exc:
             if "SymNodeVariable" in str(exc):
                 raise RuntimeError("SKIPPED: Triton/Proton SymNode inference is incompatible on this build.") from exc
@@ -208,20 +225,6 @@ class TritonMatmulProtonBenchmark(BaseBenchmark):
             f"triton.{self.schedule.name}.flops": flops,
             f"triton.{self.schedule.name}.arithmetic_intensity": arithmetic_intensity,
         }
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "M": self._size_m,
-            "N": self._size_n,
-            "K": self._size_k,
-            "schedule": self.schedule.name,
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 __all__ = [
     "MatmulSchedule",

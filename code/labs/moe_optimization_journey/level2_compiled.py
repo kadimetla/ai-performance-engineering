@@ -24,12 +24,6 @@ class Level2Compiled(MoEJourneyBenchmark):
     """Level 2: + torch.compile (the finale!)."""
     LEVEL = 2
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> Level2Compiled:
     return Level2Compiled()
 

@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin  # noqa: E402
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -24,15 +25,24 @@ from core.harness.benchmark_harness import (  # noqa: E402
 from labs.decode_optimization.decode_common import DecodeBenchmark, DecodeConfig  # noqa: E402
 
 
-class MultiGPUDecodeBenchmark(BaseBenchmark):
+class MultiGPUDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Torchrun-only entry that launches this script across 8 GPUs."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.metrics = torch.randn((1, 1), dtype=torch.float32)
+        self.metrics = torch.zeros((1, 1), dtype=torch.float32)
         self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
         self.verification_not_applicable_reason = "SKIPPED: requires >=2 GPUs (torchrun only)"
+        meta = torch.zeros((1, 1), dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"metrics": meta},
+            output=self.metrics,
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def benchmark_fn(self) -> None:  # pragma: no cover - torchrun path only
         raise RuntimeError("SKIPPED: requires >=2 GPUs (torchrun path only)")
@@ -74,18 +84,6 @@ class MultiGPUDecodeBenchmark(BaseBenchmark):
                 "warmup": "--warmup",
             },
         )
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        raise RuntimeError("SKIPPED: requires >=2 GPUs")
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "decode_8xgpu", "shapes": {"metrics": (1, 1)}}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def _run_worker(iters: int, warmup: int) -> None:
@@ -151,5 +149,4 @@ def get_benchmark() -> BaseBenchmark:
 
 if __name__ == "__main__":
     main()
-
 

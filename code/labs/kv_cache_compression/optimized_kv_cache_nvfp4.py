@@ -8,6 +8,7 @@ from typing import Optional
 import torch
 
 from labs.kv_cache_compression.baseline_kv_cache import BaselineKVCacheBenchmark, TE_AVAILABLE, TE_IMPORT_ERROR
+from labs.kv_cache_compression.kv_cache_common import reset_cache
 
 if TE_AVAILABLE:
     from transformer_engine.pytorch import autocast as te_autocast, is_nvfp4_available
@@ -74,9 +75,10 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
                 _ = self.model(decode, self.cache, offset)
                 offset += decode.shape[1]
         torch.cuda.synchronize()
-        if self.cache and self.cache.kv is not None:
-            view = self.cache.kv[0, :, :, : min(1, self.cache.kv.shape[3]), : min(8, self.cache.kv.shape[4])]
-            self.output = view.detach().float().clone()
+        if self.cache is not None:
+            k_slice = self.cache.cache_k[:, : min(1, self.cache.cache_k.shape[1]), :1, : min(8, self.cache.cache_k.shape[-1])]
+            v_slice = self.cache.cache_v[:, : min(1, self.cache.cache_v.shape[1]), :1, : min(8, self.cache.cache_v.shape[-1])]
+            self.output = torch.stack([k_slice, v_slice], dim=0).detach().float().clone()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
         self._set_verification_payload(
@@ -109,41 +111,6 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
     def get_optimization_goal(self) -> str:
         """Memory optimization - lower memory usage is better."""
         return "memory"
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        total_tokens = self.prefill_seq + self.decode_seq * self.decode_steps
-        return {
-            "batch_size": self.batch_size,
-            "hidden_dim": self.hidden_dim,
-            "num_heads": self.num_heads,
-            "prefill_seq": self.prefill_seq,
-            "decode_seq": self.decode_seq,
-            "decode_steps": self.decode_steps,
-            "nvfp4": True,
-            "shapes": {
-                "prefill": (self.batch_size, self.prefill_seq // 2, self.hidden_dim),
-                "decode": (self.batch_size, self.decode_seq, self.hidden_dim),
-                "cache": (
-                    2,
-                    self.batch_size,
-                    self.num_heads,
-                    total_tokens,
-                    self.hidden_dim // self.num_heads,
-                ),
-            },
-            "dtypes": {"activations": str(self.tensor_dtype)},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineKVCacheBenchmark:

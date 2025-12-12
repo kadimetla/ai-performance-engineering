@@ -189,7 +189,7 @@ class OptimizedPieceGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=5,
             measurement_timeout_seconds=240,
             setup_timeout_seconds=120,
-            use_subprocess=False,
+            use_subprocess=True,
         )
 
 

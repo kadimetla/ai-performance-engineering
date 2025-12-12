@@ -155,7 +155,7 @@ class BaselineRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchma
             warmup=10,
             setup_timeout_seconds=240,
             measurement_timeout_seconds=240,
-            use_subprocess=False,
+            use_subprocess=True,
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

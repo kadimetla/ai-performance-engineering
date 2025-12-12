@@ -28,6 +28,7 @@ except Exception:  # pragma: no cover - defensive import
     prefer_sdpa_backends = None  # type: ignore
     enable_tf32 = None  # type: ignore
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin  # noqa: E402
 from core.harness.hardware_capabilities import detect_capabilities  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
 
@@ -94,7 +95,7 @@ class DecodeConfig:
     label: str = "decode_optimization"
 
 
-class DecodeBenchmark(BaseBenchmark):
+class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Lightweight decode loop benchmark for testing serving optimizations."""
 
     def __init__(self, cfg: DecodeConfig):
@@ -242,7 +243,8 @@ class DecodeBenchmark(BaseBenchmark):
         if self.cfg.use_fp8 and TE_AVAILABLE and not self._fp4_enabled:
             self._fp8_enabled = True
         # Parameter count used for verification metadata
-        self.parameter_count = sum(p.numel() for p in self.parameters())
+        modules = (self.embedding, self.prefill_mlp, self.decode_mlp, self.lm_head)
+        self.parameter_count = sum(p.numel() for m in modules for p in m.parameters())
 
     def _cache_te_weight_workspaces(self) -> None:
         """Pre-quantize TE weights by running a warmup forward pass.

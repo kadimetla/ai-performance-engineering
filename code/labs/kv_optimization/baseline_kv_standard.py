@@ -19,12 +19,13 @@ from core.harness.benchmark_harness import (
     BenchmarkConfig,
     BenchmarkMode,
 )
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class BaselineKVStandard(BaseBenchmark):
+class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
     """Baseline KV cache (BF16, no compression).
     
     Goal: memory - This benchmark measures memory usage for KV cache.

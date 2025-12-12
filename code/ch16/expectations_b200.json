@@ -37,11 +37,11 @@
         "updated_at": "2025-12-11T15:10:04.406684"
       },
       "metrics": {
-        "baseline_p75_ms": 1.753119945526123,
-        "baseline_throughput.latency_ms": 1.753119945526123,
-        "baseline_throughput.requests_per_s": 570.4116267412,
-        "baseline_throughput.tokens_per_s": 448589956.4413355,
-        "baseline_time_ms": 1.753119945526123,
+        "baseline_p75_ms": 0.6303679943084717,
+        "baseline_throughput.latency_ms": 0.6303679943084717,
+        "baseline_throughput.requests_per_s": 1586.3749572137197,
+        "baseline_throughput.tokens_per_s": 1247576030.3515,
+        "baseline_time_ms": 0.6303679943084717,
         "best_optimized_p75_ms": 15.843968391418457,
         "best_optimized_speedup": 0.11064904335934314,
         "best_optimized_throughput.latency_ms": 15.843968391418457,

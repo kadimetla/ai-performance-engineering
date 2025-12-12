@@ -27,6 +27,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
+
 try:
     import triton
     import triton.language as tl
@@ -261,7 +263,7 @@ class TritonMoEModel(nn.Module):
         return self.lm_head(x)
 
 
-class Level4Triton(BaseBenchmark):
+class Level4Triton(VerificationPayloadMixin, BaseBenchmark):
     """Level 4: Grouped-GEMM MoE with torch.compile."""
     
     LEVEL = 4
@@ -273,6 +275,8 @@ class Level4Triton(BaseBenchmark):
         self.config = config or get_config("small")
         self.model: Optional[Any] = None
         self.input_ids: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        self.parameter_count: int = 0
         self.last_latency_ms: float = 0.0
         self.last_tokens_per_sec: float = 0.0
         
@@ -283,6 +287,9 @@ class Level4Triton(BaseBenchmark):
         )
     
     def setup(self) -> None:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         print("=" * 60)
         print(f"Level {self.LEVEL}: {self.NAME}")
         print("=" * 60)
@@ -302,8 +309,8 @@ class Level4Triton(BaseBenchmark):
         print("  Compiling with max-autotune...")
         self.model = torch.compile(self.model, mode="max-autotune")
         
-        params = sum(p.numel() for p in self.model.parameters())
-        print(f"  Parameters: {params / 1e6:.1f}M")
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
+        print(f"  Parameters: {self.parameter_count / 1e6:.1f}M")
         
         self.input_ids = torch.randint(
             0, self.config.vocab_size,
@@ -326,13 +333,24 @@ class Level4Triton(BaseBenchmark):
         
         with self._nvtx_range("level4_triton"):
             with torch.no_grad():
-                _ = self.model(self.input_ids)
+                logits = self.model(self.input_ids)
+        self.output = logits[:, :1, : min(8, logits.shape[-1])].detach().float().clone()
         
         torch.cuda.synchronize()
         self.last_latency_ms = (time.perf_counter() - start) * 1000
         
         total_tokens = self.config.batch_size * self.config.seq_len
         self.last_tokens_per_sec = total_tokens / (self.last_latency_ms / 1000)
+        if self.input_ids is None or self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"input_ids": self.input_ids.detach()},
+            output=self.output,
+            batch_size=self.config.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
     
     def teardown(self) -> None:
         del self.model
@@ -359,25 +377,6 @@ class Level4Triton(BaseBenchmark):
             "latency_ms": self.last_latency_ms,
             "tokens_per_sec": self.last_tokens_per_sec,
         }
-
-    def get_input_signature(self) -> Dict[str, Any]:
-        """Expose workload parameters for input verification."""
-        return {
-            "batch_size": self.config.batch_size,
-            "seq_len": self.config.seq_len,
-            "hidden_size": self.config.hidden_size,
-            "intermediate_size": self.config.intermediate_size,
-            "num_experts": self.config.num_experts,
-            "num_experts_per_tok": self.config.num_experts_per_tok,
-            "vocab_size": self.config.vocab_size,
-            "num_heads": getattr(self.config, "num_attention_heads", None),
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
 
 def get_benchmark() -> BaseBenchmark:
     return Level4Triton()

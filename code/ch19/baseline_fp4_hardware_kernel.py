@@ -65,7 +65,7 @@ class BaselineFP4HardwareKernelBenchmark(VerificationPayloadMixin, BaseBenchmark
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=5, warmup=5, use_subprocess=False)
+        return BenchmarkConfig(iterations=5, warmup=5, use_subprocess=True)
 
     def get_custom_metrics(self) -> Optional[dict]:
         return {"variant": "baseline_manual_fp4"}

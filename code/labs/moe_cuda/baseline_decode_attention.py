@@ -12,11 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
-class BaselineDecodeAttentionBenchmark(BaseBenchmark):
+class BaselineDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Naive decode attention with many small matmuls."""
 
     def __init__(self) -> None:
@@ -41,7 +42,8 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
         if not torch.cuda.is_available():
             raise RuntimeError("labs.moe_cuda decode attention requires CUDA")
 
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.module = torch.nn.MultiheadAttention(
             embed_dim=self.num_heads * self.head_dim,
             num_heads=self.num_heads,
@@ -79,6 +81,21 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
                 torch.cuda.synchronize(self.device)
                 self._history["latency_ms"].append(self._record_stop(start))
                 self.output = attn_out.detach().float().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        meta = torch.tensor(
+            [self.batch, self.kv_seq, self.num_heads, self.head_dim],
+            dtype=torch.int64,
+            device="cpu",
+        )
+        self._set_verification_payload(
+            inputs={"meta": meta},
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=0,
+            precision_flags={"tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
         return {"decode_ms": self._history["latency_ms"]}
 
     def teardown(self) -> None:
@@ -106,33 +123,6 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
         if any(t is None for t in (self.module, self.q, self.k, self.v)):
             return "Decode tensors missing"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "batch": self.batch,
-            "kv_seq": self.kv_seq,
-            "num_heads": self.num_heads,
-            "head_dim": self.head_dim,
-            "shapes": {
-                "q": (self.batch, 1, self.num_heads * self.head_dim),
-                "k": (self.batch, self.kv_seq, self.num_heads * self.head_dim),
-                "v": (self.batch, self.kv_seq, self.num_heads * self.head_dim),
-                "out": (self.batch, 1, self.num_heads * self.head_dim),
-            },
-            "dtypes": {"q": "float32"},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineDecodeAttentionBenchmark()

@@ -12,13 +12,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 from labs.moe_cuda.decode_kernels import run_baseline_kernel
 
 
-class BaselineDecodeKernelBenchmark(BaseBenchmark):
+class BaselineDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs the naive global-load CUDA decode kernel."""
 
     def __init__(self) -> None:
@@ -55,7 +56,7 @@ class BaselineDecodeKernelBenchmark(BaseBenchmark):
             device_idx = torch.cuda.current_device()
             gen = torch.cuda.default_generators[device_idx]
             gen.set_offset(0)
-            gen.manual_seed(7)
+            gen.manual_seed(42)
         except Exception:
             pass
         
@@ -69,7 +70,8 @@ class BaselineDecodeKernelBenchmark(BaseBenchmark):
         except Exception:
             pass
         
-        torch.manual_seed(7)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
         self.input = torch.randn(
             self.rows,
@@ -87,6 +89,16 @@ class BaselineDecodeKernelBenchmark(BaseBenchmark):
         with nvtx_range("moe_cuda_decode_kernel_baseline", enable=enable_nvtx):
             run_baseline_kernel(self.input, self.output)
         torch.cuda.synchronize(self.device)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"input": self.input.detach()},
+            output=self.output.detach().clone(),
+            batch_size=1,
+            parameter_count=0,
+            precision_flags={"tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()
@@ -119,29 +131,6 @@ class BaselineDecodeKernelBenchmark(BaseBenchmark):
         if self.input is None or self.output is None:
             return "Decode tensors missing"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "rows": self.rows,
-            "cols": self.cols,
-            "shapes": {
-                "input": (self.rows, self.cols),
-                "output": (self.rows, self.cols),
-            },
-            "dtypes": {"input": "float32"},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineDecodeKernelBenchmark()

@@ -14,9 +14,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import compile_model, enable_tf32
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
+from labs.moe_cuda.optimized_router_vectorized import VectorizedTopKMoE
 
 
 class AdaptiveTopKMoE(nn.Module):
@@ -89,7 +91,7 @@ class AdaptiveTopKMoE(nn.Module):
         return output
 
 
-class OptimizedRouterTopKBenchmark(BaseBenchmark):
+class OptimizedRouterTopKBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark for the adaptive router."""
 
     def __init__(self) -> None:
@@ -125,7 +127,7 @@ class OptimizedRouterTopKBenchmark(BaseBenchmark):
             device_idx = torch.cuda.current_device()
             gen = torch.cuda.default_generators[device_idx]
             gen.set_offset(0)
-            gen.manual_seed(0)
+            gen.manual_seed(42)
         except Exception:
             pass
         
@@ -140,12 +142,10 @@ class OptimizedRouterTopKBenchmark(BaseBenchmark):
             pass
         
         enable_tf32()
-        torch.manual_seed(0)
-        model = AdaptiveTopKMoE(
-            self.hidden_size,
-            self.num_experts,
-            top_k=self.top_k,
-        ).to(self.device, dtype=torch.bfloat16)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        model = VectorizedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)
+        model = model.to(self.device, dtype=torch.bfloat16)
         model.eval()
         
         # The vectorized implementation is already efficient without compile
@@ -175,6 +175,16 @@ class OptimizedRouterTopKBenchmark(BaseBenchmark):
                 out = self.model(self.inputs)
                 self.output = out.detach().float().clone()
         torch.cuda.synchronize(self.device)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"input": self.inputs.detach()},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -209,31 +219,6 @@ class OptimizedRouterTopKBenchmark(BaseBenchmark):
         if self.inputs is None:
             return "Inputs missing"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "num_experts": self.num_experts,
-            "batch_size": self.batch_size,
-            "top_k": self.top_k,
-            "hidden_size": self.hidden_size,
-            "shapes": {
-                "input": (self.batch_size, self.hidden_size),
-                "output": (self.batch_size, self.hidden_size),
-            },
-            "dtypes": {"input": "bfloat16"},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedRouterTopKBenchmark()

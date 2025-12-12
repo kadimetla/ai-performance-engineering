@@ -152,7 +152,7 @@ class BaselinePieceGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=5,
             measurement_timeout_seconds=240,
             setup_timeout_seconds=120,
-            use_subprocess=False,
+            use_subprocess=True,
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

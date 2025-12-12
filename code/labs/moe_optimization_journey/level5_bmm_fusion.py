@@ -21,18 +21,12 @@ from labs.moe_optimization_journey.moe_benchmark import MoEJourneyBenchmark
 
 class Level5BMMFusion(MoEJourneyBenchmark):
     LEVEL = 5
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
 
 def get_benchmark():
     return Level5BMMFusion()
 
 if __name__ == "__main__":
     Level5BMMFusion.main()
-
 
 
 

@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.harness.cuda_capabilities import tma_support_status
 from core.harness.hardware_capabilities import detect_capabilities
@@ -26,7 +27,7 @@ from labs.moe_cuda.decode_kernels import (
 )
 
 
-class OptimizedDecodeKernelBenchmark(BaseBenchmark):
+class OptimizedDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs the TMA double-buffered CUDA decode kernel."""
 
     def __init__(self) -> None:
@@ -64,7 +65,7 @@ class OptimizedDecodeKernelBenchmark(BaseBenchmark):
             device_idx = torch.cuda.current_device()
             gen = torch.cuda.default_generators[device_idx]
             gen.set_offset(0)
-            gen.manual_seed(7)
+            gen.manual_seed(42)
         except Exception:
             pass
         
@@ -112,14 +113,11 @@ class OptimizedDecodeKernelBenchmark(BaseBenchmark):
             run_optimized_kernel(self.input, self.output)
         torch.cuda.synchronize(self.device)
         self._set_verification_payload(
-            inputs={
-                "rows": torch.tensor([self.rows], dtype=torch.int64, device="cpu"),
-                "cols": torch.tensor([self.cols], dtype=torch.int64, device="cpu"),
-            },
+            inputs={"input": self.input.detach()},
             output=self.output.detach().clone(),
             batch_size=1,
             parameter_count=0,
-            precision_flags={"fp16": False, "bf16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            precision_flags={"tf32": torch.backends.cuda.matmul.allow_tf32},
             output_tolerance=(1e-3, 1e-3),
         )
 
@@ -153,29 +151,6 @@ class OptimizedDecodeKernelBenchmark(BaseBenchmark):
         if self.input is None or self.output is None:
             return "Decode tensors missing"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "rows": self.rows,
-            "cols": self.cols,
-            "shapes": {
-                "input": (self.rows, self.cols),
-                "output": (self.rows, self.cols),
-            },
-            "dtypes": {"input": "float32"},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     """Return the optimized TMA decode kernel benchmark.

@@ -11,11 +11,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from typing import Optional
+
+import torch
+
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, BenchmarkHarness, BenchmarkMode
 from labs.real_world_models.llama_3_1_8b_optimization import Llama31_8B_Optimization
 
 
-class OptimizedLlama31_8B(BaseBenchmark):
+class OptimizedLlama31_8B(VerificationPayloadMixin, BaseBenchmark):
     """Optimized Llama 3.1 8B - torch.compile + FlexAttention + optional FP8.
     
     Optimizations:
@@ -30,10 +35,15 @@ class OptimizedLlama31_8B(BaseBenchmark):
         self.seq_length = seq_length
         self.use_fp8 = use_fp8
         self.model_wrapper = None
-        self._last_metrics = {}
+        self.output: Optional[torch.Tensor] = None
+        self.parameter_count = 0
+        self._last_metrics: dict = {}
         self.register_workload_metadata(requests_per_iteration=float(batch_size))
 
     def setup(self) -> None:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self.model_wrapper = Llama31_8B_Optimization(
             batch_size=self.batch_size,
             seq_length=self.seq_length,
@@ -42,11 +52,30 @@ class OptimizedLlama31_8B(BaseBenchmark):
             use_flex_attention=True,  # Enable FlexAttention
         )
         self.model_wrapper.setup()
+        self.parameter_count = sum(p.numel() for p in self.model_wrapper.layers.parameters())
 
     def benchmark_fn(self) -> None:
-        if self.model_wrapper:
-            self._last_metrics = self.model_wrapper.run()
+        if self.model_wrapper is None:
+            raise RuntimeError("Model wrapper not initialized")
+        elapsed_ms = self.model_wrapper.run()
+        self._last_metrics = {"elapsed_ms": float(elapsed_ms)}
+        self.output = self.model_wrapper.output
         self._synchronize()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"input": self.model_wrapper.input.detach()},
+            output=self.output,
+            batch_size=self.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "bf16": True,
+                "fp16": False,
+                "fp8": bool(self.use_fp8),
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         if self.model_wrapper:
@@ -63,18 +92,6 @@ class OptimizedLlama31_8B(BaseBenchmark):
         metrics["llama.use_flex_attention"] = 1.0
         metrics["llama.use_fp8"] = 1.0 if self.use_fp8 else 0.0
         return metrics
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_length": self.seq_length, "use_fp8": self.use_fp8}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

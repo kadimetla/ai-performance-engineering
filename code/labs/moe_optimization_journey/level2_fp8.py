@@ -23,12 +23,6 @@ class Level2FP8(MoEJourneyBenchmark):
     """Level 2: + FP8 simulation."""
     LEVEL = 2
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> Level2FP8:
     return Level2FP8()
 

@@ -10,6 +10,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
@@ -59,7 +60,7 @@ def _build_dataloader(cfg: PipelineConfig) -> Iterable[torch.Tensor]:
     return DataLoader(dataset, **kwargs)
 
 
-class AsyncInputPipelineBenchmark(BaseBenchmark):
+class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark that measures H2D overlap for a simple vision pipeline."""
 
     def __init__(self, cfg: Optional[PipelineConfig] = None, label: str = "async_input_pipeline"):
@@ -76,7 +77,9 @@ class AsyncInputPipelineBenchmark(BaseBenchmark):
         self.register_workload_metadata(samples_per_iteration=self.cfg.batch_size)
 
     def setup(self) -> None:
-        torch.manual_seed(2025)
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         torch.backends.cudnn.benchmark = False
 
         self.loader = _build_dataloader(self.cfg)

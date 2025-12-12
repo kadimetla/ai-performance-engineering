@@ -15,6 +15,7 @@ from typing import Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.utils.extension_loader_template import load_cuda_extension_v2
 from labs.persistent_decode.persistent_decode_common import (
@@ -46,7 +47,7 @@ def _load_extension() -> object:
     )
 
 
-class OptimizedPersistentDecodeCUDABenchmark(BaseBenchmark):
+class OptimizedPersistentDecodeCUDABenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Persistent decode using a cooperative CUDA kernel."""
 
     def __init__(self) -> None:
@@ -63,6 +64,8 @@ class OptimizedPersistentDecodeCUDABenchmark(BaseBenchmark):
         """Initialize the persistent decode CUDA extension and inputs."""
         if not torch.cuda.is_available():
             raise RuntimeError("SKIPPED: CUDA required for persistent decode benchmark")
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Try to load the extension - this may fail if not pre-built
         try:
@@ -91,6 +94,24 @@ class OptimizedPersistentDecodeCUDABenchmark(BaseBenchmark):
         torch.cuda.synchronize(self.device)
         # Capture a representative slice of the output
         self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
+        if self.inputs is None or self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={
+                "q": self.inputs.q.detach(),
+                "k": self.inputs.k.detach(),
+                "v": self.inputs.v.detach(),
+            },
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.inputs.q.dtype == torch.float16,
+                "bf16": self.inputs.q.dtype == torch.bfloat16,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()
@@ -120,33 +141,6 @@ class OptimizedPersistentDecodeCUDABenchmark(BaseBenchmark):
         if not torch.isfinite(self.inputs.out).all():
             return "Non-finite output detected"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "batch": self.batch,
-            "seq_len": self.seq_len,
-            "head_dim": self.head_dim,
-            "blocks": self.blocks,
-            "shapes": {
-                "q": (self.batch, self.seq_len, self.head_dim),
-                "k": (self.batch, self.seq_len, self.head_dim),
-                "v": (self.batch, self.seq_len, self.head_dim),
-                "out": (self.batch, self.head_dim),
-            },
-            "dtypes": {"q": "float32"},
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return OptimizedPersistentDecodeCUDABenchmark()

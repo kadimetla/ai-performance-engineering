@@ -24,19 +24,12 @@ class Level5Graphs(MoEJourneyBenchmark):
     """Level 5: + CUDA graphs."""
     LEVEL = 5
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> Level5Graphs:
     return Level5Graphs()
 
 
 if __name__ == "__main__":
     run_level(5)
-
 
 
 

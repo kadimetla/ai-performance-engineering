@@ -50,6 +50,7 @@ class Llama31_8B_Optimization:
         self.use_flex_attention = use_flex_attention
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.output: Optional[torch.Tensor] = None
         
         logger.info(f"Llama 3.1 8B Optimization")
         logger.info(f"  Compile: {use_compile}")
@@ -155,6 +156,7 @@ class Llama31_8B_Optimization:
             device=self.device,
             dtype=torch.bfloat16
         )
+        self.output = None
         
         logger.info(f"Model setup complete: {self.seq_length} tokens")
     
@@ -167,6 +169,7 @@ class Llama31_8B_Optimization:
         x = self.input
         for layer in self.layers:
             x = layer(x)
+        self.output = x.detach()
         
         torch.cuda.synchronize()
         end = time.perf_counter()

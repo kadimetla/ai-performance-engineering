@@ -26,19 +26,12 @@ class Level4Parallel(MoEJourneyBenchmark):
     """Level 4: + Multi-stream expert parallelism."""
     LEVEL = 4
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> Level4Parallel:
     return Level4Parallel()
 
 
 if __name__ == "__main__":
     run_level(4)
-
 
 
 

@@ -29,9 +29,10 @@ import time
 from typing import List
 
 from core.harness.benchmark_harness import BaseBenchmark
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class NativeFP8MoE(BaseBenchmark):
+class NativeFP8MoE(VerificationPayloadMixin, BaseBenchmark):
     """MoE benchmark with native FP8 via _scaled_mm."""
     
     WARMUP = 5
@@ -163,7 +164,18 @@ class NativeFP8MoE(BaseBenchmark):
             output[offset:offset+count] = expert_out * weights_e
             offset += count
         
-        self.output = output
+        self.output = output[:1, : min(8, output.shape[1])].detach().float().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        param_count = int(self.w1_fp8.numel() + self.w2_fp8.numel() + self.w3_fp8.numel())
+        self._set_verification_payload(
+            inputs={"x": self.x.detach()},
+            output=self.output,
+            batch_size=self.BATCH_SIZE,
+            parameter_count=param_count,
+            precision_flags={"bf16": True, "fp8": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
         
     def get_extra_metrics(self) -> dict:
         batch_seq = self.BATCH_SIZE * self.SEQ_LEN
@@ -172,14 +184,6 @@ class NativeFP8MoE(BaseBenchmark):
             "total_flops": total_flops,
             "b200_peak_tflops": 2250,
         }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-
 
 def get_benchmark() -> NativeFP8MoE:
     return NativeFP8MoE()
@@ -211,4 +215,3 @@ if __name__ == "__main__":
     
     if tflops/peak > 0.5:
         print("🎉 BROKE 50% UTILIZATION!")
-

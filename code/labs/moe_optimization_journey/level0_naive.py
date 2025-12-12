@@ -21,12 +21,6 @@ class Level0Naive(MoEJourneyBenchmark):
     """Level 0: Naive baseline."""
     LEVEL = 0
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> Level0Naive:
     return Level0Naive()
 

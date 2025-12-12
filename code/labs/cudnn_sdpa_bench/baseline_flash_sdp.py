@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
@@ -105,13 +106,14 @@ class SDPAAttentionModule(nn.Module):
         return out
 
 
-class FlashSDPLabBenchmark(BaseBenchmark):
+class FlashSDPLabBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs SDPA attention with selectable backend for cuDNN versus Flash comparisons."""
 
     def __init__(self, backend: Optional[str] = None):
         super().__init__()
         self.model: Optional[SDPAAttentionModule] = None
         self.inputs: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.seq_len = 256
         self.batch = 8
         self.hidden = 512
@@ -128,29 +130,22 @@ class FlashSDPLabBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         import gc
-        
-        # Clean up CUDA state to prevent RNG corruption from previous benchmarks
+
+        # Clean up CUDA state to prevent RNG corruption from previous benchmarks.
         gc.collect()
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
-        
+
         try:
-            if hasattr(torch.cuda, 'graph_pool_trim'):
+            if hasattr(torch.cuda, "graph_pool_trim"):
                 torch.cuda.graph_pool_trim()
         except Exception:
             pass
-        
-        # Reset CUDA RNG state
-        try:
-            device_idx = torch.cuda.current_device()
-            gen = torch.cuda.default_generators[device_idx]
-            gen.set_offset(0)
-            gen.manual_seed(0)
-        except Exception:
-            pass
-        
+
         _ensure_backend_available(self.backend)
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self.model = SDPAAttentionModule(hidden_dim=self.hidden, num_heads=8, backend=self.backend).to(
             self.device, dtype=torch.float16
         )
@@ -164,12 +159,24 @@ class FlashSDPLabBenchmark(BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
         nvtx_label = f"sdp_{self.backend}_baseline"
         with nvtx_range(nvtx_label, enable=enable_nvtx):
-            _ = self.model(self.inputs)
+            out = self.model(self.inputs)
+        self.output = out.detach()
         torch.cuda.synchronize(self.device)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"input": self.inputs.detach()},
+            output=self.output,
+            batch_size=self.batch,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={"fp16": True, "bf16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.model = None
         self.inputs = None
+        self.output = None
         torch.cuda.empty_cache()
 
     def validate_result(self) -> Optional[str]:
@@ -207,19 +214,6 @@ class FlashSDPLabBenchmark(BaseBenchmark):
         args, _ = parser.parse_known_args(argv)
         if args.backend:
             self.backend = _select_backend(args.backend)
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch": self.batch, "seq_len": self.seq_len, "backend": self.backend}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return FlashSDPLabBenchmark()

@@ -77,7 +77,8 @@ class BaselineSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.model: Optional[SimpleLM] = None
         self.prompt_ids: Optional[torch.Tensor] = None
         self.tokens_generated: int = 0
-        self._output_ids: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        self.parameter_count = 0
         
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.config.batch_size),
@@ -87,6 +88,8 @@ class BaselineSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
     def setup(self) -> None:
         """Initialize model and prompt."""
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         
         # Create model
         self.model = SimpleLM(
@@ -95,6 +98,7 @@ class BaselineSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
             num_layers=self.config.num_layers,
         ).to(self.device, dtype=torch.bfloat16)
         self.model.eval()
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         # Create prompt
         self.prompt_ids = torch.randint(
@@ -135,8 +139,18 @@ class BaselineSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
         """Run baseline autoregressive decoding."""
         output_ids = self._generate(max_tokens=self.config.decode_length)
         self.tokens_generated = output_ids.shape[1] - self.prompt_ids.shape[1]
-        self._output_ids = output_ids
+        self.output = output_ids.detach()
         self._synchronize()
+        if self.prompt_ids is None or self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
+        self._set_verification_payload(
+            inputs={"prompt_ids": self.prompt_ids.detach()},
+            output=self.output,
+            batch_size=self.config.batch_size,
+            parameter_count=self.parameter_count,
+            precision_flags={"bf16": True, "fp16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
+            output_tolerance=(0.0, 0.0),
+        )
     
     def teardown(self) -> None:
         """Clean up."""
@@ -162,34 +176,6 @@ class BaselineSpeculativeDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
             "speculative_decode.speculation_enabled": 0.0,
             "speculative_decode.tokens_generated": float(self.tokens_generated),
         }
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return {
-            "batch_size": self.config.batch_size,
-            "vocab_size": self.config.vocab_size,
-            "hidden_size": self.config.hidden_size,
-            "num_layers": self.config.num_layers,
-            "prompt_length": self.config.prompt_length,
-            "decode_length": self.config.decode_length,
-        }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison.
-        
-        Returns token count as a checksum. Speculative decoding generates
-        at least the same number of tokens as standard decoding.
-        """
-        return torch.tensor([float(self.tokens_generated)], dtype=torch.float32)
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison.
-        
-        Speculative decode may generate slightly more tokens due to draft rounds.
-        """
-        return (0.5, 10.0)
-
-
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineSpeculativeDecodeBenchmark()

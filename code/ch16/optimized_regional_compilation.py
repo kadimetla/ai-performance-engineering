@@ -301,7 +301,7 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
             warmup=10,
             setup_timeout_seconds=240,
             measurement_timeout_seconds=240,
-            use_subprocess=False,
+            use_subprocess=True,
             adaptive_iterations=False,
         )
 

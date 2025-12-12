@@ -44,7 +44,7 @@ def is_tty() -> bool:
 
 def setup_logging(
     level: str = "INFO",
-    log_file: Optional[Path] = None,
+    log_file: Optional[Union[str, Path]] = None,
     log_format: str = "text",  # "text" or "json"
     use_rich: Optional[bool] = None
 ) -> None:
@@ -93,6 +93,8 @@ def setup_logging(
     
     # File handler (if specified)
     if log_file:
+        if isinstance(log_file, str):
+            log_file = Path(log_file)
         log_file.parent.mkdir(parents=True, exist_ok=True)
         
         if log_format == "json":
@@ -211,4 +213,3 @@ def log_profiling_skipped(logger: logging.Logger, profiler: str, reason: str) ->
         reason: Reason for skipping
     """
     logger.warning(f"⏭️  Skipping {profiler} profiling: {reason}")
-
