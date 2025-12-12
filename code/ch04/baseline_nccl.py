@@ -61,20 +61,6 @@ class BaselineNcclBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.input = torch.randn(self.batch_size, self.hidden_dim, device=self.device)
         shard_size = self.batch_size // self.num_shards
         self.output = torch.zeros(shard_size, self.hidden_dim, device=self.device)
-        probe = torch.randn(2, self.hidden_dim, device=self.device)
-        output = torch.zeros(2, self.hidden_dim, device=self.device)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for p in self.model.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
@@ -91,6 +77,24 @@ class BaselineNcclBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 # Copy result back to GPU
                 self.output = reduced.to(self.device)
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output,
+            batch_size=int(self.batch_size),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-4, 1e-4),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -130,9 +134,7 @@ class BaselineNcclBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        sig = super().get_input_signature()
-        sig["num_shards"] = self.num_shards
-        return sig
+        return super().get_input_signature()
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""

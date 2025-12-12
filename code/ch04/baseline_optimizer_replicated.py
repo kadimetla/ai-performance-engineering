@@ -12,6 +12,7 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
@@ -23,6 +24,7 @@ class BaselineOptimizerReplicatedBenchmark(VerificationPayloadMixin, BaseBenchma
         super().__init__()
         self.models: List[nn.Linear] = []
         self.momentum: List[torch.Tensor] = []
+        self.inputs: List[torch.Tensor] = []
         self.batch_size = 8
         self.hidden = 512
         tokens = self.batch_size * self.hidden
@@ -32,36 +34,23 @@ class BaselineOptimizerReplicatedBenchmark(VerificationPayloadMixin, BaseBenchma
         )
 
     def setup(self) -> None:
-        torch.manual_seed(123)
-        num_gpus = max(1, torch.cuda.device_count())
+        skip_if_insufficient_gpus(2)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        num_gpus = torch.cuda.device_count()
         for rank in range(num_gpus):
             device = f"cuda:{rank}"
             model = nn.Linear(self.hidden, self.hidden).to(device)
             buf = torch.zeros_like(model.weight, dtype=torch.float32, device=device)
             self.models.append(model)
             self.momentum.append(buf)
-        probe_device = self.models[0].weight.device if self.models else self.device
-        probe = torch.randn(4, self.hidden, device=probe_device)
-        output = torch.zeros(4, self.hidden, device=probe_device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for m in self.models for p in m.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
+            self.inputs.append(torch.randn(self.batch_size, self.hidden, device=device, dtype=torch.float32))
         self._synchronize()
 
     def benchmark_fn(self) -> None:
-        assert len(self.models) == len(self.momentum)
+        assert len(self.models) == len(self.momentum) == len(self.inputs)
         with self._nvtx_range("baseline_optimizer_replicated"):
-            for model, mom in zip(self.models, self.momentum):
-                x = torch.randn(self.batch_size, self.hidden, device=model.weight.device)
+            for model, mom, x in zip(self.models, self.momentum, self.inputs):
                 y = model(x)
                 loss = y.pow(2).mean()
                 loss.backward()
@@ -73,9 +62,30 @@ class BaselineOptimizerReplicatedBenchmark(VerificationPayloadMixin, BaseBenchma
                     model.bias.grad.zero_()
             self._synchronize()
 
+    def capture_verification_payload(self) -> None:
+        if not self.models or not self.momentum or not self.inputs:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        model0 = self.models[0]
+        x0 = self.inputs[0]
+        output = model0.weight[:32, :32].detach().clone()
+        self._set_verification_payload(
+            inputs={"x": x0},
+            output=output,
+            batch_size=int(self.batch_size),
+            parameter_count=sum(p.numel() for m in self.models for p in m.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-6, 1e-6),
+        )
+
     def teardown(self) -> None:
         self.models.clear()
         self.momentum.clear()
+        self.inputs.clear()
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -108,7 +118,7 @@ class BaselineOptimizerReplicatedBenchmark(VerificationPayloadMixin, BaseBenchma
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-6, 1e-6)
 
 
 def get_benchmark() -> BaseBenchmark:

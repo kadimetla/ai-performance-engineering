@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - older PyTorch fallback
     sdpa_kernel = None  # type: ignore[assignment]
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
 def _flash_sdp_context():
@@ -24,7 +25,7 @@ def _flash_sdp_context():
     return sdpa_kernel([SDPBackend.FLASH_ATTENTION])
 
 
-class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
+class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: KV cache reuse and management."""
     
     def __init__(self):
@@ -86,7 +87,7 @@ class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
         except Exception as exc:
             raise RuntimeError(f"SKIPPED: flash-attn kernels unavailable on this arch/install: {exc}") from exc
         self._synchronize()
-        self._verify_input = torch.randn(1, 1, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
+        self._verify_input = self.inputs[0].detach()
     
     def benchmark_fn(self) -> None:
         assert self.q_proj is not None and self.k_proj is not None and self.v_proj is not None and self.out_proj is not None
@@ -110,26 +111,29 @@ class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
                 
                 # Update cache with the newest token block without reallocation.
                 self.cache_buffer.copy_(k_cache)
-                self.output = output.detach().clone()
-            self._synchronize()
-        if self.output is not None and self._verify_input is not None:
-            param_count = 0
-            for layer in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
-                if layer is not None:
-                    param_count += sum(p.numel() for p in layer.parameters())
-            self._set_verification_payload(
-                inputs={"tokens": self._verify_input},
-                output=self.output,
-                batch_size=int(self._verify_input.shape[0]),
-                parameter_count=param_count,
-                precision_flags={
-                    "fp16": False,
-                    "bf16": True,
-                    "fp8": False,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                },
-                output_tolerance=(1e-3, 1e-3),
-            )
+                self.output = output
+
+    def capture_verification_payload(self) -> None:
+        if self.output is None or self._verify_input is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        if any(layer is None for layer in (self.q_proj, self.k_proj, self.v_proj, self.out_proj)):
+            raise RuntimeError("Projection layers not initialized")
+        param_count = 0
+        for layer in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
+            param_count += sum(p.numel() for p in layer.parameters())
+        self._set_verification_payload(
+            inputs={"tokens": self._verify_input},
+            output=self.output,
+            batch_size=int(self.batch_size),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
     
     def teardown(self) -> None:
         self.q_proj = None
@@ -167,18 +171,6 @@ class OptimizedKVCacheManagementBenchmark(BaseBenchmark):
         if self.inputs is None or self.cache_buffer is None:
             return "Inputs/cache not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return super().get_input_signature()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

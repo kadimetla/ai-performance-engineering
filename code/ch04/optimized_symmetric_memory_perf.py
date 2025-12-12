@@ -81,7 +81,9 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
             raise RuntimeError("SKIPPED: SymmetricMemory peer-put requires world_size >= 2")
 
         device = torch.device("cuda", device_id)
-        self.local_tensor = torch.ones(self.numel, device=device, dtype=torch.float32)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        self.local_tensor = torch.randn(self.numel, device=device, dtype=torch.float32)
         
         # Create symmetric memory handle for direct peer access
         self.handle = dist.nn.SymmetricMemory(self.local_tensor)
@@ -89,20 +91,6 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
         self.peer_buffer = self.handle.get_buffer(self.peer_rank)
         
         torch.cuda.synchronize()
-        probe = torch.ones(16, device=device, dtype=torch.float32)
-        output = torch.zeros(1, device=device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.numel(),
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
 
     def benchmark_fn(self) -> Optional[Dict[str, float]]:
         """Run direct peer copy via SymmetricMemory and measure performance."""
@@ -133,6 +121,25 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
             "symmetric_put.size_mb": self.size_mb,
             "symmetric_put.peer_rank": float(self.peer_rank),
         }
+
+    def capture_verification_payload(self) -> None:
+        if self.local_tensor is None or self.peer_buffer is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.local_tensor[: 256 * 256].view(256, 256)
+        output = self.peer_buffer[: 256 * 256].view(256, 256).detach().clone()
+        self._set_verification_payload(
+            inputs={"tensor": probe},
+            output=output,
+            batch_size=int(probe.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.0, 0.0),
+        )
 
     def teardown(self) -> None:
         """Cleanup distributed resources."""
@@ -175,7 +182,7 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (0.0, 0.0)
 
 
 def get_benchmark() -> BaseBenchmark:

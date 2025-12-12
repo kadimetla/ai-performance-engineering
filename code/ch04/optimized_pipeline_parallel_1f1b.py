@@ -277,20 +277,6 @@ class _PipelineParallel1F1BBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
-        probe = torch.zeros(1, device=self.device)
-        output = torch.zeros(1, device=self.device)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=1,
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
 
     def benchmark_fn(self) -> None:
         raise RuntimeError("SKIPPED: optimized_pipeline_parallel_1f1b requires >=2 GPUs")

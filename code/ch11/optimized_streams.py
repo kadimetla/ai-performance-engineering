@@ -20,10 +20,10 @@ from typing import Optional, List
 import torch
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from core.benchmark.verification import simple_signature
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
-class OptimizedStreamsBenchmark(BaseBenchmark):
+class OptimizedStreamsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Pipelined execution - overlap H2D transfers with compute using streams.
     
     Stream Pipeline Architecture:
@@ -54,6 +54,8 @@ class OptimizedStreamsBenchmark(BaseBenchmark):
             torch.backends.cudnn.deterministic = False
         
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         
         # Create streams for pipelining
         self.stream_h2d = torch.cuda.Stream()
@@ -169,30 +171,32 @@ class OptimizedStreamsBenchmark(BaseBenchmark):
                 return f"Result {i} contains non-finite values"
         return None
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.results is None:
-            raise RuntimeError("Results not available - run benchmark first")
-        # Concatenate all results for comparison
-        output = torch.cat(self.results, dim=0)
-        if getattr(self, "_verification_payload", None) is None:
-            sample = self.host_data[0] if self.host_data else torch.zeros(self.N, dtype=torch.float32)
-            self._set_verification_payload(
-                inputs={"host_data": sample},
-                output=output,
-                batch_size=self.num_chunks,
-                parameter_count=self.N * self.num_chunks,
-                output_tolerance=self.get_output_tolerance(),
-            )
-        return output
+    declare_all_streams = False
 
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return simple_signature(batch_size=self.num_chunks, num_chunks=self.num_chunks, N=self.N)
+    def get_custom_streams(self):
+        if self.stream_h2d is None or self.stream_compute is None:
+            return None
+        return [self.stream_h2d, self.stream_compute]
 
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (1e-5, 1e-5)
+    def capture_verification_payload(self) -> None:
+        if self.host_data is None or self.results is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        sample = self.host_data[0][:256]
+        indices = [0, self.num_chunks // 2, self.num_chunks - 1]
+        verify_output = torch.cat([self.results[i][:256].detach() for i in indices], dim=0)
+        self._set_verification_payload(
+            inputs={"host_data": sample},
+            output=verify_output,
+            batch_size=int(self.num_chunks),
+            parameter_count=int(self.N * self.num_chunks),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
 
 
 def get_benchmark() -> OptimizedStreamsBenchmark:

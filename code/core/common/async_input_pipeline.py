@@ -73,7 +73,9 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model: Optional[nn.Module] = None
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.compute_stream: Optional[torch.cuda.Stream] = None
+        self._last_batch: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
+        self._parameter_count: int = 0
         self.register_workload_metadata(samples_per_iteration=self.cfg.batch_size)
 
     def setup(self) -> None:
@@ -90,6 +92,7 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
             nn.ReLU(inplace=True),
             nn.Linear(256, 64),
         ).to(self.device)
+        self._parameter_count = sum(p.numel() for p in self.model.parameters())
 
         self.copy_stream = torch.cuda.Stream() if self.cfg.use_copy_stream else None
         self.compute_stream = torch.cuda.current_stream()
@@ -119,16 +122,21 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
             else:
                 batch_gpu = batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
 
+            self._last_batch = batch_gpu.detach()
             with torch.no_grad():
                 out = self.model(batch_gpu)
             self.output = out.detach()
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
+
+    def capture_verification_payload(self) -> None:
+        if self.output is None or self._last_batch is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
-            inputs={"batch": batch_gpu.detach() if isinstance(batch_gpu, torch.Tensor) else torch.as_tensor(batch_gpu)},
+            inputs={"batch": self._last_batch},
             output=self.output,
             batch_size=self.cfg.batch_size,
-            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            parameter_count=self._parameter_count,
             precision_flags={"fp16": False, "bf16": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
             output_tolerance=(1e-4, 1e-4),
         )
@@ -139,7 +147,9 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model = None
         self.copy_stream = None
         self.compute_stream = None
+        self._last_batch = None
         self.output = None
+        self._parameter_count = 0
         super().teardown()
 
     def get_config(self) -> Optional[BenchmarkConfig]:

@@ -29,6 +29,7 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
             tokens_per_iteration=float(self.tokens),
         )
         self.output: Optional[torch.Tensor] = None
+        self._verify_tokens: Optional[torch.Tensor] = None
         self._verification_payload = None
 
     def setup(self) -> None:
@@ -39,6 +40,7 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
             for _ in range(4):
                 self.islands[island].append(expert_id)
                 expert_id += 1
+        self._verify_tokens = torch.tensor(self.tokens, device=self.device)
         self._synchronize()
 
     def _route(self, token_id: int, local_island: int, loads: Dict[int, int]) -> int:
@@ -75,15 +77,18 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
                 device=self.device,
                 dtype=torch.int32,
             )
-            self._set_verification_payload(
-                inputs={"tokens": torch.tensor(self.tokens, device=self.device)},
-                output=self.output,
-                batch_size=self.tokens,
-                parameter_count=0,
-                precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
-                output_tolerance=(0.0, 0.0),
-            )
-            self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.output is None or self._verify_tokens is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"tokens": self._verify_tokens},
+            output=self.output,
+            batch_size=int(self.tokens),
+            parameter_count=0,
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.0, 0.0),
+        )
 
     def teardown(self) -> None:
         self._last_assignment = {}

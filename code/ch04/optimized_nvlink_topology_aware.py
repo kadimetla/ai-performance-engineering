@@ -59,7 +59,8 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
         )
 
     def setup(self) -> None:
-        torch.manual_seed(7)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         skip_if_insufficient_gpus(2)
 
         self.src_id, self.dst_id = _find_preferred_pair()
@@ -74,20 +75,6 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
         self.src = torch.randn(n, device=f"cuda:{self.src_id}", dtype=self.dtype)
         self.dst = torch.empty(n, device=f"cuda:{self.dst_id}", dtype=self.dtype)
         self._synchronize()
-        probe = torch.randn(256, device=f"cuda:{self.src_id}", dtype=self.dtype)
-        output = torch.zeros_like(probe, device=f"cuda:{self.dst_id}")
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=0,
-            precision_flags={
-                "fp16": True,
-                "bf16": False,
-                "fp8": False,
-                "tf32": False,
-            },
-        )
 
     def benchmark_fn(self) -> None:
         assert self.src is not None and self.dst is not None
@@ -95,6 +82,25 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
             # Prefer non-blocking copy; peer access is enabled when possible
             self.dst.copy_(self.src, non_blocking=True)
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.src is None or self.dst is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.src[: 256 * 256].view(256, 256)
+        output = self.dst[: 256 * 256].view(256, 256)
+        self._set_verification_payload(
+            inputs={"src": probe},
+            output=output,
+            batch_size=int(probe.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": False,
+            },
+            output_tolerance=(0.0, 0.0),
+        )
 
     def teardown(self) -> None:
         self.src = None
@@ -131,7 +137,7 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (0.0, 0.0)
 
 
 def get_benchmark() -> BaseBenchmark:

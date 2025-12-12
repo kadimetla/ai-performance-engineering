@@ -88,6 +88,7 @@ class BaselineTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize model and communication."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Try to initialize distributed
         self.is_distributed = _init_distributed_if_needed()
@@ -107,20 +108,6 @@ class BaselineTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._bytes_transferred = 2 * self.input.numel() * self.input.element_size()
         
         torch.cuda.synchronize(self.device)
-        probe = torch.randn(4, self.hidden, device=self.device)
-        output = torch.zeros(4, self.hidden, device=self.device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for p in self.model.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Legacy torch.distributed communication patterns.
@@ -150,6 +137,24 @@ class BaselineTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 self.output = output
         
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output,
+            batch_size=int(self.batch),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -197,7 +202,7 @@ class BaselineTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaseBenchmark:
@@ -208,20 +213,6 @@ def get_benchmark() -> BaseBenchmark:
             def __init__(self) -> None:
                 super().__init__()
                 self.register_workload_metadata(requests_per_iteration=1.0)
-                probe = torch.zeros(1, device=self.device)
-                output = torch.zeros(1, device=self.device)
-                self._set_verification_payload(
-                    inputs={"probe": probe},
-                    output=output,
-                    batch_size=1,
-                    parameter_count=0,
-                    precision_flags={
-                        "fp16": False,
-                        "bf16": False,
-                        "fp8": False,
-                        "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                    },
-                )
             def get_config(self) -> BenchmarkConfig:
                 return BenchmarkConfig(iterations=1, warmup=5)
             def benchmark_fn(self) -> None:

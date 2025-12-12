@@ -858,12 +858,13 @@ class BaseBenchmark:
 
     def get_verify_inputs(self) -> Dict[str, torch.Tensor]:
         """Return input tensors used for verification/aliasing checks."""
-        payload = getattr(self, "_verification_payload", None)
-        if payload is not None:
+        if isinstance(self, VerificationPayloadMixin):
+            # Payload-backed benchmarks raise RuntimeError until capture_verification_payload()
+            # populates the payload. Compliance tooling treats RuntimeError as "not executed yet".
             return VerificationPayloadMixin.get_verify_inputs(self)
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement get_verify_inputs() explicitly or call "
-            "_set_verification_payload() after preparing inputs."
+            "_set_verification_payload() from capture_verification_payload() (post-timing)."
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> Optional[TorchrunLaunchSpec]:
@@ -896,12 +897,13 @@ class BaseBenchmark:
         Raises:
             NotImplementedError: If subclass doesn't implement this method
         """
-        payload = getattr(self, "_verification_payload", None)
-        if payload is not None:
+        if isinstance(self, VerificationPayloadMixin):
+            # Payload-backed benchmarks raise RuntimeError until capture_verification_payload()
+            # populates the payload. Compliance tooling treats RuntimeError as "not executed yet".
             return VerificationPayloadMixin.get_verify_output(self)
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement get_verify_output() explicitly or call "
-            "_set_verification_payload() to register outputs. "
+            "_set_verification_payload() from capture_verification_payload() (post-timing) to register outputs. "
             "Checksums or fixed scalars are not allowed—surface the real tensor (or a representative slice)."
         )
 
@@ -957,23 +959,26 @@ class BaseBenchmark:
         Raises:
             NotImplementedError: If not overridden by subclass
         """
-        payload = getattr(self, "_verification_payload", None)
-        if payload is not None:
+        if isinstance(self, VerificationPayloadMixin):
+            # Payload-backed benchmarks raise RuntimeError until capture_verification_payload()
+            # populates the payload. Compliance tooling treats RuntimeError as "not executed yet".
             return VerificationPayloadMixin.get_input_signature(self)
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement get_input_signature() explicitly. "
             "NO AUTO-INFERENCE. NO FALLBACKS. Return a dict with workload parameters "
-            "(e.g., {'batch_size': 32, 'seq_len': 512}) or call _set_verification_payload()."
+            "(e.g., {'batch_size': 32, 'seq_len': 512}) or call _set_verification_payload() "
+            "from capture_verification_payload() (post-timing)."
         )
 
     def get_output_tolerance(self) -> Tuple[float, float]:
         """MANDATORY: Return (rtol, atol) tolerance for output comparison."""
-        payload = getattr(self, "_verification_payload", None)
-        if payload is not None:
+        if isinstance(self, VerificationPayloadMixin):
+            # Payload-backed benchmarks raise RuntimeError until capture_verification_payload()
+            # populates the payload. Compliance tooling treats RuntimeError as "not executed yet".
             return VerificationPayloadMixin.get_output_tolerance(self)
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement get_output_tolerance() explicitly or provide a "
-            "tolerance via _set_verification_payload()."
+            "tolerance via _set_verification_payload() from capture_verification_payload() (post-timing)."
         )
 
     def get_custom_streams(self) -> List["torch.cuda.Stream"]:

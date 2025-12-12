@@ -12,9 +12,10 @@ import torch
 import torch.nn as nn
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
-class BaselineKVCacheLocalOnlyBenchmark(BaseBenchmark):
+class BaselineKVCacheLocalOnlyBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Local-only KV cache with host spill."""
 
     def __init__(self):
@@ -36,6 +37,7 @@ class BaselineKVCacheLocalOnlyBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.model = nn.MultiheadAttention(self.hidden, self.heads, batch_first=True).to(self.device).eval()
         # KV cache stored locally only
         self.cache = torch.zeros(self.cache_limit, self.batch, self.hidden, device=self.device)
@@ -62,22 +64,24 @@ class BaselineKVCacheLocalOnlyBenchmark(BaseBenchmark):
                 k_all = torch.cat(keys, dim=1)
                 v_all = torch.cat(values, dim=1)
                 out, _ = self.model(q, k_all, v_all)
-                self.output = out.detach().clone()
-            if self.output is not None and self._verify_q is not None:
-                self._set_verification_payload(
-                    inputs={"q": self._verify_q},
-                    output=self.output,
-                    batch_size=int(self._verify_q.shape[0]),
-                    parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
-                    precision_flags={
-                        "fp16": False,
-                        "bf16": False,
-                        "fp8": False,
-                        "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                    },
-                    output_tolerance=(1e-3, 1e-3),
-                )
-            self._synchronize()
+                self.output = out
+
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.output is None or self._verify_q is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"q": self._verify_q},
+            output=self.output,
+            batch_size=int(self.batch),
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def teardown(self) -> None:
         self.model = None
@@ -106,18 +110,6 @@ class BaselineKVCacheLocalOnlyBenchmark(BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return super().get_input_signature()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

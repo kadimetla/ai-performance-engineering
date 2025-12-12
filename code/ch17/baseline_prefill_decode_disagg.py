@@ -76,6 +76,8 @@ class BaselinePrefillDecodeMonolithicBenchmark(VerificationPayloadMixin, BaseBen
         self._verification_payload = None
 
     def setup(self) -> None:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.model = SimpleLLM(hidden_dim=1024, num_layers=12).to(self.device).to(torch.bfloat16).eval()
         self.prompt = torch.randint(0, 10000, (1, 256), device=self.device)
         with torch.no_grad():
@@ -111,26 +113,28 @@ class BaselinePrefillDecodeMonolithicBenchmark(VerificationPayloadMixin, BaseBen
 
                 self._history["ttft"].append(ttft_ms)
                 self._history["tpot"].extend(tpot_times_ms)
-                if self.output is None:
-                    raise RuntimeError("benchmark_fn() must produce output")
-                dtype = self.output.dtype
-                self._set_verification_payload(
-                    inputs={"prompt": self.prompt},
-                    output=self.output,
-                    batch_size=self.batch_size if hasattr(self, "batch_size") else self.output.shape[0],
-                    parameter_count=self.parameter_count,
-                    precision_flags={
-                        "fp16": dtype == torch.float16,
-                        "bf16": dtype == torch.bfloat16,
-                        "fp8": False,
-                        "tf32": torch.backends.cuda.matmul.allow_tf32,
-                    },
-                    output_tolerance=(0.1, 1.0),
-                )
                 return {
                     "ttft_times_ms": [ttft_ms],
                     "tpot_times_ms": tpot_times_ms,
                 }
+
+    def capture_verification_payload(self) -> None:
+        if self.prompt is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        dtype = self.output.dtype
+        self._set_verification_payload(
+            inputs={"prompt": self.prompt},
+            output=self.output,
+            batch_size=int(self.batch_size),
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.model = None

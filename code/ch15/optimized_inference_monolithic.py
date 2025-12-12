@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
 class SimpleLLM(nn.Module):
@@ -33,13 +34,14 @@ class SimpleLLM(nn.Module):
         return torch.cat(outputs, dim=1)
 
 
-class OptimizedInferenceDisaggregatedBenchmark(BaseBenchmark):
+class OptimizedInferenceDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark: optimized decode service (prefill runs elsewhere)."""
     
     def __init__(self):
         super().__init__()
         self.decode_model: Optional[SimpleLLM] = None
         self.kv_cache: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.batch = 1
         self.num_tokens = 16
         tokens = self.batch * self.num_tokens
@@ -62,28 +64,30 @@ class OptimizedInferenceDisaggregatedBenchmark(BaseBenchmark):
             for _ in range(5):
                 self.output = self.decode_model.decode(self.kv_cache, num_tokens=self.num_tokens)
         self._synchronize()
-        self._verify_kv = torch.randn(1, 1, 1024, device=self.device, dtype=torch.bfloat16)
+        self._verify_kv = self.kv_cache.detach()
     
     def benchmark_fn(self) -> None:
         assert self.decode_model is not None and self.kv_cache is not None
         with self._nvtx_range("inference_monolithic_optimized"):
             with torch.no_grad():
                 self.output = self.decode_model.decode(self.kv_cache, num_tokens=self.num_tokens)
-            self._synchronize()
-        if self.output is not None and self._verify_kv is not None:
-            self._set_verification_payload(
-                inputs={"kv": self._verify_kv},
-                output=self.output,
-                batch_size=int(self._verify_kv.shape[0]),
-                parameter_count=sum(p.numel() for p in self.decode_model.parameters()) if self.decode_model is not None else 0,
-                precision_flags={
-                    "fp16": False,
-                    "bf16": True,
-                    "fp8": False,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                },
-                output_tolerance=(1e-3, 1e-3),
-            )
+
+    def capture_verification_payload(self) -> None:
+        if self.decode_model is None or self.kv_cache is None or self.output is None or self._verify_kv is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"kv": self._verify_kv},
+            output=self.output,
+            batch_size=int(self.kv_cache.shape[0]),
+            parameter_count=sum(p.numel() for p in self.decode_model.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
     
     def teardown(self) -> None:
         self.decode_model = None
@@ -113,18 +117,6 @@ class OptimizedInferenceDisaggregatedBenchmark(BaseBenchmark):
 
     def validate_result(self) -> Optional[str]:
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return super().get_input_signature()
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return super().get_output_tolerance()
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -42,11 +42,8 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize tensors."""
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: requires >=2 GPUs")
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # Optimization: NVLink for high-speed GPU-to-GPU communication
         # NVLink provides high bandwidth and low latency
         
@@ -59,20 +56,6 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
             torch.cuda.device(0).enable_peer_access(1)
             torch.cuda.device(1).enable_peer_access(0)
         torch.cuda.synchronize(self.device)
-        probe = torch.randn(1024, device=self.device)
-        output = torch.zeros(1, device=self.device)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: NVLink-optimized communication."""
@@ -81,17 +64,25 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
             # Direct GPU-to-GPU copy via NVLink (high bandwidth, low latency)
             self.data_gpu1.copy_(self.data_gpu0, non_blocking=True)
             torch.cuda.synchronize()
-            self.output = self.data_gpu1.sum().unsqueeze(0)
-            
-            # Optimization: NVLink benefits
-            # - High-speed GPU-to-GPU communication
-            # - High bandwidth and low latency
-            # - Better performance than PCIe
-            # - Direct GPU-to-GPU transfer
-            payload = getattr(self, "_verification_payload", None)
-            if payload is not None and self.output is not None:
-                payload.output = self.output.detach().clone()
 
+    def capture_verification_payload(self) -> None:
+        if self.data_gpu0 is None or self.data_gpu1 is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.data_gpu0[: 256 * 256].view(256, 256)
+        output = self.data_gpu1[: 256 * 256].view(256, 256)
+        self._set_verification_payload(
+            inputs={"src": probe},
+            output=output,
+            batch_size=int(probe.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.0, 0.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -126,7 +117,7 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_output_tolerance(self) -> tuple:
         """Return custom tolerance for memory transfer benchmark."""
-        return (1e-3, 1e-3)
+        return (0.0, 0.0)
 
 
 

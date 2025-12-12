@@ -22,6 +22,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from ch15.verification_payload_mixin import VerificationPayloadMixin  # noqa: E402
 
 
 def _expert_to_rank(expert_id: int, experts_per_rank: int) -> int:
@@ -40,6 +41,12 @@ class Top2MoE(nn.Module):
         self.experts = nn.ModuleList(
             [nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, hidden_dim)) for _ in range(num_experts)]
         )
+        self._local_streams: Optional[list[torch.cuda.Stream]] = None
+
+    def init_local_streams(self, device: torch.device) -> None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA required for local overlap streams")
+        self._local_streams = [torch.cuda.Stream(device=device) for _ in range(2)]
 
     def forward(self, tokens: torch.Tensor, dist_group: Optional[torch.distributed.ProcessGroup] = None) -> torch.Tensor:
         batch, seq, hidden = tokens.shape
@@ -57,7 +64,9 @@ class Top2MoE(nn.Module):
 
         # If no distributed group, fall back to overlapping streams locally.
         if dist_group is None or torch.distributed.get_world_size(dist_group) == 1:
-            streams = [torch.cuda.Stream(device=tokens.device) for _ in range(2)]
+            if self._local_streams is None:
+                raise RuntimeError("init_local_streams() must be called before forward()")
+            streams = self._local_streams
             partials = []
             for slot, stream in enumerate(streams):
                 expert_ids = flat_idx[:, slot]
@@ -72,7 +81,9 @@ class Top2MoE(nn.Module):
                             contrib = self.experts[eid_int](flat_tokens[mask]) * flat_w[mask, slot:slot + 1]
                             local_out[mask] += contrib
                 partials.append(local_out)
-            torch.cuda.synchronize(tokens.device)
+            current = torch.cuda.current_stream(tokens.device)
+            for stream in streams:
+                current.wait_stream(stream)
             outputs = sum(partials)
             return outputs.view(batch, seq, hidden)
 
@@ -144,7 +155,7 @@ class Top2MoE(nn.Module):
         return out.view(batch, seq, hidden)
 
 
-class OptimizedExpertParallelismBenchmark(BaseBenchmark):
+class OptimizedExpertParallelismBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Top-2 expert benchmark meant to mirror the doc's optimized target."""
 
     def __init__(self) -> None:
@@ -166,37 +177,41 @@ class OptimizedExpertParallelismBenchmark(BaseBenchmark):
         batch = 64
         seq = 16
         self.model = Top2MoE(hidden_dim=hidden_dim, num_experts=8).to(self.device).to(torch.bfloat16).eval()
+        self.model.init_local_streams(self.device)
         self.inputs = torch.randn(batch, seq, hidden_dim, device=self.device, dtype=torch.bfloat16)
         torch.cuda.synchronize(self.device)
-        self._verify_tokens = torch.randn(2, 2, hidden_dim, device=self.device, dtype=torch.bfloat16)
+        self._verify_tokens = self.inputs[:2, :2].detach()
 
-    def benchmark_fn(self) -> Optional[dict]:
+    def benchmark_fn(self) -> None:
         if self.model is None or self.inputs is None:
             raise RuntimeError("Model or inputs not initialized")
         enable_nvtx = get_nvtx_enabled(self.get_config())
         dist_group = torch.distributed.group.WORLD if torch.distributed.is_initialized() else None
-        start = self._record_start()
         with nvtx_range("moe_top2_forward", enable=enable_nvtx):
             with torch.no_grad():
                 self.output = self.model(self.inputs, dist_group=dist_group)
-        torch.cuda.synchronize(self.device)
-        latency_ms = self._record_stop(start)
-        self._history["latency_ms"] = latency_ms
-        if self.output is not None and self._verify_tokens is not None:
-            self._set_verification_payload(
-                inputs={"tokens": self._verify_tokens},
-                output=self.output,
-                batch_size=int(self._verify_tokens.shape[0]),
-                parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
-                precision_flags={
-                    "fp16": False,
-                    "bf16": True,
-                    "fp8": False,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                },
-                output_tolerance=(1e-3, 1e-3),
-            )
-        return {"latency_ms": latency_ms}
+
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.inputs is None or self.output is None or self._verify_tokens is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"tokens": self._verify_tokens},
+            output=self.output,
+            batch_size=int(self.inputs.shape[0]),
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
+
+    def get_custom_streams(self):
+        if self.model is None:
+            return None
+        return getattr(self.model, "_local_streams", None)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
@@ -213,18 +228,6 @@ class OptimizedExpertParallelismBenchmark(BaseBenchmark):
             batch_size=getattr(self, 'batch_size', 1),
             max_batch_size=getattr(self, 'max_batch_size', 32),
         )
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return super().get_input_signature()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return super().get_output_tolerance()
 
 def get_benchmark() -> BaseBenchmark:
     """Factory for harness discovery."""

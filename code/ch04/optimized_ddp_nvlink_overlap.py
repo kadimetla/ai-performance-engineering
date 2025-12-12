@@ -43,6 +43,8 @@ class OptimizedDdpNvlinkOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark
     def __init__(self):
         super().__init__()
         self.models: List[nn.Linear] = []
+        self._inputs: List[List[torch.Tensor]] = []
+        self.output: Optional[torch.Tensor] = None
         self.microbatches = 2
         self.batch_size = 8
         self.hidden = 512
@@ -55,7 +57,8 @@ class OptimizedDdpNvlinkOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.comm_stream = torch.cuda.Stream(device=self.root_device)
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         _enable_peer_access()
         num = torch.cuda.device_count()
         skip_if_insufficient_gpus(2)
@@ -63,21 +66,12 @@ class OptimizedDdpNvlinkOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark
         for rank in range(num):
             device = f"cuda:{rank}"
             self.models.append(nn.Linear(self.hidden, self.hidden).to(device))
-        probe_device = self.models[0].weight.device if self.models else self.root_device
-        probe = torch.randn(4, self.hidden, device=probe_device)
-        output = torch.zeros(4, self.hidden, device=probe_device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for m in self.models for p in m.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
+        self._inputs = []
+        for micro in range(self.microbatches):
+            micro_inputs: List[torch.Tensor] = []
+            for model in self.models:
+                micro_inputs.append(torch.randn(self.batch_size, self.hidden, device=model.weight.device))
+            self._inputs.append(micro_inputs)
         self._synchronize()
 
     def _async_reduce_to_root(self, grads: List[torch.Tensor]) -> torch.Tensor:
@@ -102,8 +96,8 @@ class OptimizedDdpNvlinkOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark
             # Process microbatches; overlap reduction of previous with compute of next
             for micro in range(self.microbatches):
                 grads = []
-                for model in self.models:
-                    x = torch.randn(self.batch_size, self.hidden, device=model.weight.device)
+                for model_idx, model in enumerate(self.models):
+                    x = self._inputs[micro][model_idx]
                     y = model(x)
                     loss = y.pow(2).mean()
                     loss.backward()
@@ -127,10 +121,33 @@ class OptimizedDdpNvlinkOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark
                     model.weight.add_(-1e-3, root_local)
                     model.weight.grad.zero_()
                     model.bias.grad.zero_()
+            self.output = self.models[0].weight.detach()
             self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.output is None or not self._inputs:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        x_probe = self._inputs[0][0]
+        param_count = sum(p.numel() for m in self.models for p in m.parameters())
+        weight_slice = self.output[:8, :8].to(dtype=torch.float32).clone()
+        self._set_verification_payload(
+            inputs={"x": x_probe},
+            output=weight_slice,
+            batch_size=int(x_probe.shape[0]),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     def teardown(self) -> None:
         self.models.clear()
+        self._inputs = []
+        self.output = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

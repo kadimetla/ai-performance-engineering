@@ -92,6 +92,7 @@ class OptimizedOverlapDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.optimizer = None
         self.data = None
         self.target = None
+        self.output = None
         self.rank = 0
         self.world_size = 1
         self.initialized = False
@@ -124,7 +125,8 @@ class OptimizedOverlapDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.device = torch.device("cuda:0")
             torch.cuda.set_device(self.device)
         
-        torch.manual_seed(42 + self.rank)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         model = MultiLayerNet(self.hidden_size).to(self.device)
         
         # Enable DDP with gradient_as_bucket_view for overlap
@@ -145,20 +147,6 @@ class OptimizedOverlapDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.data = torch.randn(self.batch_size, self.hidden_size, device=self.device)
         self.target = torch.randn(self.batch_size, 1, device=self.device)
         torch.cuda.synchronize()
-        probe = torch.randn(8, self.hidden_size, device=self.device)
-        output = torch.zeros(8, 1, device=self.device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for p in self.model.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: DDP training step with communication overlap."""
@@ -175,7 +163,26 @@ class OptimizedOverlapDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
             loss.backward()
             self.optimizer.step()
             self.optimizer.zero_grad()
+        self.output = output.detach()
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.data is None or self.target is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        self._set_verification_payload(
+            inputs={"data": self.data, "target": self.target},
+            output=self.output,
+            batch_size=int(self.batch_size),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     
     def teardown(self) -> None:

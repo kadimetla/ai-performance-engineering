@@ -18,6 +18,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+import copy
 
 from core.utils.compile_utils import compile_model
 from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
@@ -44,17 +45,17 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.prefill_model = None
-
         self.decode_model = None
         self.prefill_input = None
         self.decode_input = None
+        self.output = None
         self.is_distributed = False
         self.rank = 0
         self.world_size = 1
         self.batch_size = 2
         self.prefill_len = 512
         self.hidden_dim = 256
-        tokens = self.batch_size * self.prefill_len
+        tokens = self.batch_size * (self.prefill_len + 1)  # include decode token
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
@@ -64,35 +65,17 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize separate models for prefill and decode."""
         skip_if_insufficient_gpus()
         
-        # Initialize distributed if available
-        if dist.is_available() and torch.cuda.device_count() > 1:
-            try:
-                if not dist.is_initialized():
-                    import os
-                    if 'MASTER_ADDR' not in os.environ:
-                        os.environ['MASTER_ADDR'] = 'localhost'
-                    if 'MASTER_PORT' not in os.environ:
-                        os.environ['MASTER_PORT'] = '12355'
-                    if 'RANK' not in os.environ:
-                        os.environ['RANK'] = '0'
-                    if 'WORLD_SIZE' not in os.environ:
-                        os.environ['WORLD_SIZE'] = str(torch.cuda.device_count())
-                    dist.init_process_group(backend='nccl', init_method='env://')
-                self.is_distributed = True
-            except Exception:
-                self.is_distributed = False
-                self.rank = 0
-                self.world_size = 1
-        else:
-            self.is_distributed = False
-            self.rank = 0
-            self.world_size = 1
-        
-        if self.is_distributed and dist.is_initialized():
+        # Only initialize distributed when launched under torchrun.
+        import os
+        if dist.is_available() and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            if not dist.is_initialized():
+                dist.init_process_group(backend="nccl", init_method="env://")
+            self.is_distributed = True
             self.rank = dist.get_rank()
             self.world_size = dist.get_world_size()
-        
+
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Optimization: Disaggregated inference
         # Separate models/resources for prefill and decode phases
@@ -100,18 +83,14 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Decode: Autoregressive, latency-sensitive, dedicated GPU resources
         
         # Prefill model (optimized for parallel processing)
-        self.prefill_model = nn.Sequential(
+        base_model = nn.Sequential(
             nn.Linear(256, 512),
             nn.ReLU(),
             nn.Linear(512, 256),
         ).to(self.device).eval()
-        
-        # Decode model (optimized for latency)
-        self.decode_model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-        ).to(self.device).eval()
+        self.prefill_model = base_model
+        # Decode model uses identical weights; disaggregation changes placement/scheduling, not math.
+        self.decode_model = copy.deepcopy(base_model)
         
         if self.is_distributed:
             # In disaggregated setup, prefill and decode can use different GPU groups.
@@ -125,25 +104,6 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
             tokens_per_iteration=self._workload.tokens_per_iteration,
-        )
-        probe = torch.randn(2, 16, self.hidden_dim, device=self.device)
-        output = torch.zeros(2, 16, self.hidden_dim, device=self.device, dtype=torch.float32)
-        total_params = 0
-        if self.prefill_model is not None:
-            total_params += sum(p.numel() for p in self.prefill_model.parameters())
-        if self.decode_model is not None:
-            total_params += sum(p.numel() for p in self.decode_model.parameters())
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=total_params,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
         )
     
     def benchmark_fn(self) -> None:
@@ -167,7 +127,30 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 if self.is_distributed:
                     dist.all_reduce(decode_output, op=dist.ReduceOp.SUM)
                     decode_output = decode_output / self.world_size
+                self.output = decode_output.detach()
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.prefill_input is None or self.decode_input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        total_params = 0
+        if self.prefill_model is not None:
+            total_params += sum(p.numel() for p in self.prefill_model.parameters())
+        if self.decode_model is not None:
+            total_params += sum(p.numel() for p in self.decode_model.parameters())
+        self._set_verification_payload(
+            inputs={"prefill": self.prefill_input, "decode": self.decode_input},
+            output=self.output.to(dtype=torch.float32),
+            batch_size=int(self.batch_size),
+            parameter_count=total_params,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
 
     
     def teardown(self) -> None:
@@ -176,6 +159,7 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.decode_model = None
         self.prefill_input = None
         self.decode_input = None
+        self.output = None
         if self.is_distributed and dist.is_initialized():
             dist.destroy_process_group()
         super().teardown()
@@ -213,7 +197,7 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -63,22 +63,10 @@ class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchma
         
         self.rank, self.world_size, device_id = init_distributed()
         device = torch.device("cuda", device_id)
-        self.tensor = torch.ones(self.numel, device=device, dtype=torch.float32)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        self.tensor = torch.randn(self.numel, device=device, dtype=torch.float32)
         torch.cuda.synchronize()
-        probe = torch.ones(16, device=device, dtype=torch.float32)
-        output = torch.zeros(1, device=device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.numel(),
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
 
     def benchmark_fn(self) -> Optional[Dict[str, float]]:
         """Run NCCL AllReduce and measure performance."""
@@ -108,6 +96,25 @@ class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchma
             "allreduce.gbps": gbps,
             "allreduce.size_mb": self.size_mb,
         }
+
+    def capture_verification_payload(self) -> None:
+        if self.tensor is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.tensor[: 256 * 256].view(256, 256)
+        output = probe.detach().clone()
+        self._set_verification_payload(
+            inputs={"tensor": probe},
+            output=output,
+            batch_size=int(probe.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
 
     def teardown(self) -> None:
         """Cleanup distributed resources."""
@@ -146,7 +153,7 @@ class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchma
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaseBenchmark:

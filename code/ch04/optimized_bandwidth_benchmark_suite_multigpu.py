@@ -20,17 +20,47 @@ class OptimizedBandwidthSuiteMultiGPU(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.last_bandwidth_gbps: Optional[float] = None
+        self.size_mb = 256
+        self.inner_iterations = 50
+        self.src: Optional[torch.Tensor] = None
+        self.dst: Optional[torch.Tensor] = None
+        self.stream: Optional[torch.cuda.Stream] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: bandwidth benchmark suite requires >=2 GPUs")
-        probe = torch.randn(1024, device=self.device)
-        output = torch.zeros(1, device=self.device, dtype=torch.float32)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        bytes_per_iter = int(self.size_mb * 1024 * 1024)
+        numel = bytes_per_iter // 4  # float32
+        self.src = torch.randn(numel, device="cuda:0", dtype=torch.float32)
+        self.dst = torch.empty_like(self.src, device="cuda:1")
+        self.stream = torch.cuda.Stream(device="cuda:1")
+        self.register_workload_metadata(
+            requests_per_iteration=1.0,
+            bytes_per_iteration=float(bytes_per_iter * self.inner_iterations),
+        )
+
+    def benchmark_fn(self) -> None:
+        if self.src is None or self.dst is None:
+            raise RuntimeError("Benchmark not initialized")
+        self.last_bandwidth_gbps = measure_peer_bandwidth(
+            self.src,
+            self.dst,
+            iterations=self.inner_iterations,
+            stream=self.stream,
+        )
+
+    def capture_verification_payload(self) -> None:
+        if self.src is None or self.dst is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.src[: 256 * 256].view(256, 256)
+        output = self.dst[: 256 * 256].view(256, 256)
         self._set_verification_payload(
-            inputs={"probe": probe},
+            inputs={"src": probe},
             output=output,
-            batch_size=probe.shape[0],
+            batch_size=int(probe.shape[0]),
             parameter_count=0,
             precision_flags={
                 "fp16": False,
@@ -38,10 +68,8 @@ class OptimizedBandwidthSuiteMultiGPU(VerificationPayloadMixin, BaseBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
+            output_tolerance=(0.0, 0.0),
         )
-
-    def benchmark_fn(self) -> None:
-        self.last_bandwidth_gbps = measure_peer_bandwidth(size_mb=512, iterations=75, async_copy=True)
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=1, warmup=5, measurement_timeout_seconds=30)
@@ -60,7 +88,7 @@ class OptimizedBandwidthSuiteMultiGPU(VerificationPayloadMixin, BaseBenchmark):
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (0.0, 0.0)
 
 
 def get_benchmark() -> BaseBenchmark:

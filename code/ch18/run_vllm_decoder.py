@@ -48,7 +48,7 @@ from ch17.dynamic_routing import (  # noqa: E402
     Request,
     WorkerMetrics,
 )
-from core.benchmark.verification import InputSignature, PrecisionFlags
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 
 DEFAULT_SPEC_CONFIG = Path(__file__).parent / "spec_configs" / "draft_and_verify.json"
@@ -251,7 +251,7 @@ class SpeculativeDecoder:
         return self.chunk_size
 
 
-class VLLMMoEInferenceBenchmark(BaseBenchmark):
+class VLLMMoEInferenceBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized MoE inference benchmark with paged KV cache + speculative decode."""
 
     def __init__(self) -> None:
@@ -313,7 +313,6 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.config.batch_size),
             tokens_per_iteration=float(self.config.tokens_per_iteration),
         )
-        self._verify_prompt: Optional[torch.Tensor] = None
 
     def _build_config(self) -> MoeInferenceConfig:
         return MoeInferenceConfig(
@@ -399,12 +398,6 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
                 self._mem_log_path = log_path
         if self.enable_graphs and torch.cuda.is_available():
             self._prepare_graphs()
-        self._verify_prompt = torch.randint(
-            0,
-            cfg.vocab_size,
-            (cfg.batch_size, cfg.context_window),
-            device=self.device,
-        )
 
     def _refresh_router_metrics(self) -> None:
         timestamp = time.time()
@@ -708,22 +701,7 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
                 self._history["memory_gb"].append(peak_bytes / (1024 ** 3))
 
         if tokens is not None:
-            self.output = tokens.detach().float().clone()
-        if self.output is not None and self._verify_prompt is not None:
-            precision_flags = PrecisionFlags(
-                fp16=self.config.dtype_obj == torch.float16,
-                bf16=self.config.dtype_obj == torch.bfloat16,
-                fp8=False,
-                tf32=torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            )
-            self._set_verification_payload(
-                inputs={"prompt": self._verify_prompt},
-                output=self.output,
-                batch_size=int(self._verify_prompt.shape[0]),
-                parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
-                precision_flags=precision_flags,
-                output_tolerance=(1e-2, 1e-2),
-            )
+            self.output = tokens.detach()
         self._iteration += 1
         self._refresh_router_metrics()
         return {
@@ -731,6 +709,23 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
             "tpot_times_ms": tpot_times,
             "graph_path": graph_path,
         }
+
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.prompts is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"prompt": self.prompts},
+            output=self.output.to(dtype=torch.float32),
+            batch_size=int(self.prompts.shape[0]),
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={
+                "fp16": self.config.dtype_obj == torch.float16,
+                "bf16": self.config.dtype_obj == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-2, 1e-2),
+        )
 
     def _compute_nvlink_delta(
         self,
@@ -811,49 +806,6 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
         if not self._history["tpot"]:
             return "No decode tokens captured"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self.output.detach().clone()
-
-    def get_input_signature(self):
-        """Return input signature for verification."""
-        if getattr(self, "_verification_payload", None) is not None:
-            return super().get_input_signature()
-
-        cfg = self.config
-        precision_flags = PrecisionFlags(
-            fp16=cfg.dtype_obj == torch.float16,
-            bf16=cfg.dtype_obj == torch.bfloat16,
-            fp8=False,
-            tf32=torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-        )
-        signature = InputSignature(
-            shapes={
-                "prompt": (int(cfg.batch_size), int(cfg.context_window)),
-                "output": (int(cfg.batch_size), int(cfg.decode_tokens), int(cfg.hidden_size)),
-            },
-            dtypes={
-                "prompt": str(cfg.dtype_obj),
-                "output": "float32",
-            },
-            batch_size=int(cfg.batch_size),
-            parameter_count=int(cfg.hidden_size * cfg.num_layers * cfg.num_experts),
-            precision_flags=precision_flags,
-            num_streams=2 if self.enable_graphs else 1,
-            graph_capture_enabled=self.enable_graphs,
-        )
-        errors = signature.validate(strict=True)
-        if errors:
-            raise ValueError(f"Invalid input signature: {errors[0]}")
-        return signature
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaseBenchmark:
     return VLLMMoEInferenceBenchmark()

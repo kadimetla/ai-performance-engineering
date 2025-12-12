@@ -48,6 +48,7 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: requires >=2 GPUs")
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # Baseline: PCIe-based communication (no NVLink)
         # NVLink provides high-speed GPU-to-GPU communication
         # This baseline uses PCIe (slower)
@@ -56,20 +57,6 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.data_gpu0 = torch.randn(self.N, device=torch.device("cuda:0"), dtype=torch.float32)
         self.data_gpu1 = torch.randn(self.N, device=torch.device("cuda:1"), dtype=torch.float32)
         torch.cuda.synchronize(self.device)
-        probe = torch.randn(1024, device=self.device)
-        output = torch.zeros(1, device=self.device)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: PCIe-based communication (no NVLink)."""
@@ -78,14 +65,25 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
             # Transfer through PCIe bus (slower than NVLink)
             self.data_gpu1.copy_(self.data_gpu0, non_blocking=False)
             torch.cuda.synchronize()
-            self.output = self.data_gpu1.sum().unsqueeze(0)
 
-            # Baseline: No NVLink benefits
-            # PCIe-based communication (slower)
-            payload = getattr(self, "_verification_payload", None)
-            if payload is not None and self.output is not None:
-                payload.output = self.output.detach().clone()
-
+    def capture_verification_payload(self) -> None:
+        if self.data_gpu0 is None or self.data_gpu1 is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.data_gpu0[: 256 * 256].view(256, 256)
+        output = self.data_gpu1[: 256 * 256].view(256, 256)
+        self._set_verification_payload(
+            inputs={"src": probe},
+            output=output,
+            batch_size=int(probe.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.0, 0.0),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -128,7 +126,7 @@ class BaselineNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def get_output_tolerance(self) -> tuple:
         """Return custom tolerance for memory transfer benchmark."""
-        return (1e-3, 1e-3)
+        return (0.0, 0.0)
 
 
 

@@ -25,20 +25,6 @@ class SymmetricMemoryMultiGPU(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: symmetric_memory requires >=2 GPUs")
-        probe = torch.arange(4, device=self.device, dtype=torch.float32)
-        output = torch.zeros(1, device=self.device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.numel(),
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
 
     def benchmark_fn(self) -> None:
         symmetric_memory_main()

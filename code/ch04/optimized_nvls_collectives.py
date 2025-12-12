@@ -31,7 +31,10 @@ class NVLSCollectivesBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.tensor: Optional[torch.Tensor] = None
         self._initialized = False
-        self._workload = WorkloadMetadata(bytes_per_iteration=0.0)
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=1.0,
+            bytes_per_iteration=float(32 * 32 * 4),
+        )
 
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
@@ -46,22 +49,10 @@ class NVLSCollectivesBenchmark(VerificationPayloadMixin, BaseBenchmark):
         os.environ.setdefault("NCCL_NVLS_ENABLE", "1")
         os.environ.setdefault("NCCL_ALGO", "Tree,Ring,NVLS")
         os.environ.setdefault("NCCL_COLLNET_ENABLE", "1")
-        self.tensor = torch.ones(1024, device=self.device)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        self.tensor = torch.randn(32, 32, device=self.device, dtype=torch.float32)
         self._initialized = True
-        probe = torch.ones(16, device=self.device, dtype=torch.float32)
-        output = torch.zeros(1, device=self.device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
 
     def benchmark_fn(self) -> Optional[dict]:
         if not self._initialized or self.tensor is None:
@@ -72,6 +63,24 @@ class NVLSCollectivesBenchmark(VerificationPayloadMixin, BaseBenchmark):
             dist.all_reduce(self.tensor)
         torch.cuda.synchronize(self.device)
         return {"sum": float(self.tensor[0].item())}
+
+    def capture_verification_payload(self) -> None:
+        if not self._initialized or self.tensor is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        output = self.tensor.detach().clone()
+        self._set_verification_payload(
+            inputs={"tensor": self.tensor},
+            output=output,
+            batch_size=int(self.tensor.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
 
     def teardown(self) -> None:
         if dist.is_initialized():
@@ -100,7 +109,7 @@ class NVLSCollectivesBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaseBenchmark:

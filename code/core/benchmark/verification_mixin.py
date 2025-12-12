@@ -6,13 +6,16 @@ The mixin provides a single `_set_verification_payload()` call that wires up:
 - get_input_signature()
 - get_output_tolerance()
 
-Benchmarks should call `_set_verification_payload()` after preparing their
-verification inputs/output (typically at the end of benchmark_fn()).
+CRITICAL: `_set_verification_payload()` must be called from
+`BaseBenchmark.capture_verification_payload()` (post-timing) to keep the timed
+hot path clean. The harness calls `capture_verification_payload()` once after
+measurement, and VerifyRunner calls it after verify runs.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from typing import Dict, Optional, Tuple, Union
 
 import torch
@@ -40,6 +43,17 @@ class VerificationPayload:
 
 class VerificationPayloadMixin:
     """Mixin that supplies strict verification methods."""
+
+    def _called_from_capture_hook(self) -> bool:
+        frame = inspect.currentframe()
+        if frame is None:
+            return False
+        frame = frame.f_back
+        while frame is not None:
+            if frame.f_code.co_name == "capture_verification_payload" and frame.f_locals.get("self") is self:
+                return True
+            frame = frame.f_back
+        return False
 
     def _normalize_precision_flags(self, precision_flags: Optional[Dict[str, bool] | PrecisionFlags]) -> PrecisionFlags:
         if isinstance(precision_flags, PrecisionFlags):
@@ -71,6 +85,11 @@ class VerificationPayloadMixin:
         output_tolerance: Optional[Union[ToleranceSpec, Tuple[float, float]]] = None,
     ) -> None:
         """Populate verification payload in a single call."""
+        if not self._called_from_capture_hook():
+            raise RuntimeError(
+                "_set_verification_payload() must be called from capture_verification_payload() "
+                "(post-timing) to keep benchmark_fn() hot path clean."
+            )
         if not inputs:
             raise ValueError("inputs must be a non-empty dict of tensors")
         for name, tensor in inputs.items():

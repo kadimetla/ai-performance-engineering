@@ -113,6 +113,7 @@ class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize model with async-ready communication."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         self.is_distributed = _init_distributed_if_needed()
         if self.is_distributed:
@@ -138,21 +139,6 @@ class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._bytes_transferred = 2 * self.input.numel() * self.input.element_size()
         
         torch.cuda.synchronize(self.device)
-        probe = torch.randn(4, self.hidden, device=self.device)
-        output = torch.zeros(4, self.hidden, device=self.device, dtype=torch.float32)
-        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=param_count,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
     
     def _async_all_reduce(self, tensor: torch.Tensor) -> torch.Tensor:
         """Perform async all-reduce using functional collectives.
@@ -203,44 +189,51 @@ class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             return tensor.clone()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Modern torchcomms with async overlap.
-        
-        Pattern demonstrated:
-        1. Start async all-reduce on layer1 output
-        2. Compute layer2 while communication progresses
-        3. Wait for communication only at the end
-        
-        This overlaps compute and communication for better efficiency.
+        """Benchmark: Modern torchcomms API with equivalent semantics.
+
+        Baseline and optimized must produce identical outputs. The optimization
+        demonstrated here is the *communication API style* (functional vs
+        legacy), not a change in algorithm.
         """
         with self._nvtx_range("optimized_torchcomms"):
             with torch.no_grad():
-                # Layer 1 forward
-                hidden = self.layer1(self.input)
-                
-                # Start async communication (functional API)
-                # In real torchcomms, this returns immediately with a future
-                if self.is_distributed and TORCHCOMMS_AVAILABLE:
-                    # Functional collectives work with torch.compile
-                    # The graph captures the async operation
-                    reduced_hidden = self._async_all_reduce(hidden)
-                    
-                    # Layer 2 can use the result - graph ordering handles sync
-                    output = self.layer2(reduced_hidden)
+                output = self.model(self.input)
+
+                if self.is_distributed:
+                    if TORCHCOMMS_AVAILABLE:
+                        output = functional_all_reduce(
+                            output,
+                            reduceOp="avg",
+                            group=dist.group.WORLD,
+                        )
+                    else:
+                        dist.all_reduce(output, op=dist.ReduceOp.AVG)
                 else:
-                    # Simulate overlap pattern
-                    # Create copy to simulate async behavior
-                    comm_buffer = hidden.clone()
-                    
-                    # "Communication" happens here (simulated)
-                    chunks = torch.chunk(comm_buffer, chunks=4, dim=0)
-                    reduced = torch.cat([c.mean(dim=0, keepdim=True).expand_as(c) for c in chunks])
-                    
-                    # Layer 2 uses reduced result
-                    output = self.layer2(reduced)
-                
+                    chunks = torch.chunk(output, chunks=4, dim=0)
+                    reduced = sum(chunks) / 4.0
+                    output = reduced.expand_as(output[: len(output) // 4]).repeat(4, 1)
+
                 self.output = output
         
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output,
+            batch_size=int(self.batch),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -302,7 +295,7 @@ class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-5, 1e-5)
 
 
 def get_benchmark() -> BaseBenchmark:
@@ -313,20 +306,6 @@ def get_benchmark() -> BaseBenchmark:
             def __init__(self) -> None:
                 super().__init__()
                 self.register_workload_metadata(requests_per_iteration=1.0)
-                probe = torch.zeros(1, device=self.device)
-                output = torch.zeros(1, device=self.device)
-                self._set_verification_payload(
-                    inputs={"probe": probe},
-                    output=output,
-                    batch_size=1,
-                    parameter_count=0,
-                    precision_flags={
-                        "fp16": False,
-                        "bf16": False,
-                        "fp8": False,
-                        "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                    },
-                )
             def get_config(self) -> BenchmarkConfig:
                 return BenchmarkConfig(iterations=1, warmup=5)
             def benchmark_fn(self) -> None:

@@ -32,7 +32,7 @@ class MyBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.input_data: Optional[torch.Tensor] = None
-        self._verify_input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
         """Setup phase: initialize models, data, etc."""
@@ -42,25 +42,25 @@ class MyBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         self.model = nn.Linear(256, 256).to(self.device)
         self.input_data = torch.randn(32, 256, device=self.device)
-        self._verify_input = self.input_data.detach().clone()
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
         """Function to benchmark. Must be callable with no args."""
-        if self.model is None or self.input_data is None or self._verify_input is None:
+        if self.model is None or self.input_data is None:
             raise RuntimeError("setup() must initialize model and inputs before benchmarking")
 
         with self._nvtx_range("my_benchmark_operation"):
-            output = self.model(self.input_data)
-            self._synchronize()
+            self.output = self.model(self.input_data)
 
-        # Capture verification payload from the timed run (no fallbacks)
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.input_data is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
-            inputs={"input": self._verify_input},
-            output=output.detach().clone(),
-            batch_size=self._verify_input.shape[0],
+            inputs={"input": self.input_data},
+            output=self.output,
+            batch_size=int(self.input_data.shape[0]),
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             output_tolerance=(1e-4, 1e-4),
         )
@@ -69,7 +69,7 @@ class MyBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Cleanup phase."""
         self.model = None
         self.input_data = None
-        self._verify_input = None
+        self.output = None
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -81,20 +81,6 @@ class MyBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def validate_result(self) -> Optional[str]:
         """Optional: validate benchmark result, return error message if invalid."""
         return None
-
-    # Verification methods (fail-fast; provided by mixin)
-    def get_verify_output(self) -> torch.Tensor:
-        """Return benchmark output captured during the timed run."""
-        return super().get_verify_output()
-
-    def get_input_signature(self):
-        """Return workload description for verification."""
-        return super().get_input_signature()
-
-    def get_output_tolerance(self):
-        """Return (rtol, atol) tolerance for output comparison."""
-        return super().get_output_tolerance()
-
 
 def get_benchmark():
     """Factory function that returns a benchmark instance.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -28,32 +28,34 @@ from core.utils.compile_utils import enable_tf32  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
-class _AttentionBlock(nn.Module):
-    """Minimal Transformer block with attention + FFN."""
+class SimpleLLM(nn.Module):
+    """Shared model definition to keep baseline/optimized outputs comparable."""
 
-    def __init__(self, hidden: int, heads: int, *, device: torch.device, dtype: torch.dtype):
+    def __init__(self, hidden_dim: int = 1024, num_layers: int = 12):
         super().__init__()
-        self.norm1 = nn.LayerNorm(hidden, device=device, dtype=dtype)
-        self.attn = nn.MultiheadAttention(
-            embed_dim=hidden,
-            num_heads=heads,
-            batch_first=True,
-            device=device,
-            dtype=dtype,
-        )
-        self.norm2 = nn.LayerNorm(hidden, device=device, dtype=dtype)
-        self.ff = nn.Sequential(
-            nn.Linear(hidden, 4 * hidden, device=device, dtype=dtype),
-            nn.GELU(),
-            nn.Linear(4 * hidden, hidden, device=device, dtype=dtype),
-        )
+        self.hidden_dim = hidden_dim
+        self.layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(num_layers)])
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        q = k = v = self.norm1(x)
-        attn_out, _ = self.attn(q, k, v, need_weights=False)
-        x = x + attn_out
-        ff_out = self.ff(self.norm2(x))
-        return x + ff_out
+    def prefill(self, prompt_tokens: torch.Tensor) -> torch.Tensor:
+        x = torch.randn(
+            prompt_tokens.size(0),
+            prompt_tokens.size(1),
+            self.hidden_dim,
+            device=prompt_tokens.device,
+            dtype=torch.bfloat16,
+        )
+        for layer in self.layers:
+            x = torch.relu(layer(x))
+        return x[:, -1:, :]
+
+    def decode(self, kv_cache: torch.Tensor, num_tokens: int = 16) -> torch.Tensor:
+        outputs = []
+        x = kv_cache
+        for _ in range(num_tokens):
+            for layer in self.layers:
+                x = torch.relu(layer(x))
+            outputs.append(x)
+        return torch.cat(outputs, dim=1)
 
 
 class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -61,22 +63,19 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        # Match baseline dimensions for fair comparison
+        # Match baseline dimensions for fair comparison.
         self.dtype = torch.bfloat16
-        self.hidden = 1024  # Matches baseline SimpleLLM
-        self.heads = 16
-        self.prefill_seq = 256  # Match baseline
-        self.decode_seq = 16  # Match baseline
-        self.batch_size = 1  # Match baseline
+        self.hidden = 1024
+        self.prefill_seq = 256
+        self.decode_seq = 16
+        self.batch_size = 1
 
-        self.prefill_model: Optional[nn.Module] = None
-        self.decode_model: Optional[nn.Module] = None
-        self.prefill_input: Optional[torch.Tensor] = None
-        self.decode_input: Optional[torch.Tensor] = None
-        self.prefill_stream = torch.cuda.Stream()
-        self.decode_stream = torch.cuda.Stream()
-        self._prefill_done = torch.cuda.Event()
-        self._checksum: float = 0.0
+        self.model: Optional[SimpleLLM] = None
+        self.prompt: Optional[torch.Tensor] = None
+        self.prefill_stream: Optional[torch.cuda.Stream] = None
+        self.decode_stream: Optional[torch.cuda.Stream] = None
+        self._prefill_done: Optional[torch.cuda.Event] = None
+        self._history: Dict[str, list[float]] = {"ttft": [], "tpot": []}
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(self.batch_size * (self.prefill_seq + self.decode_seq)),
@@ -87,91 +86,88 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def setup(self) -> None:
         enable_tf32()
-        torch.manual_seed(17)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
 
-        # Independent models for each phase keep parameters resident and avoid contention.
-        self.prefill_model = _AttentionBlock(
-            hidden=self.hidden,
-            heads=self.heads,
-            device=self.device,
-            dtype=self.dtype,
-        ).eval()
-        self.decode_model = _AttentionBlock(
-            hidden=self.hidden,
-            heads=self.heads,
-            device=self.device,
-            dtype=self.dtype,
-        ).eval()
+        self.model = SimpleLLM(hidden_dim=self.hidden, num_layers=12).to(self.device).to(self.dtype).eval()
+        self.prompt = torch.randint(0, 10000, (self.batch_size, self.prefill_seq), device=self.device)
 
-        self.prefill_input = torch.randn(
-            self.batch_size,
-            self.prefill_seq,
-            self.hidden,
-            device=self.device,
-            dtype=self.dtype,
-        )
-        self.decode_input = torch.randn(
-            self.batch_size,
-            self.decode_seq,
-            self.hidden,
-            device=self.device,
-            dtype=self.dtype,
-        )
+        self.prefill_stream = torch.cuda.Stream(device=self.device)
+        self.decode_stream = torch.cuda.Stream(device=self.device)
+        self._prefill_done = torch.cuda.Event()
 
-        # Warm up decode path to reduce first-iteration variance.
+        # Warm up to reduce first-iteration variance.
         with torch.no_grad():
-            for _ in range(2):
-                _ = self.decode_model(self.decode_input)
-        torch.cuda.synchronize()
-        self.parameter_count = sum(p.numel() for p in self.prefill_model.parameters()) + sum(
-            p.numel() for p in self.decode_model.parameters()
-        )
+            kv_cache = self.model.prefill(self.prompt)
+            _ = self.model.decode(kv_cache, num_tokens=1)
+        torch.cuda.synchronize(self.device)
+        self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
-    def benchmark_fn(self) -> None:
-        if any(item is None for item in (self.prefill_model, self.decode_model, self.prefill_input, self.decode_input)):
-            raise RuntimeError("Models or inputs not initialized")
+    def benchmark_fn(self) -> Dict[str, list[float]]:
+        if self.model is None or self.prompt is None or self.prefill_stream is None or self.decode_stream is None or self._prefill_done is None:
+            raise RuntimeError("Model/inputs/streams not initialized")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("optimized_disaggregated.prefill_decode", enable=enable_nvtx):
             with torch.no_grad():
-                # Prefill on its own stream
+                request_start = self._record_start()
+
+                torch.cuda.synchronize(self.device)
                 with torch.cuda.stream(self.prefill_stream):
-                    prefill_out = self.prefill_model(self.prefill_input)
+                    kv_cache = self.model.prefill(self.prompt)
                     self._prefill_done.record(self.prefill_stream)
+                torch.cuda.synchronize(self.device)
+                ttft_ms = self._record_stop(request_start)
 
-                # Decode runs on a separate stream after prefill completes.
-                with torch.cuda.stream(self.decode_stream):
-                    self.decode_stream.wait_event(self._prefill_done)
-                    decode_out = self.decode_model(self.decode_input)
+                token_output = kv_cache
+                tpot_times_ms: list[float] = []
+                for _ in range(self.decode_seq):
+                    token_start = self._record_start()
+                    with torch.cuda.stream(self.decode_stream):
+                        self.decode_stream.wait_event(self._prefill_done)
+                        token_output = self.model.decode(token_output[:, -1:, :], num_tokens=1)
+                    torch.cuda.synchronize(self.device)
+                    tpot_times_ms.append(self._record_stop(token_start))
 
-                # Wait for both streams and accumulate a checksum for determinism.
-                torch.cuda.current_stream().wait_stream(self.prefill_stream)
-                torch.cuda.current_stream().wait_stream(self.decode_stream)
-                self.output = torch.stack([prefill_out.float().sum(), decode_out.float().sum()])
-                self._checksum = float(self.output.sum())
-                self._set_verification_payload(
-                    inputs={
-                        "prefill_input": self.prefill_input,
-                        "decode_input": self.decode_input,
-                    },
-                    output=self.output,
-                    batch_size=self.batch_size,
-                    parameter_count=self.parameter_count,
-                    precision_flags={
-                        "fp16": False,
-                        "bf16": self.dtype == torch.bfloat16,
-                        "fp8": False,
-                        "tf32": torch.backends.cuda.matmul.allow_tf32,
-                    },
-                    output_tolerance=(0.1, 1.0),
-                )
+                self.output = token_output
+                self._history["ttft"].append(ttft_ms)
+                self._history["tpot"].extend(tpot_times_ms)
+                return {
+                    "ttft_times_ms": [ttft_ms],
+                    "tpot_times_ms": tpot_times_ms,
+                }
+
+    def capture_verification_payload(self) -> None:
+        if self.prompt is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        dtype = self.output.dtype
+        self._set_verification_payload(
+            inputs={"prompt": self.prompt},
+            output=self.output,
+            batch_size=int(self.batch_size),
+            parameter_count=self.parameter_count,
+            precision_flags={
+                "fp16": dtype == torch.float16,
+                "bf16": dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
+
+    def get_custom_streams(self):
+        if self.prefill_stream is None or self.decode_stream is None:
+            return None
+        return [self.prefill_stream, self.decode_stream]
 
     def teardown(self) -> None:
-        self.prefill_model = None
-        self.decode_model = None
-        self.prefill_input = None
-        self.decode_input = None
-        self._checksum = 0.0
+        self.model = None
+        self.prompt = None
+        self.prefill_stream = None
+        self.decode_stream = None
+        self._prefill_done = None
+        self.output = None
+        self._history = {"ttft": [], "tpot": []}
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -193,10 +189,12 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def validate_result(self) -> Optional[str]:
-        if self.prefill_model is None or self.decode_model is None:
-            return "Models not initialized"
-        if self.prefill_input is None or self.decode_input is None:
-            return "Inputs not initialized"
+        if self.model is None or self.prompt is None:
+            return "Model/inputs not initialized"
+        if not self._history["ttft"]:
+            return "No TTFT samples recorded"
+        if not self._history["tpot"]:
+            return "No TPOT samples recorded"
         return None
 
 

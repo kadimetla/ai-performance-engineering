@@ -19,6 +19,7 @@ if str(repo_root) not in sys.path:
 
 from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
+from ch15.verification_payload_mixin import VerificationPayloadMixin  # noqa: E402
 
 
 class BaselineOverlapMoE(nn.Module):
@@ -42,23 +43,25 @@ class BaselineOverlapMoE(nn.Module):
         return self.combine(outputs)
 
 
-class BaselineMoeOverlapBenchmark(BaseBenchmark):
+class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.model: Optional[BaselineOverlapMoE] = None
         self.inputs: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(tokens_per_iteration=1024.0)
         self._verify_tokens: Optional[torch.Tensor] = None
+        self.output = None
 
     def setup(self) -> None:
-        torch.manual_seed(3)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         hidden = 1024
         batch = 64
         seq = 16
         self.model = BaselineOverlapMoE(hidden_dim=hidden, num_experts=4).to(self.device).to(torch.bfloat16)
         self.inputs = torch.randn(batch, seq, hidden, device=self.device, dtype=torch.bfloat16)
         torch.cuda.synchronize(self.device)
-        self._verify_tokens = torch.randn(2, 2, hidden, device=self.device, dtype=torch.bfloat16)
+        self._verify_tokens = self.inputs[:2, :2].detach()
 
     def benchmark_fn(self) -> Optional[dict]:
         if self.model is None or self.inputs is None:
@@ -68,23 +71,24 @@ class BaselineMoeOverlapBenchmark(BaseBenchmark):
         with nvtx_range("moe_overlap_baseline", enable=enable_nvtx):
             with torch.no_grad():
                 self.output = self.model(self.inputs)
-        torch.cuda.synchronize(self.device)
-        if self.output is not None and self._verify_tokens is not None:
-            self._set_verification_payload(
-                inputs={"tokens": self._verify_tokens},
-                output=self.output,
-                batch_size=int(self._verify_tokens.shape[0]),
-                parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
-                precision_flags={
-                    "fp16": False,
-                    "bf16": True,
-                    "fp8": False,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-                },
-                output_tolerance=(1e-3, 1e-3),
-            )
         return {}
 
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.inputs is None or self.output is None or self._verify_tokens is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"tokens": self._verify_tokens},
+            output=self.output,
+            batch_size=int(self.inputs.shape[0]),
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": True,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
 
@@ -100,18 +104,6 @@ class BaselineMoeOverlapBenchmark(BaseBenchmark):
             batch_size=getattr(self, 'batch_size', 1),
             max_batch_size=getattr(self, 'max_batch_size', 32),
         )
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return super().get_input_signature()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return super().get_output_tolerance()
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineMoeOverlapBenchmark()

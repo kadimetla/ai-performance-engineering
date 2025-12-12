@@ -213,20 +213,6 @@ class _DisaggregatedNVLinkPoolBenchmark(VerificationPayloadMixin, BaseBenchmark)
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=1.0)
-        probe = torch.zeros(1, device=self.device)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=torch.zeros(1, device=self.device),
-            batch_size=1,
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-            output_tolerance=(1e-3, 1e-3),
-        )
 
     def benchmark_fn(self) -> None:
         raise RuntimeError("SKIPPED: optimized_disaggregated_nvlink_pool requires >=2 GPUs")

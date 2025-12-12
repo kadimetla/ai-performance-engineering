@@ -45,12 +45,26 @@ class BaselineGb200LocalityBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Destination buffer on device.
         self.device_buf = torch.empty_like(self.host_buf, device=self.device, pin_memory=False)
         torch.cuda.synchronize(self.device)
-        probe = torch.ones(64, dtype=torch.float32, device=self.device)
-        probe_out = (probe + 1.0).sum().unsqueeze(0)
+
+    def benchmark_fn(self) -> None:
+        assert self.host_buf is not None and self.device_buf is not None
+        with self._nvtx_range("host_to_device+compute"):
+            self.device_buf.copy_(self.host_buf, non_blocking=True)
+            self.device_buf.add_(1.0)
+        # Keep the reduction in the workload, but verify via a representative slice.
+        _ = self.device_buf.sum()
+        self.output = self.device_buf[: 256 * 256].detach()
+        self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.host_buf is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.host_buf[: 256 * 256].view(256, 256)
+        output = self.output.view(256, 256)
         self._set_verification_payload(
-            inputs={"probe": probe},
-            output=probe_out,
-            batch_size=probe.shape[0],
+            inputs={"buf": probe},
+            output=output,
+            batch_size=int(probe.shape[0]),
             parameter_count=0,
             precision_flags={
                 "fp16": False,
@@ -58,15 +72,8 @@ class BaselineGb200LocalityBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
+            output_tolerance=(1e-5, 1e-5),
         )
-
-    def benchmark_fn(self) -> None:
-        assert self.host_buf is not None and self.device_buf is not None
-        with self._nvtx_range("host_to_device+compute"):
-            self.device_buf.copy_(self.host_buf, non_blocking=True)
-            self.device_buf.add_(1.0)
-        self.output = self.device_buf.sum().unsqueeze(0)
-        self._synchronize()
 
     def teardown(self) -> None:
         self.host_buf = None

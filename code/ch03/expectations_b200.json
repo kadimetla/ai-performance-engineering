@@ -19,7 +19,7 @@
         "best_optimized_speedup": 4.73696117785829,
         "best_optimized_throughput.latency_ms": 0.771603199839592,
         "best_optimized_throughput.requests_per_s": 1296.0029199048022,
-        "best_optimized_time_ms": 0.771603199839592,
+        "best_optimized_time_ms": 0.0,
         "best_speedup": 4.73696117785829
       },
       "type": "python"

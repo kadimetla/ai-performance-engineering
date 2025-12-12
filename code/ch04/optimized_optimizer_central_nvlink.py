@@ -25,6 +25,7 @@ class OptimizedOptimizerCentralNvlinkBenchmark(VerificationPayloadMixin, BaseBen
         self.models: List[nn.Linear] = []
         self.master_weights: List[torch.Tensor] = []
         self.momentum: List[torch.Tensor] = []
+        self.inputs: List[torch.Tensor] = []
         self.batch_size = 8
         self.hidden = 512
         self.root_device = torch.device("cuda:0")
@@ -49,7 +50,8 @@ class OptimizedOptimizerCentralNvlinkBenchmark(VerificationPayloadMixin, BaseBen
                         pass
 
     def setup(self) -> None:
-        torch.manual_seed(123)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self._enable_peer_access()
         num_gpus = max(1, torch.cuda.device_count())
         skip_if_insufficient_gpus(2)
@@ -63,28 +65,13 @@ class OptimizedOptimizerCentralNvlinkBenchmark(VerificationPayloadMixin, BaseBen
             master_m = torch.zeros_like(master_w, dtype=torch.float32, device=self.root_device)
             self.master_weights.append(master_w)
             self.momentum.append(master_m)
-        probe_device = self.models[0].weight.device if self.models else self.device
-        probe = torch.randn(4, self.hidden, device=probe_device)
-        output = torch.zeros(4, self.hidden, device=self.root_device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for m in self.models for p in m.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
+            self.inputs.append(torch.randn(self.batch_size, self.hidden, device=device, dtype=torch.float32))
         self._synchronize()
 
     def benchmark_fn(self) -> None:
-        assert len(self.models) == len(self.master_weights) == len(self.momentum)
+        assert len(self.models) == len(self.master_weights) == len(self.momentum) == len(self.inputs)
         with self._nvtx_range("optimized_optimizer_central_nvlink"):
-            for model, master_w, mom in zip(self.models, self.master_weights, self.momentum):
-                x = torch.randn(self.batch_size, self.hidden, device=model.weight.device)
+            for model, master_w, mom, x in zip(self.models, self.master_weights, self.momentum, self.inputs):
                 y = model(x)
                 loss = y.pow(2).mean()
                 loss.backward()
@@ -100,10 +87,31 @@ class OptimizedOptimizerCentralNvlinkBenchmark(VerificationPayloadMixin, BaseBen
                 model.weight.grad.zero_()
             self._synchronize()
 
+    def capture_verification_payload(self) -> None:
+        if not self.models or not self.master_weights or not self.momentum or not self.inputs:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        model0 = self.models[0]
+        x0 = self.inputs[0]
+        output = model0.weight[:32, :32].detach().clone()
+        self._set_verification_payload(
+            inputs={"x": x0},
+            output=output,
+            batch_size=int(self.batch_size),
+            parameter_count=sum(p.numel() for m in self.models for p in m.parameters()),
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-6, 1e-6),
+        )
+
     def teardown(self) -> None:
         self.models.clear()
         self.master_weights.clear()
         self.momentum.clear()
+        self.inputs.clear()
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -136,7 +144,7 @@ class OptimizedOptimizerCentralNvlinkBenchmark(VerificationPayloadMixin, BaseBen
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-6, 1e-6)
 
 
 def get_benchmark() -> BaseBenchmark:

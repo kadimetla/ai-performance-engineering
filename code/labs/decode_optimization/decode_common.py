@@ -116,7 +116,6 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._compile_error: Optional[str] = None
         self.sdpa_ctx_factory = prefer_sdpa_backends if prefer_sdpa_backends is not None else nullcontext
         self.fp8_recipe = None
-        self.metrics: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
         if TE_AVAILABLE:
@@ -490,15 +489,22 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._custom_metrics["compile_error"] = 1.0
         if self._graph_error:
             self._custom_metrics["graph_capture_failed"] = 1.0
-        self._finalize_output()
 
     def _finalize_output(self) -> None:
-        """Capture a slice of model state for verification and tie it to jitter."""
+        """Capture a slice of model state for verification."""
         hidden_slice = self.state_buffer[:1, : min(8, self.state_buffer.shape[1])].float()
         summary_tensor = hidden_slice.reshape(1, -1)
-        if self.metrics is None or tuple(self.metrics.shape) != tuple(summary_tensor.shape):
-            self.metrics = torch.randn_like(summary_tensor)
-        self.output = (summary_tensor + self.metrics).detach().clone()
+        self.output = summary_tensor.detach().clone()
+
+    def capture_verification_payload(self) -> None:
+        if any(
+            not hasattr(self, name) or getattr(self, name) is None
+            for name in ("gpu_prompt", "state_buffer")
+        ):
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        self._finalize_output()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must populate output before capture_verification_payload()")
         config_tensor = torch.tensor(
             [self.cfg.batch_size, self.cfg.prompt_tokens, self.cfg.decode_tokens],
             device="cpu",
@@ -506,8 +512,8 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
         self._set_verification_payload(
             inputs={
+                "gpu_prompt": self.gpu_prompt,
                 "state_buffer": self.state_buffer,
-                "metrics": self.metrics,
                 "config": config_tensor,
             },
             output=self.output,
@@ -516,6 +522,7 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             precision_flags={
                 "fp16": self.dtype == torch.float16,
                 "bf16": self.dtype == torch.bfloat16,
+                "fp8": bool(self._fp8_enabled),
                 "tf32": torch.backends.cuda.matmul.allow_tf32,
             },
             output_tolerance=(0.1, 1.0),
@@ -532,7 +539,6 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             if hasattr(self, attr):
                 setattr(self, attr, None)
         torch.cuda.empty_cache()
-        self.metrics = None
         self.output = None
         super().teardown()
 

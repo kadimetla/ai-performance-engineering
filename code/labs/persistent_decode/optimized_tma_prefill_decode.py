@@ -418,23 +418,7 @@ class OptimizedTmaPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
             self._history.setdefault("per_token_ms", []).append(total_ms / max(1, self.seq_len))
             self._history.setdefault("graph_path", []).append("full_graph")
             if self.inputs is not None:
-                self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
-                self._set_verification_payload(
-                    inputs={
-                        "q": self.inputs.q.detach(),
-                        "k": self.inputs.k.detach(),
-                        "v": self.inputs.v.detach(),
-                    },
-                    output=self.output,
-                    batch_size=self.batch,
-                    parameter_count=0,
-                    precision_flags={
-                        "fp16": self.inputs.q.dtype == torch.float16,
-                        "bf16": self.inputs.q.dtype == torch.bfloat16,
-                        "tf32": torch.backends.cuda.matmul.allow_tf32,
-                    },
-                    output_tolerance=(0.1, 1.0),
-                )
+                self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])]
             else:
                 raise RuntimeError("Inputs not initialized for verification")
             return
@@ -457,7 +441,6 @@ class OptimizedTmaPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
             for evt in pref_events:
                 evt.synchronize()
         end_prefill.record()
-        self._synchronize()
         torch.cuda.synchronize()
         ttft_ms = start_prefill.elapsed_time(end_prefill)
         decode_ms = start_decode.elapsed_time(end_decode)
@@ -466,25 +449,35 @@ class OptimizedTmaPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
         self._history.setdefault("per_token_ms", []).append(decode_ms / max(1, self.seq_len))
         self._history.setdefault("graph_path", []).append("piecewise_graph")
         if self.inputs is not None:
-            self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
-            self._set_verification_payload(
-                inputs={
-                    "q": self.inputs.q.detach(),
-                    "k": self.inputs.k.detach(),
-                    "v": self.inputs.v.detach(),
-                },
-                output=self.output,
-                batch_size=self.batch,
-                parameter_count=0,
-                precision_flags={
-                    "fp16": self.inputs.q.dtype == torch.float16,
-                    "bf16": self.inputs.q.dtype == torch.bfloat16,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32,
-                },
-                output_tolerance=(0.1, 1.0),
-            )
+            self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])]
         else:
             raise RuntimeError("Inputs not initialized for verification")
+
+    def capture_verification_payload(self) -> None:
+        if self.inputs is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={
+                "q": self.inputs.q,
+                "k": self.inputs.k,
+                "v": self.inputs.v,
+            },
+            output=self.output.to(dtype=torch.float32),
+            batch_size=self.batch,
+            parameter_count=0,
+            precision_flags={
+                "fp16": self.inputs.q.dtype == torch.float16,
+                "bf16": self.inputs.q.dtype == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
+
+    def get_custom_streams(self):
+        streams = list(self.prefill_streams) if self.prefill_streams else []
+        streams.append(self.decode_stream)
+        return streams
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()

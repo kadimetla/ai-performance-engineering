@@ -34,15 +34,6 @@ class MultiGPUDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
         self.verification_not_applicable_reason = "SKIPPED: requires >=2 GPUs (torchrun only)"
-        meta = torch.zeros((1, 1), dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"metrics": meta},
-            output=self.metrics,
-            batch_size=1,
-            parameter_count=0,
-            precision_flags={},
-            output_tolerance=(0.1, 1.0),
-        )
 
     def benchmark_fn(self) -> None:  # pragma: no cover - torchrun path only
         raise RuntimeError("SKIPPED: requires >=2 GPUs (torchrun path only)")
@@ -149,4 +140,3 @@ def get_benchmark() -> BaseBenchmark:
 
 if __name__ == "__main__":
     main()
-

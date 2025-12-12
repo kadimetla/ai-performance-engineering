@@ -73,6 +73,7 @@ class BaselineNoOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.optimizer = None
         self.data = None
         self.target = None
+        self.output = None
         self.rank = 0
         self.world_size = 1
         self.initialized = False
@@ -108,20 +109,6 @@ class BaselineNoOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
         print("[baseline_no_overlap] data allocated", flush=True)
         torch.cuda.synchronize(self.device)
         print("[baseline_no_overlap] setup done", flush=True)
-        probe = torch.randn(8, self.hidden_size, device=self.device)
-        output = torch.zeros(8, 1, device=self.device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for p in self.model.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: DDP training step without overlap."""
@@ -136,7 +123,26 @@ class BaselineNoOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
             loss.backward()
             self.optimizer.step()
             self.optimizer.zero_grad()
+        self.output = output.detach()
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.data is None or self.target is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        self._set_verification_payload(
+            inputs={"data": self.data, "target": self.target},
+            output=self.output,
+            batch_size=int(self.batch_size),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(0.1, 1.0),
+        )
 
     
     def teardown(self) -> None:

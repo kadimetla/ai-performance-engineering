@@ -43,20 +43,6 @@ class OptimizedGb200LocalityBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.device_template = torch.ones(self.numel, device=self.device, dtype=torch.float32)
         self.device_buf = torch.empty_like(self.device_template)
         torch.cuda.synchronize(self.device)
-        probe = torch.ones(64, dtype=torch.float32, device=self.device)
-        probe_out = (probe + 1.0).sum().unsqueeze(0)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=probe_out,
-            batch_size=probe.shape[0],
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
 
     def benchmark_fn(self) -> None:
         assert self.device_buf is not None and self.device_template is not None
@@ -64,8 +50,28 @@ class OptimizedGb200LocalityBenchmark(VerificationPayloadMixin, BaseBenchmark):
             # Reset from a device-resident template to avoid host traffic while keeping outputs identical
             self.device_buf.copy_(self.device_template)
             self.device_buf.add_(1.0)
-        self.output = self.device_buf.sum().unsqueeze(0)
+        _ = self.device_buf.sum()
+        self.output = self.device_buf[: 256 * 256].detach()
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.device_template is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        probe = self.device_template[: 256 * 256].view(256, 256)
+        output = self.output.view(256, 256)
+        self._set_verification_payload(
+            inputs={"buf": probe},
+            output=output,
+            batch_size=int(probe.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-5, 1e-5),
+        )
 
     def teardown(self) -> None:
         self.device_buf = None

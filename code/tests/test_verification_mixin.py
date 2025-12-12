@@ -14,7 +14,7 @@ class _DummyBenchmark(VerificationPayloadMixin):
     def __init__(self):
         self._verification_payload = None
 
-    def prepare(self) -> None:
+    def capture_verification_payload(self) -> None:
         x = torch.ones(2)
         y = x + 1
         self._set_verification_payload(
@@ -28,7 +28,7 @@ class _DummyBenchmark(VerificationPayloadMixin):
 
 def test_verification_payload_round_trip() -> None:
     bench = _DummyBenchmark()
-    bench.prepare()
+    bench.capture_verification_payload()
 
     inputs = bench.get_verify_inputs()
     assert set(inputs.keys()) == {"x"}

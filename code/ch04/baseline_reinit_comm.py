@@ -48,6 +48,7 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.rank = 0
         self.world_size = 1
+        self.input_tensor = None
         self.tensor = None
         self.initialized = False
         self._workload = WorkloadMetadata(
@@ -64,29 +65,20 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
         local_rank = int(os.environ.get("LOCAL_RANK", self.rank))
         self.device = torch.device(f"cuda:{local_rank}")
         torch.cuda.set_device(self.device)
-        self.tensor = torch.ones(1, device=self.device)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        self.input_tensor = torch.randn(1, 1, device=self.device, dtype=torch.float32)
+        self.tensor = torch.empty_like(self.input_tensor)
         self._synchronize()
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
             bytes_per_iteration=self._workload.bytes_per_iteration,
         )
-        probe = torch.ones(1, device=self.device, dtype=torch.float32)
-        output = torch.zeros(1, device=self.device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"tensor": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=0,
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
     
     def benchmark_fn(self) -> None:
         """Benchmark: Reinitialize NCCL every iteration."""
+        if self.tensor is None or self.input_tensor is None:
+            raise RuntimeError("Tensor not initialized")
         with self._nvtx_range("reinit_comm"):
             # Anti-pattern: reinitialize NCCL every iteration
             if dist.is_initialized():
@@ -100,14 +92,34 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
             )
             
             # Perform all-reduce
+            self.tensor.copy_(self.input_tensor)
             dist.all_reduce(self.tensor)
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.input_tensor is None or self.tensor is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        output = self.tensor.detach().clone()
+        self._set_verification_payload(
+            inputs={"input": self.input_tensor},
+            output=output,
+            batch_size=int(self.input_tensor.shape[0]),
+            parameter_count=0,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-6, 1e-6),
+        )
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         if dist.is_initialized():
             dist.destroy_process_group()
+        self.input_tensor = None
         self.tensor = None
         super().teardown()
     
@@ -136,8 +148,8 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if not dist.is_initialized():
             return "Distributed process group not initialized"
         # Check tensor shape and values
-        if self.tensor.shape != (1,):
-            return f"Tensor shape mismatch: expected (1,), got {self.tensor.shape}"
+        if self.tensor.shape != (1, 1):
+            return f"Tensor shape mismatch: expected (1, 1), got {self.tensor.shape}"
         if not torch.isfinite(self.tensor).all():
             return "Tensor contains non-finite values"
         return None
@@ -152,7 +164,7 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+        return (1e-6, 1e-6)
 
 
 def get_benchmark() -> BaseBenchmark:

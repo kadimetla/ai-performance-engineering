@@ -22,6 +22,7 @@ from core.harness.benchmark_harness import (
     WorkloadMetadata,
 )
 from core.utils.logger import get_logger
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 logger = get_logger(__name__)
 
@@ -51,6 +52,9 @@ class BaselineDisaggregatedPrefillDecode:
     
     def setup(self):
         """Initialize models (simulated for both pools)."""
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         hidden_size = 4096
         
         # Simulated prefill model
@@ -89,15 +93,16 @@ class BaselineDisaggregatedPrefillDecode:
         
         # Decode phase (on decode GPUs)
         decode_start = time.perf_counter()
-        
-        decode_outputs = []
+        last_decode_output = None
         for _ in range(self.decode_length):
             # Simplified decode step
-            decode_output = self.decode_model(kv_cache_decode[:, -1:, :])
-            decode_outputs.append(decode_output)
-        
+            last_decode_output = self.decode_model(kv_cache_decode[:, -1:, :])
+
         torch.cuda.synchronize()
         decode_time = time.perf_counter() - decode_start
+        if last_decode_output is None:
+            raise RuntimeError("Decode did not produce output")
+        self.output = last_decode_output
         
         total_time = time.perf_counter() - start_total
         
@@ -151,28 +156,43 @@ def run_benchmark(
     return {"mean_time_ms": result.timing.mean_ms, **metrics}
 
 
-class _DisaggregatedPrefillDecodeBenchmark(BaseBenchmark):
+class _DisaggregatedPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrapper benchmark for disaggregated prefill/decode."""
 
     def __init__(self) -> None:
         super().__init__()
         self._impl = BaselineDisaggregatedPrefillDecode()
         self._metrics = {}
+        self._verify_probe = None
+        self.output = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self._impl.setup()
-        probe = torch.zeros(1, device=self.device)
-        output = torch.zeros(1, device=self.device)
+        prefill_input = getattr(self._impl, "prefill_input", None)
+        if prefill_input is None or not isinstance(prefill_input, torch.Tensor):
+            raise RuntimeError("BaselineDisaggregatedPrefillDecode.setup() must create prefill_input")
+        self._verify_probe = prefill_input[:1, :1, :256].detach()
+
+    def benchmark_fn(self) -> None:
+        self._metrics = self._impl.run()
+        self.output = getattr(self._impl, "output", None)
+
+    def capture_verification_payload(self) -> None:
+        if self._verify_probe is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         param_count = 0
         if hasattr(self._impl, "prefill_model"):
             param_count += sum(p.numel() for p in self._impl.prefill_model.parameters())
         if hasattr(self._impl, "decode_model"):
             param_count += sum(p.numel() for p in self._impl.decode_model.parameters())
         self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=1,
+            inputs={"probe": self._verify_probe},
+            output=self.output,
+            batch_size=int(getattr(self._impl, "batch_size", 1)),
             parameter_count=param_count,
             precision_flags={
                 "fp16": False,
@@ -182,10 +202,6 @@ class _DisaggregatedPrefillDecodeBenchmark(BaseBenchmark):
             },
             output_tolerance=(1e-3, 1e-3),
         )
-
-    def benchmark_fn(self) -> None:
-        self._metrics = self._impl.run()
-        self._synchronize()
 
     def teardown(self) -> None:
         self._impl.cleanup()

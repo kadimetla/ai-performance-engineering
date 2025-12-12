@@ -71,21 +71,6 @@ class OptimizedGpuReductionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Pre-allocate reduction buffer
         self._reduction_buffer = torch.zeros(shard_size, self.hidden_dim, device=self.device)
         torch.cuda.synchronize(self.device)
-        probe = torch.randn(4, self.hidden_dim, device=self.device)
-        with torch.no_grad():
-            probe_output = self.model(probe).detach()
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=probe_output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for p in self.model.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
 
     def benchmark_fn(self) -> None:
         from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
@@ -112,6 +97,24 @@ class OptimizedGpuReductionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.output.div_(self.num_shards)
         
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self.input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=self.output,
+            batch_size=int(self.batch_size),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-4, 1e-4),
+        )
 
     def teardown(self) -> None:
         self.model = None

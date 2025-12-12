@@ -65,6 +65,8 @@ class OptimizedPipelineParallelismBenchmark(VerificationPayloadMixin, BaseBenchm
             enable_tf32()
 
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         
         # Use single-GPU optimized path when only 1 GPU available
         self._single_gpu_mode = (self.num_gpus == 1)
@@ -134,23 +136,8 @@ class OptimizedPipelineParallelismBenchmark(VerificationPayloadMixin, BaseBenchm
             with self._nvtx_range("optimized_single_gpu"):
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     self.output = self._compiled_model(self._input_data)
-            self._synchronize()
             self._bubble_fraction = 0.0  # No pipeline bubble
             self._last_stage_durations_ms = [0.0]
-            dtype = self.output.dtype
-            self._set_verification_payload(
-                inputs={"input": self._input_data},
-                output=self.output,
-                batch_size=self._input_data.shape[0],
-                parameter_count=self.parameter_count,
-                precision_flags={
-                    "fp16": dtype == torch.float16,
-                    "bf16": dtype == torch.bfloat16,
-                    "fp8": False,
-                    "tf32": torch.backends.cuda.matmul.allow_tf32,
-                },
-                output_tolerance=(0.5, 5.0),
-            )
             return
         
         # Multi-GPU pipeline path
@@ -207,14 +194,25 @@ class OptimizedPipelineParallelismBenchmark(VerificationPayloadMixin, BaseBenchm
         self.parameter_count = self.parameter_count or sum(
             p.numel() for stage in self.pipeline_stages for p in stage.parameters()
         )
-        self._payload_dtype = dtype
 
     def capture_verification_payload(self) -> None:
-        dtype = self._payload_dtype
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before capture_verification_payload()")
+        dtype = self.output.dtype
+        if self._single_gpu_mode:
+            if self._input_data is None:
+                raise RuntimeError("Single-GPU inputs not initialized")
+            inputs = {"input": self._input_data}
+            batch_size = int(self._input_data.shape[0])
+        else:
+            if not self.microbatch_inputs:
+                raise RuntimeError("Pipeline inputs not initialized")
+            inputs = {"input": self.microbatch_inputs[0]}
+            batch_size = int(self.output.shape[0])
         self._set_verification_payload(
-            inputs={"input": self.microbatch_inputs[0] if self.microbatch_inputs else torch.zeros(1, self.hidden_size, device=self.device)},
+            inputs=inputs,
             output=self.output,
-            batch_size=self.output.shape[0],
+            batch_size=batch_size,
             parameter_count=self.parameter_count,
             precision_flags={
                 "fp16": dtype == torch.float16,
@@ -224,6 +222,9 @@ class OptimizedPipelineParallelismBenchmark(VerificationPayloadMixin, BaseBenchm
             },
             output_tolerance=(0.5, 5.0),
         )
+
+    def get_custom_streams(self):
+        return self.stage_streams
 
     def teardown(self) -> None:
         self.pipeline_stages = []

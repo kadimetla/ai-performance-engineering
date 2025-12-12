@@ -26,6 +26,7 @@ from core.harness.benchmark_harness import (
     WorkloadMetadata,
 )
 from core.utils.logger import get_logger
+from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 logger = get_logger(__name__)
 
@@ -205,7 +206,7 @@ def run_benchmark(
     return {"mean_time_ms": result.timing.mean_ms, **metrics}
 
 
-class _MoERoutingTopologyAwareBenchmark(BaseBenchmark):
+class _MoERoutingTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Wrapper benchmark for topology-aware MoE routing."""
 
     def __init__(self) -> None:
@@ -213,16 +214,31 @@ class _MoERoutingTopologyAwareBenchmark(BaseBenchmark):
         self._impl = OptimizedMoERoutingTopologyAware()
         self._metrics = {}
         self.output = None
+        self._verify_probe = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self._impl.setup()
-        probe = torch.zeros(1, device=self.device, dtype=torch.bfloat16)
+        impl_input = getattr(self._impl, "input", None)
+        if impl_input is None or not isinstance(impl_input, torch.Tensor):
+            raise RuntimeError("OptimizedMoERoutingTopologyAware.setup() must create input tensor")
+        self._verify_probe = impl_input[:1, :1, :256].detach()
+
+    def benchmark_fn(self) -> None:
+        self._metrics = self._impl.run()
+        self.output = self._impl.last_output
+
+    def capture_verification_payload(self) -> None:
+        if self.output is None or self._verify_probe is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         param_count = sum(p.numel() for p in self._impl.router.parameters()) if hasattr(self._impl, "router") else 0
         self._set_verification_payload(
-            inputs={"probe": probe},
-            output=torch.zeros(1, device=self.device, dtype=torch.bfloat16),
-            batch_size=1,
+            inputs={"probe": self._verify_probe},
+            output=self.output,
+            batch_size=int(getattr(self._impl, "batch_size", 1)),
             parameter_count=param_count,
             precision_flags={
                 "fp16": False,
@@ -232,11 +248,6 @@ class _MoERoutingTopologyAwareBenchmark(BaseBenchmark):
             },
             output_tolerance=(1e-3, 1e-3),
         )
-
-    def benchmark_fn(self) -> None:
-        self._metrics = self._impl.run()
-        self.output = self._impl.last_output
-        self._synchronize()
 
     def teardown(self) -> None:
         self._impl.cleanup()

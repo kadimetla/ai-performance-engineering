@@ -76,6 +76,8 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.targets: List[torch.Tensor] = []
         self.batch_idx = 0
         self.output: Optional[torch.Tensor] = None
+        self._last_input: Optional[torch.Tensor] = None
+        self._last_target: Optional[torch.Tensor] = None
         # Training benchmarks don't support jitter check
         tokens = self.batch_size * self.input_size
         self._workload = WorkloadMetadata(
@@ -101,20 +103,6 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.targets.append(cpu_target.to(self.device))
         
         torch.cuda.synchronize(self.device)
-        probe = torch.randn(8, self.input_size, device=self.device)
-        output = torch.zeros(8, 1, device=self.device, dtype=torch.float32)
-        self._set_verification_payload(
-            inputs={"probe": probe},
-            output=output,
-            batch_size=probe.shape[0],
-            parameter_count=sum(p.numel() for p in self.model.parameters()),
-            precision_flags={
-                "fp16": False,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        )
 
     def benchmark_fn(self) -> None:
         from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
@@ -124,16 +112,36 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         assert self.model is not None and self.optimizer is not None
         idx = self.batch_idx % len(self.inputs)
         self.batch_idx += 1
+        self._last_input = self.inputs[idx]
+        self._last_target = self.targets[idx]
         
         with nvtx_range("optimized_dataparallel", enable=enable_nvtx):
             # Direct forward/backward - no DataParallel overhead
-            output = self.model(self.inputs[idx])
-            loss = nn.functional.mse_loss(output, self.targets[idx])
+            output = self.model(self._last_input)
+            loss = nn.functional.mse_loss(output, self._last_target)
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
             self.optimizer.step()
         self.output = output.detach()
         self._synchronize()
+
+    def capture_verification_payload(self) -> None:
+        if self._last_input is None or self._last_target is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        self._set_verification_payload(
+            inputs={"data": self._last_input, "target": self._last_target},
+            output=self.output,
+            batch_size=int(self.batch_size),
+            parameter_count=param_count,
+            precision_flags={
+                "fp16": False,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 1e-3),
+        )
 
     def teardown(self) -> None:
         self.model = None

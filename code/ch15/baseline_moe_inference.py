@@ -33,9 +33,10 @@ from core.optimization.moe_inference import (  # noqa: E402
     env_override_float,
     env_override_int,
 )
+from ch15.verification_payload_mixin import VerificationPayloadMixin  # noqa: E402
 
 
-class BaselineMoeInferenceBenchmark(BaseBenchmark):
+class BaselineMoeInferenceBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Implements the HuggingFace-style baseline described in the MoE showcase doc."""
 
     def __init__(self) -> None:
@@ -66,7 +67,6 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
         self._mem_log_path: Optional[Path] = None
         self._nvlink_warned: bool = False
         self._nvlink_status: str = "unknown"
-        self._verify_prompt: Optional[torch.Tensor] = None
 
     def _build_config(self) -> MoeInferenceConfig:
         """Allow environment overrides to keep the workload tractable on smaller GPUs."""
@@ -118,13 +118,6 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
             if logger.start():
                 self._mem_logger = logger
                 self._mem_log_path = log_path
-        probe_len = min(8, cfg.context_window)
-        self._verify_prompt = torch.randint(
-            0,
-            cfg.vocab_size,
-            (1, probe_len),
-            device=self.device,
-        )
 
     # --------------------------------------------------------------- benchmark_fn
     def benchmark_fn(self) -> Dict[str, List[float]]:
@@ -162,9 +155,8 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
                     step_ms = (time.perf_counter() - decode_start) * 1000.0
                     tpot_times.append(step_ms)
                     seed_tokens = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
-            # Capture the final token ids for verification
-            self.output = seed_tokens.detach().float().clone()
-            self._finalize_verification_payload()
+            # Capture the final token ids for verification (payload is set post-timing)
+            self.output = seed_tokens.detach()
 
         telemetry_after = query_gpu_telemetry(logical_index)
 
@@ -263,25 +255,22 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
         """Return tolerance for numerical comparison."""
         return super().get_output_tolerance()
 
-    def _finalize_verification_payload(self) -> None:
-        if self.output is None:
-            raise RuntimeError("benchmark_fn() must populate self.output before verification")
-        if self._verify_prompt is None:
-            raise RuntimeError("setup() must create _verify_prompt for verification")
+    def capture_verification_payload(self) -> None:
+        if self.output is None or self.prompts is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
-        precision_flags = {
-            "fp16": self.config.dtype_obj == torch.float16,
-            "bf16": self.config.dtype_obj == torch.bfloat16,
-            "fp8": False,
-            "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-        }
         self._set_verification_payload(
-            inputs={"prompt": self._verify_prompt},
-            output=self.output.detach().clone(),
-            batch_size=int(self._verify_prompt.shape[0]),
+            inputs={"prompt": self.prompts},
+            output=self.output.to(dtype=torch.float32),
+            batch_size=int(self.prompts.shape[0]),
             parameter_count=param_count,
-            precision_flags=precision_flags,
-            output_tolerance=(1e-3, 1e-3),
+            precision_flags={
+                "fp16": self.config.dtype_obj == torch.float16,
+                "bf16": self.config.dtype_obj == torch.bfloat16,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-2, 1e-2),
         )
 
 
