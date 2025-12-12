@@ -21,6 +21,7 @@ import torch.nn as nn
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -54,7 +55,7 @@ class SimpleStage(nn.Module):
         return self.norm(out + x)
 
 
-class BaselinePipelineSequentialBenchmark(BaseBenchmark):
+class BaselinePipelineSequentialBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Sequential pipeline - no overlap."""
     
     def __init__(self):
@@ -91,6 +92,7 @@ class BaselinePipelineSequentialBenchmark(BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize pipeline stages."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Sequential pipeline stages
         self.stages = nn.ModuleList([
@@ -99,12 +101,6 @@ class BaselinePipelineSequentialBenchmark(BaseBenchmark):
         ]).eval()
         
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
-        
-        # Warmup
-        x = self.inputs
-        for stage in self.stages:
-            x = stage(x)
-        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - sequential pipeline."""
@@ -133,9 +129,11 @@ class BaselinePipelineSequentialBenchmark(BaseBenchmark):
             self.output = x.detach()
 
     def capture_verification_payload(self) -> None:
+        if self.inputs is None or self.output is None or self.stages is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
-            output=self.output.float() if self.output is not None else None,
+            output=self.output.float(),
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.stages.parameters()) if self.stages is not None else 0,
             output_tolerance=(0.1, 1.0),
@@ -164,11 +162,8 @@ class BaselinePipelineSequentialBenchmark(BaseBenchmark):
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
 
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
+    def get_input_signature(self) -> dict:
+        return super().get_input_signature()
 
 
 def get_benchmark() -> BaseBenchmark:

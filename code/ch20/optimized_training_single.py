@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover - defensive import
     prefer_sdpa_backends = None  # type: ignore
     enable_tf32 = None  # type: ignore
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -33,7 +34,7 @@ class SimpleModel(nn.Module):
         return x
 
 
-class OptimizedTrainingDistributedBenchmark(BaseBenchmark):
+class OptimizedTrainingDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized training loop leveraging AMP, fused optimizers, and compilation."""
     
     def __init__(self):
@@ -45,7 +46,6 @@ class OptimizedTrainingDistributedBenchmark(BaseBenchmark):
         self.criterion: Optional[nn.Module] = None
         self.scaler: Optional[torch.cuda.amp.GradScaler] = None
         self.output: Optional[torch.Tensor] = None
-        self._verify_input: Optional[torch.Tensor] = None
         self.batch_size = 32
         self.hidden_dim = 8192
         self.train_steps = 6
@@ -73,55 +73,44 @@ class OptimizedTrainingDistributedBenchmark(BaseBenchmark):
                         stacklevel=2,
                     )
         torch.manual_seed(42)
-        
-        base_model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device, dtype=torch.bfloat16).train()
+        torch.cuda.manual_seed_all(42)
+
+        base_model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).float().train()
         self.model = torch.compile(base_model, mode="reduce-overhead")
         
-        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
-        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
-        # Fixed input for verification - used to test trained model at END of benchmark_fn
-        self._verify_input = self.inputs[0:1].clone()
+        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         try:
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.01, fused=True)
         except TypeError:
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
         self.scaler = None
-
-        with self._sdpa_ctx_factory():
-            for _ in range(3):
-                for _ in range(self.train_steps):
-                    self.optimizer.zero_grad(set_to_none=True)
-                    with torch.autocast("cuda", dtype=torch.bfloat16):
-                        outputs = self.model(self.inputs)
-                        loss = self.criterion(outputs, self.targets)
-                    loss.backward()
-                    self.optimizer.step()
-                self._synchronize()
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         assert self.model is not None and self.inputs is not None and self.targets is not None
         assert self.optimizer is not None and self.criterion is not None
         with self._nvtx_range("training_optimized"):
-            self.optimizer.zero_grad(set_to_none=True)
-            with self._sdpa_ctx_factory(), torch.autocast("cuda", dtype=torch.bfloat16):
-                outputs = self.model(self.inputs)
-                loss = self.criterion(outputs, self.targets)
-            loss.backward()
-            self.optimizer.step()
+            for _ in range(self.train_steps):
+                self.optimizer.zero_grad(set_to_none=True)
+                with self._sdpa_ctx_factory(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    outputs = self.model(self.inputs)
+                    loss = self.criterion(outputs, self.targets)
+                loss.backward()
+                self.optimizer.step()
             self._synchronize()
-        # Capture output AFTER training for verification
-        with torch.no_grad():
-            self.output = self.model(self._verify_input).float().clone()
 
     def capture_verification_payload(self) -> None:
+        if self.model is None or self.inputs is None or self.targets is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        output = self.model.fc1.weight[:16, :16].detach()
         self._set_verification_payload(
-            inputs={"verify_input": self._verify_input},
-            output=self.output,
-            batch_size=self._verify_input.shape[0] if self._verify_input is not None else self.batch_size,
-            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
-            output_tolerance=(0.1, 1.0),
+            inputs={"inputs": self.inputs, "targets": self.targets},
+            output=output,
+            batch_size=self.batch_size,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            output_tolerance=(1e-2, 1e-2),
         )
     
     def teardown(self) -> None:
@@ -162,11 +151,8 @@ class OptimizedTrainingDistributedBenchmark(BaseBenchmark):
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
 
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
+    def get_input_signature(self) -> dict:
+        return super().get_input_signature()
 
 
 def get_benchmark() -> BaseBenchmark:

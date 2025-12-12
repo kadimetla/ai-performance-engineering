@@ -138,7 +138,8 @@ class OptimizedMXFP8MoEBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._maybe_log_missing_te()
         if not arch_config.USE_TE_FP8:
             raise RuntimeError("MXFP8 path disabled via arch_config.USE_TE_FP8.")
-        torch.manual_seed(7)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.inputs = torch.randn(
             self.num_tokens, self.hidden_dim, device=self.device, dtype=torch.bfloat16
         )

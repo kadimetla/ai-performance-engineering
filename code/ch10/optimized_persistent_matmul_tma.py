@@ -321,7 +321,8 @@ def get_benchmark() -> BaseBenchmark:
 
 
 if __name__ == "__main__":
-    torch.manual_seed(0)
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
     
     # Test correctness
     M, N, K = 256, 256, 256

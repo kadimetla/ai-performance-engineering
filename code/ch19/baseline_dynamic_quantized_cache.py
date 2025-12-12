@@ -52,7 +52,8 @@ class _DynamicQuantizedCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._verification_payload = None
 
     def setup(self) -> None:
-        torch.manual_seed(7)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.tensor = torch.randn(8, 32, 128, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize(self.device)
 

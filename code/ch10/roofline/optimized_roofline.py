@@ -11,9 +11,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import torch
 import torch.nn as nn
@@ -21,6 +21,7 @@ import torch.nn as nn
 from typing import Optional
 
 from core.utils.compile_utils import enable_tf32
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -32,7 +33,7 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch10")
     return torch.device("cuda")
 
-class OptimizedRooflineBenchmark(BaseBenchmark):
+class OptimizedRooflineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Roofline analysis for performance optimization.
     
     Roofline: Uses roofline analysis to identify compute/memory bottlenecks.
@@ -51,6 +52,7 @@ class OptimizedRooflineBenchmark(BaseBenchmark):
         self.compiled_model = None
         self.input = None
         self.roofline_data = None
+        self.output = None
         # Match baseline workload for fair comparison
         self.batch_size = 32
         self.seq_len = 256
@@ -67,6 +69,7 @@ class OptimizedRooflineBenchmark(BaseBenchmark):
             # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Same model architecture as baseline
         self.model = nn.Sequential(
@@ -109,22 +112,32 @@ class OptimizedRooflineBenchmark(BaseBenchmark):
         with self._nvtx_range("optimized_roofline"):
             with torch.no_grad():
                 # Use compiled model for optimized execution
-                output = self.compiled_model(self.input)
+                self.output = self.compiled_model(self.input)
         self._synchronize()
-        
-        # Compute roofline metrics (not during timing)
-        input_bytes = self.input.numel() * self.input.element_size()
-        output_bytes = output.numel() * output.element_size()
-        total_bytes = input_bytes + output_bytes
-        
-        flops = self.batch_size * self.seq_len * self.hidden_dim * self.hidden_dim * 2 * 2  # 2 linears
-        arithmetic_intensity = flops / total_bytes if total_bytes > 0 else 0.0
-        
-        is_memory_bound = arithmetic_intensity < 10.0  # B200 has high compute
-        self.roofline_data['compute_bound'] = not is_memory_bound
-        self.roofline_data['memory_bound'] = is_memory_bound
-        self.roofline_data['arithmetic_intensity'] = arithmetic_intensity
 
+    def capture_verification_payload(self) -> None:
+        if self.input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        output = self.output[:1, :1, :16].detach().float()
+        self._set_verification_payload(
+            inputs={"input": self.input},
+            output=output,
+            batch_size=int(self.batch_size),
+            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
+            output_tolerance=(1e-2, 1e-2),
+        )
+
+        if self.roofline_data is not None:
+            input_bytes = self.input.numel() * self.input.element_size()
+            output_bytes = self.output.numel() * self.output.element_size()
+            total_bytes = input_bytes + output_bytes
+
+            flops = self.batch_size * self.seq_len * self.hidden_dim * self.hidden_dim * 2 * 2  # 2 linears
+            arithmetic_intensity = flops / total_bytes if total_bytes > 0 else 0.0
+            is_memory_bound = arithmetic_intensity < 10.0  # heuristic
+            self.roofline_data["compute_bound"] = not is_memory_bound
+            self.roofline_data["memory_bound"] = is_memory_bound
+            self.roofline_data["arithmetic_intensity"] = arithmetic_intensity
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -132,6 +145,7 @@ class OptimizedRooflineBenchmark(BaseBenchmark):
         self.compiled_model = None
         self.input = None
         self.roofline_data = None
+        self.output = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -144,17 +158,17 @@ class OptimizedRooflineBenchmark(BaseBenchmark):
     def get_custom_metrics(self) -> Optional[dict]:
         """Return roofline analysis metrics."""
         # Estimate problem size for roofline analysis
-        n = getattr(self, 'N', 0) or getattr(self, 'hidden_dim', 0) or 4096
-        batch = getattr(self, 'batch_size', 1) or getattr(self, 'batch', 1)
+        n = getattr(self, "N", 0) or getattr(self, "hidden_dim", 0) or 4096
+        batch = getattr(self, "batch_size", 1) or getattr(self, "batch", 1)
         # Simple FLOP estimate for linear layers
         flops = 2.0 * batch * n * n  # Rough estimate
         bytes_moved = batch * n * 4.0  # Input/output bytes
         arithmetic_intensity = flops / max(bytes_moved, 1.0)
         return {
-    "roofline.estimated_flops": flops,
-    "roofline.estimated_bytes": bytes_moved,
-    "roofline.arithmetic_intensity": arithmetic_intensity,
-}
+            "roofline.estimated_flops": flops,
+            "roofline.estimated_bytes": bytes_moved,
+            "roofline.arithmetic_intensity": arithmetic_intensity,
+        }
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -163,12 +177,6 @@ class OptimizedRooflineBenchmark(BaseBenchmark):
         if self.input is None:
             return "Input not initialized"
         return None
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-
-
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
     return OptimizedRooflineBenchmark()

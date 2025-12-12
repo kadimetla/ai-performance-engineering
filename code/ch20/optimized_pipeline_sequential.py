@@ -17,6 +17,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -37,7 +38,7 @@ class SimpleStage(nn.Module):
         return self.norm(out + x)
 
 
-class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
+class OptimizedPipelineOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: GPU-native pipeline without CPU transfers.
     
     Key optimization vs baseline:
@@ -66,6 +67,7 @@ class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         self.stages = nn.ModuleList(
             [SimpleStage(self.hidden_dim).to(self.device).half() for _ in range(self.num_stages)]
@@ -74,12 +76,6 @@ class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
         self.inputs = torch.randn(
             self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16
         )
-        
-        # Warmup
-        data = self.inputs
-        with torch.no_grad():
-            for stage in self.stages:
-                data = stage(data)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
@@ -97,9 +93,11 @@ class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
             self._synchronize()
 
     def capture_verification_payload(self) -> None:
+        if self.inputs is None or self.output is None or self.stages is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"inputs": self.inputs},
-            output=self.output.float() if self.output is not None else None,
+            output=self.output.float(),
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.stages.parameters()) if self.stages is not None else 0,
             output_tolerance=(0.1, 1.0),
@@ -139,11 +137,8 @@ class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
 
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
+    def get_input_signature(self) -> dict:
+        return super().get_input_signature()
 
 
 def get_benchmark() -> BaseBenchmark:

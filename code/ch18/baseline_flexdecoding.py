@@ -60,7 +60,8 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
         flexdemo.HAS_FLEX = previous_flag
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.prefill_tokens = torch.randn(1, self.config.window * 2, self.config.dim, device=self.device)
         self.decode_token = torch.randn(1, 1, self.config.dim, device=self.device)
         torch.cuda.synchronize(self.device)

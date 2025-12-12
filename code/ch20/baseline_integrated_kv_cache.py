@@ -21,6 +21,7 @@ import torch.nn as nn
 
 from typing import Optional
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -107,7 +108,7 @@ class AttentionLayer(nn.Module):
         return self.proj(x)
 
 
-class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
+class BaselineIntegratedKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline integrated KV cache - naive implementation."""
     
     def __init__(self):
@@ -116,6 +117,8 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
         self.model = None
         self.kv_cache = None
         self.inputs = None
+        self.output: Optional[torch.Tensor] = None
+        self._verify_input: Optional[torch.Tensor] = None
         self.max_seq_len = 8192
         self.num_layers = 1
         self.num_heads = 2
@@ -128,6 +131,7 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize baseline model with naive KV cache."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         layers = []
         for _ in range(self.num_layers):
@@ -147,8 +151,10 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
         for seq_len in self.sequence_lengths:
             x = torch.randn(self.batch_size, seq_len, self.hidden_dim, device=self.device, dtype=torch.float32)
             self.inputs.append(x)
+        self._verify_input = self.inputs[-1] if self.inputs else None
+        self.output = None
         
-        torch.cuda.synchronize()
+        self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - baseline integrated KV cache."""
@@ -174,17 +180,14 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
                         hidden = layer(hidden, self.kv_cache, request_id, layer_idx, pos)
                 
                 self.kv_cache.free(request_id)
-        # Capture last hidden state for verification
-        self.output = hidden.detach().clone() if hidden is not None else None
-        representative_input = self.inputs[0] if self.inputs else None
-        if representative_input is None:
-            raise RuntimeError("setup() must populate inputs before verification")
-        self._payload_representative_input = representative_input
+        # Capture last hidden state for verification (no cloning in the hot path).
+        self.output = hidden.detach() if hidden is not None else None
 
     def capture_verification_payload(self) -> None:
-        representative_input = self._payload_representative_input
+        if self.model is None or self._verify_input is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
-            inputs={"input": representative_input},
+            inputs={"input": self._verify_input},
             output=self.output,
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
@@ -225,11 +228,8 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
 
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
+    def get_input_signature(self) -> dict:
+        return super().get_input_signature()
 
 
 def get_benchmark() -> BaseBenchmark:

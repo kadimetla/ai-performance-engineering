@@ -43,7 +43,8 @@ class VectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.tensor = torch.randn(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize(self.device)
 

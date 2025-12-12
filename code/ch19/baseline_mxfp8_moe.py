@@ -76,7 +76,8 @@ class BaselineMXFP8MoEBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def setup(self) -> None:
         require_blackwell("ch19 baseline_mxfp8_moe")
-        torch.manual_seed(7)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.inputs = torch.randn(
             self.num_tokens, self.hidden_dim, device=self.device, dtype=torch.bfloat16
         )

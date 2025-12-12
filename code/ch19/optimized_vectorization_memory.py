@@ -59,7 +59,8 @@ class OptimizedVectorizationMemoryBenchmark(VerificationPayloadMixin, BaseBenchm
         )
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # KEY OPTIMIZATION: FP16 instead of FP32
         # Same tensor size, half the memory = 2x bandwidth potential
         self.tensor = torch.randn(self.N, device=self.device, dtype=torch.float16)

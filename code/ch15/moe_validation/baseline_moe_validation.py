@@ -12,10 +12,11 @@ from typing import Dict, Optional
 import torch
 import torch.nn.functional as F
 
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin  # noqa: E402
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -24,7 +25,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
 from core.optimization.moe_inference import MoeInferenceConfig, SimpleMoEGPT, allocate_kv_cache  # noqa: E402
 
 
-class BaselineMoeValidationBenchmark(BaseBenchmark):
+class BaselineMoeValidationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs the MoE stack with minimal telemetry (throughput + average loss)."""
 
     def __init__(self, config: Optional[MoeInferenceConfig] = None) -> None:
@@ -35,6 +36,7 @@ class BaselineMoeValidationBenchmark(BaseBenchmark):
         self.prompts: Optional[torch.Tensor] = None
         self.labels: Optional[torch.Tensor] = None
         self.kv_cache: Optional[torch.Tensor] = None
+        self._last_logits: Optional[torch.Tensor] = None
         self._history: Dict[str, list] = {"loss": [], "throughput": []}
         self._workload_metadata = WorkloadMetadata(
             requests_per_iteration=float(self.config.batch_size),
@@ -108,7 +110,9 @@ class BaselineMoeValidationBenchmark(BaseBenchmark):
 
     # --------------------------------------------------------------------- setup
     def setup(self) -> None:
-        torch.manual_seed(7)
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         cfg = self.config
         self.model = SimpleMoEGPT(cfg, device=self.device).eval()
         self.prompts = torch.randint(
@@ -149,7 +153,8 @@ class BaselineMoeValidationBenchmark(BaseBenchmark):
             )
 
             seed_tokens = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-            decode_losses = []
+            decode_losses: list[torch.Tensor] = []
+            decode_logits: Optional[torch.Tensor] = None
             for step in range(cfg.decode_tokens):
                 _, decode_logits = self.model.decode(
                     seed_tokens,
@@ -167,6 +172,7 @@ class BaselineMoeValidationBenchmark(BaseBenchmark):
                 torch.cuda.synchronize(self.device)
             elapsed_s = max(time.perf_counter() - start, 1e-6)
 
+        self._last_logits = decode_logits if decode_logits is not None else logits
         avg_loss = float(
             token_loss.item()
             + (sum(dl.item() for dl in decode_losses) / max(len(decode_losses), 1))
@@ -197,9 +203,17 @@ class BaselineMoeValidationBenchmark(BaseBenchmark):
             return "No throughput samples recorded"
         return None
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+    def capture_verification_payload(self) -> None:
+        if self.model is None or self.prompts is None or self._last_logits is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        output = self._last_logits[:1, -1:, :128].detach().float()
+        self._set_verification_payload(
+            inputs={"prompts": self.prompts},
+            output=output,
+            batch_size=int(self.prompts.shape[0]),
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            output_tolerance=(1e-2, 1e-2),
+        )
 
 
 

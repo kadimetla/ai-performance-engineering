@@ -46,7 +46,8 @@ class BaselinePagedAttnBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._verification_payload = None
 
     def setup(self) -> None:
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         # Longer sequence to expose flash SDPA advantage (O(N) vs O(N²) memory).
         b, h, s, d = 4, 16, 2048, 64
         # Baseline uses full-precision SDPA without flash/memory-efficient kernels.

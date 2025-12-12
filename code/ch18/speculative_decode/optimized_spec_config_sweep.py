@@ -9,11 +9,14 @@ import time
 from pathlib import Path
 from typing import Dict, List
 
+import torch
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.benchmark.artifact_manager import ArtifactManager  # noqa: E402
+from core.benchmark.verification_mixin import VerificationPayloadMixin  # noqa: E402
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -23,7 +26,7 @@ from core.harness.benchmark_harness import (  # noqa: E402
 from ch18.run_vllm_decoder import GraphMode, VLLMMoEInferenceBenchmark  # noqa: E402
 
 
-class SpecConfigSweepBenchmark(BaseBenchmark):
+class SpecConfigSweepBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Run the VLLM MoE benchmark across multiple speculator configs."""
 
     def __init__(self) -> None:
@@ -43,6 +46,8 @@ class SpecConfigSweepBenchmark(BaseBenchmark):
         run_id = os.getenv("SPEC_SWEEP_RUN_ID", f"spec_config_sweep_{int(time.time())}")
         self.artifacts = ArtifactManager(run_id=run_id)
         self._custom_metrics: Dict[str, float] = {}
+        self._verify_meta = torch.tensor([[float(len(self.config_paths)), float(self.inner_iterations), float(self.inner_warmup)]])
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def get_config(self) -> BenchmarkConfig:
         # Single outer iteration; inner harness handles per-config runs.
@@ -90,9 +95,19 @@ class SpecConfigSweepBenchmark(BaseBenchmark):
     def get_custom_metrics(self) -> Dict[str, float]:
         return self._custom_metrics
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+    def capture_verification_payload(self) -> None:
+        if not self._custom_metrics:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        keys = sorted(self._custom_metrics.keys())
+        values = [float(self._custom_metrics[k]) for k in keys]
+        output = torch.tensor([values], dtype=torch.float32)
+        self._set_verification_payload(
+            inputs={"meta": self._verify_meta},
+            output=output,
+            batch_size=1,
+            parameter_count=0,
+            output_tolerance=(1e-4, 1e-4),
+        )
 
 
 

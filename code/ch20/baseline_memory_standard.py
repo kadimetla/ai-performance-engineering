@@ -6,10 +6,11 @@ from typing import Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class BaselineMemoryStandardBenchmark(BaseBenchmark):
+class BaselineMemoryStandardBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Standard memory access patterns without HBM3e optimizations."""
     
     def __init__(self):
@@ -34,6 +35,7 @@ class BaselineMemoryStandardBenchmark(BaseBenchmark):
     
     def setup(self) -> None:
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.data = torch.randn(self.num_elements, device=self.device, dtype=torch.float32)
         self.result = torch.zeros_like(self.data)
         self._synchronize()
@@ -48,6 +50,8 @@ class BaselineMemoryStandardBenchmark(BaseBenchmark):
         self.output = self.result
 
     def capture_verification_payload(self) -> None:
+        if self.data is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"data": self.data},
             output=self.output,
@@ -90,11 +94,8 @@ class BaselineMemoryStandardBenchmark(BaseBenchmark):
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
 
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
+    def get_input_signature(self) -> dict:
+        return super().get_input_signature()
 
 
 def get_benchmark() -> BaseBenchmark:

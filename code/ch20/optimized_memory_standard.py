@@ -6,10 +6,11 @@ from typing import Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class OptimizedMemoryHBM3eBenchmark(BaseBenchmark):
+class OptimizedMemoryHBM3eBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """HBM3e-optimized memory access - coalesced and vectorized."""
     
     def __init__(self):
@@ -36,6 +37,7 @@ class OptimizedMemoryHBM3eBenchmark(BaseBenchmark):
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         self.data = torch.randn(self.num_elements, device=self.device, dtype=torch.float32).contiguous()
         self.result = torch.zeros_like(self.data).contiguous()
@@ -52,6 +54,8 @@ class OptimizedMemoryHBM3eBenchmark(BaseBenchmark):
         self.output = self.result
 
     def capture_verification_payload(self) -> None:
+        if self.data is None or self.output is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"data": self.data},
             output=self.output,
@@ -94,11 +98,8 @@ class OptimizedMemoryHBM3eBenchmark(BaseBenchmark):
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
 
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
+    def get_input_signature(self) -> dict:
+        return super().get_input_signature()
 
 
 def get_benchmark() -> BaseBenchmark:

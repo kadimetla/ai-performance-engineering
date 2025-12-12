@@ -159,7 +159,10 @@ def audit_directory(directory: Path) -> Dict[str, Dict[str, Any]]:
     """
     results = {}
     
-    for filepath in sorted(directory.glob("*.py")):
+    skip_parts = {"__pycache__", "llm_patches", "llm_patches_test"}
+    for filepath in sorted(directory.rglob("*.py")):
+        if any(part in skip_parts for part in filepath.parts):
+            continue
         if not (filepath.name.startswith("baseline_") or filepath.name.startswith("optimized_")):
             continue
         

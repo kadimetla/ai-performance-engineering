@@ -12,10 +12,11 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn.functional as F
 
-repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin  # noqa: E402
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -93,7 +94,7 @@ def _set_router_config(model: SimpleMoEGPT, top_k: int, capacity_factor: float) 
             ff.capacity_factor = capacity_factor  # type: ignore[attr-defined]
 
 
-class OptimizedMoeValidationBenchmark(BaseBenchmark):
+class OptimizedMoeValidationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Runs routing sweeps and reports overflow/Gini/entropy along with throughput."""
 
     def __init__(
@@ -111,6 +112,7 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
         self.eval_seeds = eval_seeds or [3, 13]
         self.model: Optional[SimpleMoEGPT] = None
         self._records: List[Dict[str, float]] = []
+        self._verify_batch: Optional[Dict[str, torch.Tensor]] = None
         self._workload_metadata = WorkloadMetadata(
             requests_per_iteration=float(self.config.batch_size),
             tokens_per_iteration=float(self.config.tokens_per_iteration),
@@ -201,19 +203,26 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
 
     # --------------------------------------------------------------------- setup
     def setup(self) -> None:
-        torch.manual_seed(21)
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self.model = SimpleMoEGPT(self.config, device=self.device).eval()
         if torch.cuda.is_available() and hasattr(torch.cuda, "reset_peak_memory_stats"):
             torch.cuda.reset_peak_memory_stats(self.device)
+        if self.eval_seeds:
+            self._verify_batch = self._make_batch(int(self.eval_seeds[0]))
 
     def _make_batch(self, seed: int) -> Dict[str, torch.Tensor]:
-        torch.manual_seed(seed)
+        generator_device = "cuda" if self.device.type == "cuda" else "cpu"
+        generator = torch.Generator(device=generator_device)
+        generator.manual_seed(int(seed))
         cfg = self.config
         prompts = torch.randint(
             0,
             cfg.vocab_size,
             (cfg.batch_size, cfg.context_window),
             device=self.device,
+            generator=generator,
         )
         total_tokens = cfg.context_window + cfg.decode_tokens
         labels = torch.randint(
@@ -221,6 +230,7 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
             cfg.vocab_size,
             (cfg.batch_size, total_tokens),
             device=self.device,
+            generator=generator,
         )
         return {"prompts": prompts, "labels": labels}
 
@@ -310,6 +320,28 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
                     self._records.append(record)
         return self._records
 
+    def capture_verification_payload(self) -> None:
+        if self.model is None:
+            raise RuntimeError("setup() must be called before capture_verification_payload()")
+        if not self._records:
+            raise RuntimeError("benchmark_fn() must populate records before capture_verification_payload()")
+        if self._verify_batch is None:
+            raise RuntimeError("setup() must prepare verification batch before capture_verification_payload()")
+
+        ordered_keys = ("seed", "top_k", "capacity_factor", "loss", "overflow_rate", "gini", "router_entropy")
+        rows: list[list[float]] = []
+        for record in self._records:
+            rows.append([float(record.get(k, 0.0)) for k in ordered_keys])
+        output = torch.tensor(rows, dtype=torch.float32)
+
+        self._set_verification_payload(
+            inputs={"prompts": self._verify_batch["prompts"], "labels": self._verify_batch["labels"]},
+            output=output,
+            batch_size=int(self.config.batch_size),
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            output_tolerance=(1e-2, 1e-2),
+        )
+
     # ------------------------------------------------------------------- configs
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=1, warmup=0, measurement_timeout_seconds=120)
@@ -336,10 +368,6 @@ class OptimizedMoeValidationBenchmark(BaseBenchmark):
         if not self._records:
             return "No sweep data captured"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
 
 

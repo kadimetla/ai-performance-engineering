@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -25,7 +26,7 @@ class SimpleModel(nn.Module):
         return x
 
 
-class BaselineTrainingSingleBenchmark(BaseBenchmark):
+class BaselineTrainingSingleBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Single-GPU training baseline - no parallelism."""
     
     def __init__(self):
@@ -36,7 +37,6 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.criterion: Optional[nn.Module] = None
         self.output: Optional[torch.Tensor] = None
-        self._verify_input: Optional[torch.Tensor] = None
         # Heavier batch/hidden to highlight benefits of AMP/compile in the optimized path.
         self.batch_size = 32
         self.hidden_dim = 8192
@@ -49,16 +49,13 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
     
     def setup(self) -> None:
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).float().train()
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
-        self._verify_input = self.inputs[0:1].clone()
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
         self.output = None
-        for _ in range(3):
-            self.optimizer.zero_grad()
-            _ = self.model(self.inputs)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
@@ -72,19 +69,17 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
                 loss.backward()
                 self.optimizer.step()
             self._synchronize()
-        # Capture output AFTER training completes for verification
-        with torch.no_grad():
-            self.model.eval()
-            self.output = self.model(self._verify_input).float().clone()
-            self.model.train()
 
     def capture_verification_payload(self) -> None:
+        if self.model is None or self.inputs is None or self.targets is None:
+            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        output = self.model.fc1.weight[:16, :16].detach()
         self._set_verification_payload(
-            inputs={"verify_input": self._verify_input},
-            output=self.output,
-            batch_size=self._verify_input.shape[0] if self._verify_input is not None else self.batch_size,
-            parameter_count=sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0,
-            output_tolerance=(0.1, 1.0),
+            inputs={"inputs": self.inputs, "targets": self.targets},
+            output=output,
+            batch_size=self.batch_size,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            output_tolerance=(1e-2, 1e-2),
         )
     
     def teardown(self) -> None:
@@ -124,11 +119,8 @@ class BaselineTrainingSingleBenchmark(BaseBenchmark):
     def get_verify_output(self) -> torch.Tensor:
         return super().get_verify_output()
 
-    def get_output_tolerance(self) -> tuple:
-        payload = getattr(self, "_verification_payload", None)
-        if payload is None:
-            return (0.1, 1.0)
-        return super().get_output_tolerance()
+    def get_input_signature(self) -> dict:
+        return super().get_input_signature()
 
 
 def get_benchmark() -> BaseBenchmark:
