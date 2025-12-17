@@ -115,18 +115,6 @@ TORCH_PROFILER_AVAILABLE = hasattr(torch, 'profiler') and hasattr(torch.profiler
 # Generous timeout so deep NCU profiling can finish (pulled from benchmark defaults)
 NCU_TIMEOUT_SECONDS = get_defaults().ncu_timeout_seconds
 
-# BenchmarkConfig fields that are owned by the caller/CLI and must never be
-# overridden by per-benchmark get_config() defaults. Keeping these centralized
-# makes it obvious which knobs are policy/CLI-level rather than benchmark-level.
-CALLER_OWNED_FIELDS: Set[str] = {
-    # Preserve CLI-provided timeout scaling so per-benchmark defaults cannot
-    # silently stretch timeouts.
-    "timeout_multiplier",
-    # Environment validation is a harness policy knob (e.g., --allow-invalid-environment).
-    # If benchmarks can override it, the CLI flag becomes ineffective.
-    "enforce_environment_validation",
-}
-
 # Import metric extraction utilities
 try:
     from core.analysis.metric_extractor import (
@@ -1991,6 +1979,123 @@ def ensure_cuda_executables_built(chapter_dir: Path) -> Tuple[bool, Optional[str
         return False, str(e)
 
 
+def _compute_locked_fields(
+    *,
+    base_config: BenchmarkConfig,
+    cli_iterations_provided: bool,
+    cli_warmup_provided: bool,
+    enable_profiling: bool,
+) -> Set[str]:
+    """Compute run-level config fields that benchmarks may not override."""
+    locked_fields: Set[str] = set()
+    if cli_iterations_provided:
+        locked_fields.add("iterations")
+    if cli_warmup_provided:
+        locked_fields.add("warmup")
+
+    runner_locked_when_true: Set[str] = {"enable_memory_tracking", "detect_setup_precomputation"}
+    if enable_profiling:
+        runner_locked_when_true.update({"enable_profiling", "enable_nsys", "enable_ncu", "enable_nvtx", "profile_type"})
+    for field_name in runner_locked_when_true:
+        if getattr(base_config, field_name, None):
+            locked_fields.add(field_name)
+
+    return locked_fields
+
+
+def _merge_benchmark_config(
+    *,
+    base_config: BenchmarkConfig,
+    benchmark_obj: Any,
+    defaults_obj: Optional[Any],
+    locked_fields: Set[str],
+) -> BenchmarkConfig:
+    """Merge benchmark-provided config with run-level config, enforcing invariants."""
+    merged = copy.deepcopy(base_config)
+
+    bench_config = getattr(benchmark_obj, "get_config", None)
+    override = bench_config() if callable(bench_config) else None
+    if override:
+        for field in fields(BenchmarkConfig):
+            value = getattr(override, field.name, None)
+            if value is None:
+                continue
+            if field.name in locked_fields:
+                continue
+
+            if field.name == "launch_via":
+                base_value = getattr(merged, field.name, None)
+                default_value = getattr(defaults_obj, field.name, None) if defaults_obj else None
+
+                def _normalize_launch(val):
+                    if val is None:
+                        return None
+                    if hasattr(val, "value"):
+                        return str(getattr(val, "value")).lower()
+                    return str(val).lower()
+
+                base_norm = _normalize_launch(base_value)
+                default_norm = _normalize_launch(default_value)
+                value_norm = _normalize_launch(value)
+                # Preserve CLI-provided launcher when the benchmark config only supplies the default
+                if (
+                    base_norm is not None
+                    and default_norm is not None
+                    and base_norm != default_norm
+                    and value_norm == default_norm
+                ):
+                    continue
+
+            if field.name == "target_extra_args":
+                if value:
+                    merged.target_extra_args = {
+                        **(getattr(merged, "target_extra_args", {}) or {}),
+                        **value,
+                    }
+                continue
+
+            if field.name == "env_passthrough" and not value:
+                continue
+
+            setattr(merged, field.name, copy.deepcopy(value))
+
+    merged._sync_execution_mode()
+    merged._sync_launch_via()
+
+    # Prevent benchmark-specific defaults from widening CLI/base timeouts.
+    timeout_fields = (
+        "setup_timeout_seconds",
+        "warmup_timeout_seconds",
+        "measurement_timeout_seconds",
+        "profiling_timeout_seconds",
+        "nsys_timeout_seconds",
+        "ncu_timeout_seconds",
+        "proton_timeout_seconds",
+        "timeout_seconds",
+    )
+    for field_name in timeout_fields:
+        base_value = getattr(base_config, field_name, None)
+        merged_value = getattr(merged, field_name, None)
+        if base_value is None or merged_value is None:
+            continue
+        try:
+            if merged_value > base_value:
+                setattr(merged, field_name, base_value)
+        except TypeError:
+            # Non-numeric timeout values are unexpected; keep merged value.
+            pass
+
+    # Explicit invariants: benchmarks must not override run-level policy knobs.
+    merged.timeout_multiplier = getattr(base_config, "timeout_multiplier", merged.timeout_multiplier)
+    merged.enforce_environment_validation = getattr(
+        base_config,
+        "enforce_environment_validation",
+        merged.enforce_environment_validation,
+    )
+
+    return merged
+
+
 def _test_chapter_impl(
     chapter_dir: Path,
     enable_profiling: bool = False,
@@ -2259,91 +2364,20 @@ def _test_chapter_impl(
     if profiling_output_dir:
         base_config.profiling_output_dir = str(profiling_output_dir)
 
-    # BenchmarkConfig fields that should not be overridden by individual benchmarks.
-    # This is computed once per run so it is obvious which knobs are CLI/policy-owned.
-    protected_fields: Set[str] = {"enable_memory_tracking", "detect_setup_precomputation"}
-    if enable_profiling:
-        protected_fields.update({"enable_profiling", "enable_nsys", "enable_ncu", "enable_nvtx", "profile_type"})
-    caller_owned_fields: Set[str] = set(CALLER_OWNED_FIELDS)
-    if cli_iterations_provided:
-        caller_owned_fields.add("iterations")
-    if cli_warmup_provided:
-        caller_owned_fields.add("warmup")
-    for field_name in protected_fields:
-        if getattr(base_config, field_name, None):
-            caller_owned_fields.add(field_name)
-
-    def _merged_config(benchmark_obj) -> BenchmarkConfig:
-        merged = copy.deepcopy(base_config)
-        defaults_obj = _defaults_obj
-        bench_config = getattr(benchmark_obj, "get_config", None)
-        override = bench_config() if callable(bench_config) else None
-        if override:
-            for field in fields(BenchmarkConfig):
-                value = getattr(override, field.name, None)
-                if value is None:
-                    continue
-                if field.name in caller_owned_fields:
-                    continue
-                if field.name == "launch_via":
-                    base_value = getattr(merged, field.name, None)
-                    default_value = getattr(defaults_obj, field.name, None) if defaults_obj else None
-                    def _normalize_launch(val):
-                        if val is None:
-                            return None
-                        if hasattr(val, "value"):
-                            return str(getattr(val, "value")).lower()
-                        return str(val).lower()
-                    base_norm = _normalize_launch(base_value)
-                    default_norm = _normalize_launch(default_value)
-                    value_norm = _normalize_launch(value)
-                    # Preserve CLI-provided launcher when the benchmark config only supplies the default
-                    if (
-                        base_norm is not None
-                        and default_norm is not None
-                        and base_norm != default_norm
-                        and value_norm == default_norm
-                    ):
-                        continue
-                if field.name == "target_extra_args":
-                    if value:
-                        merged.target_extra_args = {
-                            **(getattr(merged, "target_extra_args", {}) or {}),
-                            **value,
-                        }
-                    continue
-                if field.name == "env_passthrough" and not value:
-                    continue
-                setattr(merged, field.name, copy.deepcopy(value))
-        merged._sync_execution_mode()
-        merged._sync_launch_via()
-        # Prevent benchmark-specific defaults from widening CLI/base timeouts.
-        timeout_fields = (
-            "setup_timeout_seconds",
-            "warmup_timeout_seconds",
-            "measurement_timeout_seconds",
-            "profiling_timeout_seconds",
-            "nsys_timeout_seconds",
-            "ncu_timeout_seconds",
-            "proton_timeout_seconds",
-            "timeout_seconds",
-        )
-        for field_name in timeout_fields:
-            base_value = getattr(base_config, field_name, None)
-            merged_value = getattr(merged, field_name, None)
-            if base_value is None or merged_value is None:
-                continue
-            try:
-                if merged_value > base_value:
-                    setattr(merged, field_name, base_value)
-            except TypeError:
-                # Non-numeric timeout values are unexpected; keep merged value.
-                pass
-        merged.timeout_multiplier = getattr(base_config, "timeout_multiplier", merged.timeout_multiplier)
-        return merged
+    locked_fields = _compute_locked_fields(
+        base_config=base_config,
+        cli_iterations_provided=cli_iterations_provided,
+        cli_warmup_provided=cli_warmup_provided,
+        enable_profiling=enable_profiling,
+    )
 
     def _run_with_config(benchmark_obj, run_id: str, target_label: Optional[str] = None):
-        merged = _merged_config(benchmark_obj)
+        merged = _merge_benchmark_config(
+            base_config=base_config,
+            benchmark_obj=benchmark_obj,
+            defaults_obj=_defaults_obj,
+            locked_fields=locked_fields,
+        )
         if target_label and getattr(merged, "target_label", None) is None:
             merged.target_label = target_label
         logger.info("merged config launch_via=%s execution_mode=%s", merged.launch_via, merged.execution_mode)
