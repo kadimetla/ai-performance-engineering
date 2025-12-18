@@ -552,10 +552,40 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def teardown(self) -> None:
         # Release model buffers between variants to keep allocator usage low.
-        for attr in ("embedding", "prefill_mlp", "decode_mlp", "lm_head", "host_prompt", "gpu_prompt", "state_buffer", "current_tokens", "next_token_out", "graph_logits", "graph_next_token"):
+        # Explicitly clear CUDA graphs/streams to avoid teardown-time crashes in some
+        # PyTorch/CUDA combinations (e.g., when the subprocess exits soon after replay).
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+        self.decode_graph = None
+        self.graph_stream = None
+        self.copy_stream = None
+        self.compute_stream = None
+
+        for attr in (
+            "embedding",
+            "prefill_mlp",
+            "decode_mlp",
+            "lm_head",
+            "host_prompt",
+            "gpu_prompt",
+            "state_buffer",
+            "current_tokens",
+            "next_token_out",
+            "graph_logits",
+            "graph_next_token",
+        ):
             if hasattr(self, attr):
                 setattr(self, attr, None)
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            try:
+                if hasattr(torch.cuda, "graph_pool_trim"):
+                    torch.cuda.graph_pool_trim()
+            except Exception:
+                pass
+            torch.cuda.empty_cache()
         self.output = None
         super().teardown()
 
