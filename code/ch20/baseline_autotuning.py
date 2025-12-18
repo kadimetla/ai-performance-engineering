@@ -1,6 +1,6 @@
 """baseline_autotuning.py - Eager-mode baseline for autotuning benchmarks.
 
-Pairs with `optimized_autotuning.py`, which uses `torch.compile(..., mode=\"max-autotune\")`
+Pairs with `optimized_autotuning.py`, which uses `torch.compile(..., mode="max-autotune")`
 to exercise Inductor autotuning paths while keeping outputs comparable.
 """
 
@@ -13,24 +13,40 @@ import torch.nn as nn
 
 import ch20.arch_config  # noqa: F401 - Apply chapter defaults
 
-from arch_config import prefer_sdpa_backends
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import enable_tf32
 
 
 class AutotuneModel(nn.Module):
-    """Tiny MLP used for eager/compiled comparisons."""
+    """Pointwise-heavy block that benefits from compiler fusion.
 
-    def __init__(self, hidden_dim: int = 1024):
+    In eager mode this executes as many separate kernels; torch.compile can fuse the
+    pointwise chain into fewer kernels (and max-autotune will tune the generated
+    kernels).
+    """
+
+    def __init__(self, hidden_dim: int = 4096):
         super().__init__()
-        self.fc1 = nn.Linear(hidden_dim, hidden_dim * 2)
-        self.fc2 = nn.Linear(hidden_dim * 2, hidden_dim)
-        self.act = nn.GELU()
+        self.scale = nn.Parameter(torch.ones(hidden_dim))
+        self.bias = nn.Parameter(torch.zeros(hidden_dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.act(self.fc1(x))
-        return self.fc2(x)
+        y = x * 0.01
+        y = y * self.scale + self.bias
+        y = torch.nn.functional.silu(y)
+        y = (y * 1.0001) + 0.0001
+        y = y * 0.999 + 0.001
+        y = torch.nn.functional.silu(y)
+        y = (y * 1.0001) + 0.0001
+        y = y * 0.999 + 0.001
+        y = torch.nn.functional.silu(y)
+        y = (y * 1.0001) + 0.0001
+        y = y * 0.999 + 0.001
+        y = torch.nn.functional.silu(y)
+        y = (y * 1.0001) + 0.0001
+        y = y * 0.999 + 0.001
+        return y
 
 
 class BaselineAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -40,8 +56,9 @@ class BaselineAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
-        self.batch = 16
-        self.hidden_dim = 1024
+        # Use a pointwise-heavy workload so kernel-fusion wins are visible above noise.
+        self.batch = 512
+        self.hidden_dim = 4096
         tokens = self.batch * self.hidden_dim
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch),
@@ -60,7 +77,7 @@ class BaselineAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._verify_input = self.inputs[0:1].clone()
 
         for _ in range(3):
-            with torch.no_grad(), prefer_sdpa_backends():
+            with torch.no_grad():
                 _ = self.model(self.inputs)
         self._synchronize()
 
@@ -68,14 +85,14 @@ class BaselineAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.model is None or self.inputs is None:
             raise RuntimeError("Model/inputs not initialized")
         with self._nvtx_range("baseline_autotuning"):
-            with torch.no_grad(), prefer_sdpa_backends():
+            with torch.no_grad():
                 _ = self.model(self.inputs)
             self._synchronize()
 
     def capture_verification_payload(self) -> None:
         if self._verify_input is None or self.model is None:
             raise RuntimeError("setup() must prepare verify input before verification")
-        with torch.no_grad(), prefer_sdpa_backends():
+        with torch.no_grad():
             self.output = self.model(self._verify_input).float().clone()
         self._set_verification_payload(
             inputs={"verify_input": self._verify_input},

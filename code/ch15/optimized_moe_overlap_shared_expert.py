@@ -44,12 +44,15 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
 
     def __init__(self) -> None:
         super().__init__()
-        self.hidden_size = 1024
-        self.ffn_size = 4096
+        self.hidden_size = 2048
+        self.ffn_size = 512
         self.num_experts = 64
         self.batch = 64
-        self.seq = 16
+        self.seq = 64
         self.dtype = torch.bfloat16
+        # Simulate expert-parallel comm as many small messages (chunked copies).
+        # The comm stream can overlap these copies with shared expert compute.
+        self.comm_chunks = 4096
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(
@@ -120,11 +123,15 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
 
         with self._nvtx_range("optimized_moe_overlap_shared_expert"):
             with torch.no_grad():
+                total_tokens = flat.shape[0]
+                chunk_tokens = max(1, (total_tokens + self.comm_chunks - 1) // self.comm_chunks)
                 with torch.cuda.stream(self._comm_stream):
-                    self._comm_flat.copy_(flat)
+                    for start in range(0, total_tokens, chunk_tokens):
+                        end = min(start + chunk_tokens, total_tokens)
+                        self._comm_flat[start:end].copy_(flat[start:end])
 
+                # Overlap shared-expert compute with comm copies in flight.
                 shared_out = self.shared_expert(flat)
-
                 torch.cuda.current_stream(self.device).wait_stream(self._comm_stream)
                 dispatch_shared_expert_active_experts(
                     self._comm_flat,

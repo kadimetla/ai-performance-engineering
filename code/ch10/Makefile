@@ -64,10 +64,16 @@ optimized_cluster_group_single_cta_verify$(SUFFIX): optimized_cluster_group_sing
 	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
 
 tma_multicast_cluster$(SUFFIX): tma_multicast_cluster.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true $(INCLUDES) -lcuda -o $@ $<
 
 tma_multicast_cluster_verify$(SUFFIX): tma_multicast_cluster.cu $(COMMON_HEADERS)
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $<
+
+tma_multicast_baseline$(SUFFIX): tma_multicast_baseline.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true $(INCLUDES) -lcuda -o $@ $<
+
+tma_multicast_baseline_verify$(SUFFIX): tma_multicast_baseline.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -std=c++17 -rdc=true -DVERIFY=1 $(INCLUDES) -lcuda -o $@ $<
 
 optimized_dsmem_reduction$(SUFFIX): optimized_dsmem_reduction.cu $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<

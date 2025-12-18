@@ -45,13 +45,14 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
     def __init__(self) -> None:
         super().__init__()
         self.hidden_size = 1024
-        self.ffn_size = 4096
+        self.ffn_size = 1024
         self.num_islands = 4
         self.experts_per_island = 16
         self.num_experts = self.num_islands * self.experts_per_island
         self.batch = 128
         self.seq = 32
         self.dtype = torch.bfloat16
+        self.remote_round_trips = 16
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(
@@ -132,10 +133,12 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
                 remote_idx = remote_mask.nonzero(as_tuple=False).squeeze(-1)
                 if remote_idx.numel() > 0:
                     remote_send = flat.index_select(0, remote_idx)
-                    remote_recv = torch.empty_like(remote_send)
-                    remote_recv.copy_(remote_send)
-                    remote_back = torch.empty_like(remote_recv)
-                    remote_back.copy_(remote_recv)
+                    buf_a = torch.empty_like(remote_send)
+                    buf_b = torch.empty_like(remote_send)
+                    buf_a.copy_(remote_send)
+                    for _ in range(self.remote_round_trips):
+                        buf_b.copy_(buf_a)
+                        buf_a.copy_(buf_b)
 
                 out_flat = self.expert(flat)
                 self.output = out_flat.view(self.batch, self.seq, self.hidden_size)
@@ -189,4 +192,3 @@ if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
 
     benchmark_main(get_benchmark)
-

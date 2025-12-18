@@ -12,7 +12,7 @@ BASE_TARGETS := $(CUDA_SOURCES:.cu=)
 TARGETS := $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 VERIFY_TARGETS := $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
-.PHONY: all clean test compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all $(VERIFY_TARGETS)
+.PHONY: all clean test compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all
 
 all: $(TARGETS)
 	@echo "Building all Chapter 19 examples with $(ARCH) (CUDA $(CUDA_VERSION))"

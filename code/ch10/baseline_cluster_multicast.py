@@ -34,9 +34,11 @@ class BaselineClusterMulticastBenchmark(CudaBinaryBenchmark):
                 "M": 2048,
                 "N": 2048,
                 "K": 2048,
-                "tile_m": 64,
-                "tile_n": 64,
+                "tile_m": 32,
+                "tile_n": 32,
                 "tile_k": 32,
+                "cluster_m": 8,
+                "cluster_n": 1,
             },
         )
         self.register_workload_metadata(bytes_per_iteration=48 * 1024 * 1024)

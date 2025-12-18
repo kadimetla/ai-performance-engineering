@@ -50,6 +50,7 @@ class OptimizedLlama31_8B(VerificationPayloadMixin, BaseBenchmark):
             use_compile=True,         # Enable torch.compile
             use_fp8=self.use_fp8,     # Optional FP8
             use_flex_attention=True,  # Enable FlexAttention
+            prefer_sdpa=True,
         )
         self.model_wrapper.setup()
         self.parameter_count = sum(p.numel() for p in self.model_wrapper.layers.parameters())
@@ -57,8 +58,8 @@ class OptimizedLlama31_8B(VerificationPayloadMixin, BaseBenchmark):
     def benchmark_fn(self) -> None:
         if self.model_wrapper is None:
             raise RuntimeError("Model wrapper not initialized")
-        elapsed_ms = self.model_wrapper.run()
-        self._last_metrics = {"elapsed_ms": float(elapsed_ms)}
+        self.model_wrapper.run()
+        self._last_metrics = {}
         self.output = self.model_wrapper.output
         self._synchronize()
         if self.output is None:

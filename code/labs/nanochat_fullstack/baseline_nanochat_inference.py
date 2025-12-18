@@ -31,7 +31,7 @@ class BaselineNanochatInferenceBenchmark(VerificationPayloadMixin, BaseBenchmark
     def __init__(self) -> None:
         super().__init__()
         self.batch_size = 4
-        self.prompt_len = 256
+        self.prompt_len = 512
         self.decode_len = 64
         self.vocab_size = 10_000
         self.n_layer = 4

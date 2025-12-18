@@ -73,24 +73,58 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model: Optional[nn.Module] = None
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.compute_stream: Optional[torch.cuda.Stream] = None
+        self._prefetched_batch: Optional[torch.Tensor] = None
+        self._prefetch_done: Optional[torch.cuda.Event] = None
         self._last_batch: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self._parameter_count: int = 0
         self.register_workload_metadata(samples_per_iteration=self.cfg.batch_size)
 
+    def _next_batch_cpu(self) -> torch.Tensor:
+        if self.loader_iter is None:
+            raise RuntimeError("Loader iterator not initialized")
+        try:
+            return next(self.loader_iter)
+        except StopIteration:
+            if self.loader is None:
+                raise RuntimeError("Loader not initialized")
+            self.loader_iter = iter(self.loader)
+            return next(self.loader_iter)
+
+    def _launch_h2d(self, batch_cpu: torch.Tensor) -> torch.Tensor:
+        if self.copy_stream is None:
+            return batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
+        if self._prefetch_done is None:
+            self._prefetch_done = torch.cuda.Event(enable_timing=False, blocking=False)
+        with torch.cuda.stream(self.copy_stream):
+            batch_gpu = batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
+            self._prefetch_done.record(self.copy_stream)
+        return batch_gpu
+
     def setup(self) -> None:
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
-        torch.backends.cudnn.benchmark = False
+        # This is a performance benchmark; allow cuDNN to pick fastest kernels.
+        torch.backends.cudnn.benchmark = True
 
         self.loader = _build_dataloader(self.cfg)
         self.loader_iter = iter(self.loader)
+        # Use a small ConvNet so the benchmark is compute+transfer limited (not
+        # dominated by Python/DataLoader overhead) and overlap is measurable.
+        c, h, w = self.cfg.feature_shape
+        if c != 3:
+            raise ValueError("feature_shape[0] must be 3 (RGB) for this benchmark")
         self.model = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(self.cfg.feature_shape[0] * self.cfg.feature_shape[1] * self.cfg.feature_shape[2], 256),
+            nn.Conv2d(3, 64, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
-            nn.Linear(256, 64),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(128, 64),
         ).to(self.device)
         self._parameter_count = sum(p.numel() for p in self.model.parameters())
 
@@ -104,28 +138,31 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
             _ = self.model(warm)
         torch.cuda.synchronize(self.device)
 
-    def benchmark_fn(self) -> None:
-        assert self.loader_iter is not None, "Loader not initialized"
-        assert self.model is not None, "Model not initialized"
+        # Prime the pipeline with a prefetched batch so steady-state overlap is
+        # measured during the timed iterations.
+        first_cpu = self._next_batch_cpu()
+        self._prefetched_batch = self._launch_h2d(first_cpu)
 
-        try:
-            batch_cpu = next(self.loader_iter)
-        except StopIteration:
-            assert self.loader is not None
-            self.loader_iter = iter(self.loader)
-            batch_cpu = next(self.loader_iter)
+    def benchmark_fn(self) -> None:
+        if self.model is None:
+            raise RuntimeError("Model not initialized")
+        if self._prefetched_batch is None:
+            raise RuntimeError("Prefetch buffer not initialized (setup() must run)")
         with self._nvtx_range(self.label):
-            if self.copy_stream is not None:
-                with torch.cuda.stream(self.copy_stream):
-                    batch_gpu = batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
-                self.compute_stream.wait_stream(self.copy_stream)
-            else:
-                batch_gpu = batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
+            # Current batch is the one prefetched during the previous iteration.
+            if self._prefetch_done is not None and self.compute_stream is not None:
+                self.compute_stream.wait_event(self._prefetch_done)
+            batch_gpu = self._prefetched_batch
+
+            # Kick off H2D for the *next* batch on the copy stream while we run compute.
+            next_cpu = self._next_batch_cpu()
+            next_gpu = self._launch_h2d(next_cpu)
 
             self._last_batch = batch_gpu.detach()
             with torch.no_grad():
                 out = self.model(batch_gpu)
             self.output = out.detach()
+            self._prefetched_batch = next_gpu
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
 
@@ -147,16 +184,18 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model = None
         self.copy_stream = None
         self.compute_stream = None
+        self._prefetched_batch = None
+        self._prefetch_done = None
         self._last_batch = None
         self.output = None
         self._parameter_count = 0
         super().teardown()
 
     def get_config(self) -> Optional[BenchmarkConfig]:
-        # Keep iterations modest to make sweeps quick.
+        # Need multiple iterations so the copy/compute overlap reaches steady state.
         return BenchmarkConfig(
-            iterations=1,
-            warmup=5,
+            iterations=20,
+            warmup=8,
             adaptive_iterations=False,  # Stateful DataLoader iterator must run fixed counts for verification
             timeout_seconds=120,
             measurement_timeout_seconds=120,

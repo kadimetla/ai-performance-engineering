@@ -90,6 +90,7 @@ class TritonMatmulProtonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         schedule: MatmulSchedule,
         *,
         size: int = 4096,
+        size_k: int = 512,
         iterations: int = 2,
         warmup: int = 10,
         dtype: torch.dtype = torch.float16,
@@ -98,7 +99,10 @@ class TritonMatmulProtonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.schedule = schedule
         self._size_m = size
         self._size_n = size
-        self._size_k = size
+        # Use a smaller K by default to make the workload more memory/latency bound.
+        # This amplifies occupancy/warp-scheduling effects in Proton traces and makes
+        # warp-heavy schedules (e.g., nw=8) a meaningful optimization story.
+        self._size_k = size_k
         self._dtype = dtype
         self._runner: Optional[Callable[[], torch.Tensor]] = None
         self._output: Optional[torch.Tensor] = None

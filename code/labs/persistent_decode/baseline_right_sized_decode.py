@@ -1,4 +1,12 @@
-"""Baseline wrapper for right-sized decode (flag-driven)."""
+"""Baseline wrapper for right-sized decode (flag-driven).
+
+This is the harness-comparable baseline for `optimized_right_sized_decode.py`.
+
+Baseline behavior:
+- Always runs the naive per-token decode loop (one step at a time).
+- Still honors the `--tier/--quantization` knobs so the *workload* matches the
+  optimized variant, but does not select optimized backends (Triton/graphs).
+"""
 
 from __future__ import annotations
 
@@ -13,8 +21,7 @@ import argparse
 from typing import List, Tuple
 
 from core.harness.benchmark_harness import BaseBenchmark
-from labs.persistent_decode.optimized_persistent_decode_graphs import GraphMode, OptimizedPersistentDecodeGraphsBenchmark
-from labs.persistent_decode.optimized_persistent_decode_triton import OptimizedPersistentDecodeTritonBenchmark
+from labs.persistent_decode.baseline_persistent_decode import BaselinePersistentDecodeBenchmark
 from labs.persistent_decode.persistent_decode_common import DecodeOptions, set_decode_options
 
 
@@ -24,13 +31,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quantization", choices=["fp32", "fp16", "int4"], default="fp32", help="Decode quantization mode")
     p.add_argument("--block-k", type=int, default=None, help="Override BLOCK_K (defaults depend on tier)")
     p.add_argument("--num-programs", type=int, default=None, help="Override number of Triton programs")
-    p.add_argument("--backend", choices=["triton", "graphs"], default="triton", help="Select backend")
-    p.add_argument(
-        "--graph-mode",
-        choices=[m.value for m in GraphMode],
-        default=GraphMode.FULL_AND_PIECEWISE.value,
-        help="Graph capture mode for graphs backend",
-    )
     return p
 
 
@@ -53,10 +53,7 @@ set_decode_options(
 
 
 def get_benchmark() -> BaseBenchmark:
-    if _CLI_ARGS.backend == "graphs":
-        mode = GraphMode.from_str(_CLI_ARGS.graph_mode)
-        return OptimizedPersistentDecodeGraphsBenchmark(graph_mode=mode)
-    return OptimizedPersistentDecodeTritonBenchmark()
+    return BaselinePersistentDecodeBenchmark()
 
 
 if __name__ == "__main__":

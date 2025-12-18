@@ -135,11 +135,11 @@ class MoEExperts(nn.Module):
     def forward_batched(
         self, x: torch.Tensor, expert_indices: torch.Tensor, expert_weights: torch.Tensor,
     ) -> torch.Tensor:
-        """Level 1: BATCHED - Einsum parallelizes all tokens.
+        """Level 1: BATCHED - Batched GEMMs parallelize all tokens.
         
         Instead of looping, we:
         1. Gather weights for selected experts: [batch, top_k, ...]
-        2. Use einsum for parallel batched matmul
+        2. Use batched matmul for parallel expert compute
         3. Sum weighted results
         
         Speedup: ~12x (eliminates Python loops)
@@ -151,14 +151,22 @@ class MoEExperts(nn.Module):
         w2_sel = self.w2_stacked[expert_indices]
         
         x_exp = x.unsqueeze(1).expand(-1, top_k, -1)
-        
-        # 3 separate einsums + SiLU
-        gate = torch.einsum('bkh,bkhi->bki', x_exp, w1_sel)
-        gate = F.silu(gate)  # Separate kernel!
-        up = torch.einsum('bkh,bkhi->bki', x_exp, w3_sel)
-        hidden = gate * up   # Separate kernel!
-        out = torch.einsum('bki,bkih->bkh', hidden, w2_sel)
-        
+
+        # Prefer explicit batched GEMMs over einsum; for these shapes einsum can pick
+        # slower kernels and lose to the naive Python dispatch (Level 0).
+        total_tokens = batch_seq * top_k
+        x_flat = x_exp.reshape(total_tokens, self.hidden_size)
+        w1_flat = w1_sel.reshape(total_tokens, self.hidden_size, self.intermediate_size)
+        w3_flat = w3_sel.reshape(total_tokens, self.hidden_size, self.intermediate_size)
+        w2_flat = w2_sel.reshape(total_tokens, self.intermediate_size, self.hidden_size)
+
+        gate = torch.bmm(x_flat.unsqueeze(1), w1_flat).squeeze(1)
+        gate = F.silu(gate)
+        up = torch.bmm(x_flat.unsqueeze(1), w3_flat).squeeze(1)
+        hidden = gate * up
+        out = torch.bmm(hidden.unsqueeze(1), w2_flat).squeeze(1)
+        out = out.view(batch_seq, top_k, self.hidden_size)
+
         return (out * expert_weights.unsqueeze(-1)).sum(dim=1)
     
     def forward_fused(

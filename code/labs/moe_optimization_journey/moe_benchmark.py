@@ -34,7 +34,7 @@ from labs.moe_optimization_journey.moe_model import (
 # Optimization descriptions for each level
 LEVEL_DESCRIPTIONS = {
     0: ("Naive", "Python loops over experts"),
-    1: ("+ Batched", "Einsum parallelizes all tokens"),
+    1: ("+ Batched", "Batched GEMMs parallelize all tokens"),
     2: ("+ Fused", "Triton kernel fuses SiLU*up"),
     3: ("+ MemEfficient", "Reuse buffers, reduce allocations"),
     4: ("+ Grouped", "Sort tokens + per-expert GEMM"),
@@ -182,20 +182,11 @@ class MoEJourneyBenchmark(VerificationPayloadMixin, BaseBenchmark):
         print("  Ready")
     
     def benchmark_fn(self) -> None:
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        
         with self._nvtx_range(f"level{self.LEVEL}"):
             with torch.no_grad():
                 logits = self.compiled_model(self.input_ids)
         # Capture a lightweight slice of logits for verification.
         self.output = logits[:, :1, : min(8, logits.shape[-1])].detach().float().clone()
-        
-        torch.cuda.synchronize()
-        self.last_latency_ms = (time.perf_counter() - start) * 1000
-        
-        total_tokens = self.BATCH_SIZE * self.SEQ_LEN
-        self.last_tokens_per_sec = total_tokens / (self.last_latency_ms / 1000)
         if self.input_ids is None or self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
 
@@ -233,8 +224,6 @@ class MoEJourneyBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         return {
             "level": float(self.LEVEL),
-            "latency_ms": self.last_latency_ms,
-            "tokens_per_sec": self.last_tokens_per_sec,
             "use_batched": float(self.opts.use_batched if self.opts else 0),
             "use_fused": float(self.opts.use_fused if self.opts else 0),
             "use_mem_efficient": float(self.opts.use_mem_efficient if self.opts else 0),
@@ -256,9 +245,14 @@ def run_level(level: int) -> None:
     
     times = []
     for i in range(5):
+        start = time.perf_counter()
         benchmark.benchmark_fn()
-        times.append(benchmark.last_latency_ms)
-        print(f"  Run {i+1}: {benchmark.last_latency_ms:.1f} ms ({benchmark.last_tokens_per_sec:,.0f} tok/s)")
+        torch.cuda.synchronize()
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        times.append(elapsed_ms)
+        total_tokens = benchmark.BATCH_SIZE * benchmark.SEQ_LEN
+        tok_s = total_tokens / (elapsed_ms / 1000)
+        print(f"  Run {i+1}: {elapsed_ms:.1f} ms ({tok_s:,.0f} tok/s)")
     
     avg = sum(times) / len(times)
     print(f"\nMean: {avg:.1f} ms")

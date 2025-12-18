@@ -33,7 +33,9 @@ class VectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.output = None
         self.tensor: Optional[torch.Tensor] = None
-        self.repeats = 32
+        # Repeat count must be high enough that any setup/cast overhead in
+        # precision-change variants is amortized.
+        self.repeats = 256
         self.N = 8_192_000
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.repeats),

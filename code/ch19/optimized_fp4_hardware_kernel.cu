@@ -21,6 +21,8 @@
 #include <cmath>
 #include <string>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t err = call; \
@@ -264,6 +266,16 @@ int main(int argc, char** argv) {
         out.write(reinterpret_cast<const char*>(h_C.data()), h_C.size() * sizeof(__half));
         out.close();
     }
+
+#ifdef VERIFY
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, elements_C * sizeof(__half), cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (const auto& v : h_C) {
+        checksum += static_cast<double>(__half2float(v));
+    }
+    checksum /= static_cast<double>(elements_C);
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     // Cleanup
     CUBLASLT_CHECK(cublasLtMatmulPreferenceDestroy(preference));

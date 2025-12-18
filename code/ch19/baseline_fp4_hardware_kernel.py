@@ -1,104 +1,68 @@
-"""
-Baseline FP4 hardware kernel benchmark (manual quantization path).
+"""Python harness wrapper for baseline_fp4_hardware_kernel.cu (Chapter 19).
 
-Wraps the CUDA sample binary so it can be driven via aisp bench.
+This benchmark participates in the harness as a *comparable* baseline for the
+FP4 hardware-kernel example.
+
+Pairs with: optimized_fp4_hardware_kernel.py
 """
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
-from core.harness.benchmark_harness import (
-    BaseBenchmark,
-    BenchmarkConfig,
-)
-from core.harness.benchmark_harness import WorkloadMetadata
-from core.benchmark.verification_mixin import VerificationPayloadMixin
+from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
+from core.benchmark.verification import simple_signature
+from core.harness.benchmark_harness import BaseBenchmark
+
+_M = 512
+_N = 512
+_K = 512
 
 
-class BaselineFP4HardwareKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Invoke the manual FP4 kernel binary."""
+class BaselineFP4HardwareKernelBenchmark(CudaBinaryBenchmark):
+    """Runs baseline_fp4_hardware_kernel.cu (manual NVFP4 GEMM)."""
 
     def __init__(self) -> None:
-        super().__init__()
-        self.chapter_dir = Path(__file__).parent
-        self.bin_path = self.chapter_dir / "baseline_fp4_hardware_kernel"
-        self._dump_path = self.chapter_dir / "fp4_hardware_kernel_baseline_output.bin"
-        self.matrix_dim = 512
-        self.output = None
-        self._verify_input = None
-        self._verification_payload = None
-        self._ran = False
-        self._workload = WorkloadMetadata(requests_per_iteration=1.0)
+        chapter_dir = Path(__file__).parent
+        super().__init__(
+            chapter_dir=chapter_dir,
+            binary_name="baseline_fp4_hardware_kernel",
+            friendly_name="Baseline FP4 Hardware Kernel (Manual GEMM)",
+            iterations=1,
+            warmup=1,
+            timeout_seconds=300,
+            workload_params={
+                "batch_size": 1,
+                "dtype": "nvfp4_e2m1",
+                "M": _M,
+                "N": _N,
+                "K": _K,
+            },
+        )
         self.register_workload_metadata(requests_per_iteration=1.0)
 
-    def setup(self) -> None:
-        import torch
-        # Build without arch suffix so we know the binary name deterministically.
-        subprocess.run(
-            ["make", "USE_ARCH_SUFFIX=0", "ARCH=sm_100", "baseline_fp4_hardware_kernel"],
-            cwd=self.chapter_dir,
-            check=True,
-        )
-        if not self.bin_path.exists():
-            raise RuntimeError(f"Binary not found at {self.bin_path}")
-        # Dummy input tensor for aliasing checks (binary benchmarks have no inputs)
-        self._verify_input = torch.tensor([0.0], dtype=torch.float32)
-        self.output = None
-        self._ran = False
-
-    def benchmark_fn(self) -> None:
-        with self._nvtx_range("baseline_fp4_hardware_kernel"):
-            subprocess.run(
-                [str(self.bin_path), "--dump-output", str(self._dump_path)],
-                cwd=self.chapter_dir,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        self._ran = True
-
-    def capture_verification_payload(self) -> None:
-        if not self._ran:
-            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
-        if self._verify_input is None:
-            raise RuntimeError("setup() must run before capture_verification_payload()")
-        if not self._dump_path.exists():
-            raise RuntimeError(f"Expected output dump not found at {self._dump_path}")
-        import numpy as np
-        import torch
-        data = np.fromfile(self._dump_path, dtype=np.float16)
-        expected = self.matrix_dim * self.matrix_dim
-        if data.size != expected:
-            raise RuntimeError(f"Unexpected dump size: expected {expected} fp16 values, got {data.size}")
-        self.output = torch.from_numpy(data).clone().reshape(self.matrix_dim, self.matrix_dim)
-        self._set_verification_payload(
-            inputs={"input": self._verify_input},
-            output=self.output,
-            batch_size=1,
-            parameter_count=0,
-            output_tolerance=(0.5, 5.0),
-        )
-
-    def teardown(self) -> None:
-        super().teardown()
-
-    def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=5, use_subprocess=True)
-
     def get_custom_metrics(self) -> Optional[dict]:
-        return {"variant": "baseline_manual_fp4"}
+        if self.last_time_ms is None:
+            raise RuntimeError("Benchmark did not capture TIME_MS output")
+        flops = 2.0 * _M * _N * _K
+        tflops = flops / (float(self.last_time_ms) * 1e9)
+        return {"tflops": float(tflops), "variant": "baseline_manual_fp4"}
 
-    def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if not self.bin_path.exists():
-            return "Binary not found"
-        return None
+    def get_input_signature(self) -> dict:
+        return simple_signature(batch_size=1, dtype="nvfp4_e2m1", M=_M, N=_N, K=_K).to_dict()
+
+    def get_output_tolerance(self) -> tuple[float, float]:
+        # Verification compares scalar checksums derived from FP16 output. Allow small
+        # numerical drift between the manual kernel and cuBLASLt NVFP4 tensor cores.
+        return (1e-2, 1e-2)
 
 
-def get_benchmark() -> BaselineFP4HardwareKernelBenchmark:
+def get_benchmark() -> BaseBenchmark:
     return BaselineFP4HardwareKernelBenchmark()
+
+
+if __name__ == "__main__":
+    from core.harness.benchmark_harness import benchmark_main
+
+    benchmark_main(get_benchmark)

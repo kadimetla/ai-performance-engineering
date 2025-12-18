@@ -34,10 +34,10 @@ class OptimizedClusterMulticastBenchmark(CudaBinaryBenchmark):
                 "M": 2048,
                 "N": 2048,
                 "K": 2048,
-                "tile_m": 64,
-                "tile_n": 64,
+                "tile_m": 32,
+                "tile_n": 32,
                 "tile_k": 32,
-                "cluster_m": 4,
+                "cluster_m": 8,
                 "cluster_n": 1,
             },
         )
@@ -62,4 +62,3 @@ if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
 
     benchmark_main(get_benchmark)
-

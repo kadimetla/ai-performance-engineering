@@ -26,7 +26,7 @@ class OptimizedNanochatInferenceBenchmark(VerificationPayloadMixin, BaseBenchmar
     def __init__(self) -> None:
         super().__init__()
         self.batch_size = 4
-        self.prompt_len = 256
+        self.prompt_len = 512
         self.decode_len = 64
         self.vocab_size = 10_000
         self.n_layer = 4
@@ -59,11 +59,15 @@ class OptimizedNanochatInferenceBenchmark(VerificationPayloadMixin, BaseBenchmar
             n_head=self.n_head,
             n_kv_head=self.n_kv_head,
             n_embd=self.n_embd,
-            use_flash_sdp=True,
+            # Keep attention backend identical to baseline; this benchmark's optimization
+            # story is reduced overhead via compilation on Blackwell.
+            use_flash_sdp=False,
             use_flash3=False,
             use_cta_clustering=False,
-            kv_block_size=32,
-            kv_page_size=1024,
+            # Keep KV cache layout identical to baseline; focus the optimization on
+            # attention kernel choice (fused SDPA vs. efficient/math backends).
+            kv_block_size=None,
+            kv_page_size=None,
         )
 
         with torch.device("meta"):
@@ -72,7 +76,17 @@ class OptimizedNanochatInferenceBenchmark(VerificationPayloadMixin, BaseBenchmar
         model.init_weights()
         model = model.to(dtype=torch.bfloat16)
         model.eval()
-        self.model = model
+        if not hasattr(torch, "compile"):
+            raise RuntimeError("SKIPPED: torch.compile not available for nanochat inference optimization")
+
+        # Compile in setup; benchmark_fn measures steady-state execution.
+        # Keep dynamic=True because the model sees both prompt_len and decode_len=1 shapes.
+        self.model = torch.compile(  # type: ignore[attr-defined]
+            model,
+            mode="max-autotune-no-cudagraphs",
+            fullgraph=True,
+            dynamic=True,
+        )
 
         self.prompt = torch.randint(
             0,
@@ -99,6 +113,14 @@ class OptimizedNanochatInferenceBenchmark(VerificationPayloadMixin, BaseBenchmar
             block_size=cfg.kv_block_size,
             page_size=cfg.kv_page_size,
         )
+
+        # Warmup both prompt and decode shapes so compilation happens before timing.
+        self.kv_cache.reset()
+        with torch.inference_mode():
+            _ = self.model(self.prompt, kv_cache=self.kv_cache)
+            for t in range(min(4, self.decode_len)):
+                step_ids = self.decode_tokens[:, t : t + 1]
+                _ = self.model(step_ids, kv_cache=self.kv_cache)
 
     def benchmark_fn(self) -> None:
         if self.model is None or self.kv_cache is None or self.prompt is None or self.decode_tokens is None:

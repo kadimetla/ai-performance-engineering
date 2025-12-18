@@ -18,8 +18,18 @@ WORKLOAD = get_workload()
 class NaiveKVCache:
     """Naive KV cache - simple dictionary-based storage."""
     
-    def __init__(self, max_seq_len: int, num_layers: int, num_heads: int, head_dim: int, dtype: torch.dtype, device: torch.device):
+    def __init__(
+        self,
+        max_seq_len: int,
+        batch_size: int,
+        num_layers: int,
+        num_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ):
         self.max_seq_len = max_seq_len
+        self.batch_size = batch_size
         self.num_layers = num_layers
         self.num_heads = num_heads
         self.head_dim = head_dim
@@ -28,11 +38,22 @@ class NaiveKVCache:
         self.cache = {}  # request_id -> list of (k, v) tensors per layer
     
     def allocate(self, request_id: str) -> None:
-        """Allocate full cache for a sequence."""
+        """Allocate empty per-layer caches for a request.
+
+        The naive baseline grows KV one token at a time via repeated `torch.cat`,
+        which triggers many reallocations/copies and allocator fragmentation.
+        """
         self.cache[request_id] = []
         for _ in range(self.num_layers):
-            k = torch.zeros(self.max_seq_len, self.num_heads, self.head_dim, dtype=self.dtype, device=self.device)
-            v = torch.zeros(self.max_seq_len, self.num_heads, self.head_dim, dtype=self.dtype, device=self.device)
+            k = torch.empty(
+                0,
+                self.batch_size,
+                self.num_heads,
+                self.head_dim,
+                dtype=self.dtype,
+                device=self.device,
+            )
+            v = torch.empty_like(k)
             self.cache[request_id].append((k, v))
     
     def append(self, request_id: str, layer_idx: int, k: torch.Tensor, v: torch.Tensor, pos: int) -> None:
@@ -40,8 +61,11 @@ class NaiveKVCache:
         if request_id not in self.cache:
             self.allocate(request_id)
         cache_k, cache_v = self.cache[request_id][layer_idx]
-        cache_k[pos:pos+1] = k.unsqueeze(0)
-        cache_v[pos:pos+1] = v.unsqueeze(0)
+        if cache_k.size(0) != pos:
+            raise RuntimeError(f"NaiveKVCache append position mismatch: expected {cache_k.size(0)}, got {pos}")
+        cache_k = torch.cat([cache_k, k.unsqueeze(0)], dim=0)
+        cache_v = torch.cat([cache_v, v.unsqueeze(0)], dim=0)
+        self.cache[request_id][layer_idx] = (cache_k, cache_v)
     
     def get(self, request_id: str, layer_idx: int, start: int, end: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Get cached keys/values."""
@@ -72,26 +96,16 @@ class SimpleAttentionLayer(nn.Module):
         q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        
-        if cache_pos == 0:
-            kv_cache.allocate(request_id)
-        
-        k_to_cache = k[:, :, 0, :].transpose(0, 1)
-        v_to_cache = v[:, :, 0, :].transpose(0, 1)
-        k_single = k_to_cache[:, 0, :]
-        v_single = v_to_cache[:, 0, :]
-        kv_cache.append(request_id, layer_idx, k_single, v_single, cache_pos)
-        
-        if cache_pos > 0:
-            cached_k, cached_v = kv_cache.get(request_id, layer_idx, 0, cache_pos)
-            cached_k = cached_k.permute(1, 0, 2)
-            cached_v = cached_v.permute(1, 0, 2)
-            cached_k = cached_k.unsqueeze(0).expand(batch_size, -1, -1, -1)
-            cached_v = cached_v.unsqueeze(0).expand(batch_size, -1, -1, -1)
-            k = torch.cat([cached_k, k], dim=2)
-            v = torch.cat([cached_v, v], dim=2)
-        
-        out = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
+
+        # Store the current token KV and attend over the cached prefix (decode-style).
+        kv_cache.append(request_id, layer_idx, k[:, :, 0, :], v[:, :, 0, :], cache_pos)
+
+        cached_k, cached_v = kv_cache.get(request_id, layer_idx, 0, cache_pos + 1)
+        # Cache layout: [seq, batch, heads, dim] -> SDPA expects [batch, heads, seq, dim]
+        cached_k = cached_k.permute(1, 2, 0, 3)
+        cached_v = cached_v.permute(1, 2, 0, 3)
+
+        out = F.scaled_dot_product_attention(q, cached_k, cached_v, dropout_p=0.0, is_causal=False)
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
         return self.proj(out)
 
@@ -139,6 +153,7 @@ class BaselineKVCacheNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         self.kv_cache = NaiveKVCache(
             max_seq_len=self.max_seq_len,
+            batch_size=self.batch_size,
             num_layers=self.num_layers,
             num_heads=self.num_heads,
             head_dim=self.head_dim,
@@ -186,7 +201,7 @@ class BaselineKVCacheNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp16": True,
                 "bf16": False,
                 "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32,
+                "tf32": False,
             },
             output_tolerance=(1.0, 100.0),
         )

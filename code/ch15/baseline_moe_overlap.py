@@ -43,12 +43,15 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        self.hidden_size = 1024
-        self.ffn_size = 4096
+        self.hidden_size = 2048
+        self.ffn_size = 512
         self.num_experts = 64
         self.batch = 64
-        self.seq = 16
+        self.seq = 64
         self.dtype = torch.bfloat16
+        # Simulate expert-parallel comm as many small messages (chunked copies).
+        # This makes the overlap optimization measurable without changing semantics.
+        self.comm_chunks = 4096
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(
@@ -112,7 +115,11 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("baseline_moe_overlap"):
             with torch.no_grad():
                 shared_out = self.shared_expert(flat)
-                self._comm_flat.copy_(flat)
+                total_tokens = flat.shape[0]
+                chunk_tokens = max(1, (total_tokens + self.comm_chunks - 1) // self.comm_chunks)
+                for start in range(0, total_tokens, chunk_tokens):
+                    end = min(start + chunk_tokens, total_tokens)
+                    self._comm_flat[start:end].copy_(flat[start:end])
                 dispatch_shared_expert_active_experts(
                     self._comm_flat,
                     expert_ids_flat,

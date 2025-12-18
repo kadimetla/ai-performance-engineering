@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Dict, List, Optional
 
 import torch
 
@@ -18,7 +19,7 @@ from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
 class BaselineDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Naive decode attention with many small matmuls."""
+    """Naive decode attention with explicit matmul + softmax."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -27,10 +28,9 @@ class BaselineDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.num_heads = 12
         self.kv_seq = 512
         self.head_dim = 64
-        self.module: Optional[torch.nn.Module] = None
-        self.q: Optional[torch.Tensor] = None
-        self.k: Optional[torch.Tensor] = None
-        self.v: Optional[torch.Tensor] = None
+        self.q: Optional[torch.Tensor] = None  # [B, H, 1, D]
+        self.k: Optional[torch.Tensor] = None  # [B, H, S, D]
+        self.v: Optional[torch.Tensor] = None  # [B, H, S, D]
         tokens = self.batch * self.kv_seq
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch),
@@ -44,24 +44,12 @@ class BaselineDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        self.module = torch.nn.MultiheadAttention(
-            embed_dim=self.num_heads * self.head_dim,
-            num_heads=self.num_heads,
-            batch_first=True,
-            device=self.device,
-            dtype=torch.float32,
-        )
-        self.q = torch.randn(
-            self.batch,
-            1,
-            self.num_heads * self.head_dim,
-            device=self.device,
-            dtype=torch.float32,
-        )
+        self.q = torch.randn(self.batch, self.num_heads, 1, self.head_dim, device=self.device, dtype=torch.float32)
         self.k = torch.randn(
             self.batch,
+            self.num_heads,
             self.kv_seq,
-            self.num_heads * self.head_dim,
+            self.head_dim,
             device=self.device,
             dtype=torch.float32,
         )
@@ -70,14 +58,21 @@ class BaselineDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output = None
 
     def benchmark_fn(self) -> Dict[str, List[float]]:
-        if any(t is None for t in (self.module, self.q, self.k, self.v)):
+        if any(t is None for t in (self.q, self.k, self.v)):
             raise RuntimeError("Decode tensors missing")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("moe_cuda_decode_naive", enable=enable_nvtx):
             with torch.inference_mode():
                 start = self._record_start()
-                attn_out, _ = self.module(self.q, self.k, self.v)
+                q = self.q
+                k = self.k
+                v = self.v
+                scale = 1.0 / math.sqrt(self.head_dim)
+                scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+                probs = torch.softmax(scores, dim=-1)
+                attn = torch.matmul(probs, v)
+                attn_out = attn.transpose(1, 2).reshape(self.batch, 1, self.num_heads * self.head_dim)
                 torch.cuda.synchronize(self.device)
                 self._history["latency_ms"].append(self._record_stop(start))
                 self.output = attn_out.detach().float().clone()
@@ -94,7 +89,7 @@ class BaselineDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def capture_verification_payload(self) -> None:
         meta = self._payload_meta
         self._set_verification_payload(
-            inputs={"meta": meta},
+            inputs={"meta": meta, "q": self.q, "k": self.k, "v": self.v},
             output=self.output,
             batch_size=self.batch,
             parameter_count=0,
@@ -104,7 +99,6 @@ class BaselineDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()
-        self.module = None
         self.q = None
         self.k = None
         self.v = None
@@ -124,7 +118,7 @@ class BaselineDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         }
 
     def validate_result(self) -> Optional[str]:
-        if any(t is None for t in (self.module, self.q, self.k, self.v)):
+        if any(t is None for t in (self.q, self.k, self.v)):
             return "Decode tensors missing"
         return None
 

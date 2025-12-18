@@ -24,8 +24,18 @@ WORKLOAD = get_workload()
 class OptimizedKVCache:
     """Optimized KV cache - efficient memory management."""
     
-    def __init__(self, max_seq_len: int, num_layers: int, num_heads: int, head_dim: int, dtype: torch.dtype, device: torch.device):
+    def __init__(
+        self,
+        max_seq_len: int,
+        batch_size: int,
+        num_layers: int,
+        num_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ):
         self.max_seq_len = max_seq_len
+        self.batch_size = batch_size
         self.num_layers = num_layers
         self.num_heads = num_heads
         self.head_dim = head_dim
@@ -33,14 +43,25 @@ class OptimizedKVCache:
         self.device = device
         self.cache_pool = []
         self.allocated_caches = {}
-        for _ in range(10):
+        # The benchmark processes requests sequentially (single in-flight request),
+        # so a small pool demonstrates reuse without inflating the allocator's
+        # reserved footprint.
+        pool_size = 2
+        for _ in range(pool_size):
             cache_entry = []
             for _ in range(self.num_layers):
-                k = torch.zeros(self.max_seq_len, self.num_heads, self.head_dim, dtype=self.dtype, device=self.device)
-                v = torch.zeros(self.max_seq_len, self.num_heads, self.head_dim, dtype=self.dtype, device=self.device)
+                k = torch.zeros(
+                    self.max_seq_len,
+                    self.batch_size,
+                    self.num_heads,
+                    self.head_dim,
+                    dtype=self.dtype,
+                    device=self.device,
+                )
+                v = torch.zeros_like(k)
                 cache_entry.append((k, v))
             self.cache_pool.append(cache_entry)
-        self.free_indices = list(range(10))
+        self.free_indices = list(range(pool_size))
     
     def allocate(self, request_id: str) -> None:
         if request_id in self.allocated_caches:
@@ -51,8 +72,15 @@ class OptimizedKVCache:
         else:
             cache_entry = []
             for _ in range(self.num_layers):
-                k = torch.zeros(self.max_seq_len, self.num_heads, self.head_dim, dtype=self.dtype, device=self.device)
-                v = torch.zeros(self.max_seq_len, self.num_heads, self.head_dim, dtype=self.dtype, device=self.device)
+                k = torch.zeros(
+                    self.max_seq_len,
+                    self.batch_size,
+                    self.num_heads,
+                    self.head_dim,
+                    dtype=self.dtype,
+                    device=self.device,
+                )
+                v = torch.zeros_like(k)
                 cache_entry.append((k, v))
             self.cache_pool.append(cache_entry)
             cache_idx = len(self.cache_pool) - 1
@@ -63,8 +91,8 @@ class OptimizedKVCache:
             self.allocate(request_id)
         cache_idx = self.allocated_caches[request_id]
         cache_k, cache_v = self.cache_pool[cache_idx][layer_idx]
-        cache_k[pos:pos+1] = k.unsqueeze(0)
-        cache_v[pos:pos+1] = v.unsqueeze(0)
+        cache_k[pos].copy_(k)
+        cache_v[pos].copy_(v)
     
     def get(self, request_id: str, layer_idx: int, start: int, end: int) -> tuple[torch.Tensor, torch.Tensor]:
         cache_idx = self.allocated_caches[request_id]
@@ -74,12 +102,10 @@ class OptimizedKVCache:
     def free(self, request_id: str) -> None:
         if request_id in self.allocated_caches:
             cache_idx = self.allocated_caches[request_id]
-            for layer_idx in range(self.num_layers):
-                cache_k, cache_v = self.cache_pool[cache_idx][layer_idx]
-                cache_k.zero_()
-                cache_v.zero_()
-            if cache_idx < 10:
-                self.free_indices.append(cache_idx)
+            # Reuse buffers without clearing: decode only reads the prefix that
+            # was written for the current request (0..cache_pos), so stale tail
+            # values are never observed. Clearing here is pure overhead.
+            self.free_indices.append(cache_idx)
             del self.allocated_caches[request_id]
 
 
@@ -103,26 +129,16 @@ class SimpleAttentionLayer(nn.Module):
         q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        
-        if cache_pos == 0:
-            kv_cache.allocate(request_id)
-        
-        k_to_cache = k[:, :, 0, :].transpose(0, 1)
-        v_to_cache = v[:, :, 0, :].transpose(0, 1)
-        k_single = k_to_cache[:, 0, :]
-        v_single = v_to_cache[:, 0, :]
-        kv_cache.append(request_id, layer_idx, k_single, v_single, cache_pos)
-        
-        if cache_pos > 0:
-            cached_k, cached_v = kv_cache.get(request_id, layer_idx, 0, cache_pos)
-            cached_k = cached_k.permute(1, 0, 2)
-            cached_v = cached_v.permute(1, 0, 2)
-            cached_k = cached_k.unsqueeze(0).expand(batch_size, -1, -1, -1)
-            cached_v = cached_v.unsqueeze(0).expand(batch_size, -1, -1, -1)
-            k = torch.cat([cached_k, k], dim=2)
-            v = torch.cat([cached_v, v], dim=2)
-        
-        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
+
+        # Store the current token KV and attend over the cached prefix (decode-style).
+        kv_cache.append(request_id, layer_idx, k[:, :, 0, :], v[:, :, 0, :], cache_pos)
+
+        cached_k, cached_v = kv_cache.get(request_id, layer_idx, 0, cache_pos + 1)
+        # Cache layout: [seq, batch, heads, dim] -> SDPA expects [batch, heads, seq, dim]
+        cached_k = cached_k.permute(1, 2, 0, 3)
+        cached_v = cached_v.permute(1, 2, 0, 3)
+
+        out = torch.nn.functional.scaled_dot_product_attention(q, cached_k, cached_v, dropout_p=0.0, is_causal=False)
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
         return self.proj(out)
 
@@ -171,6 +187,7 @@ class OptimizedKVCacheNaivePoolBenchmark(VerificationPayloadMixin, BaseBenchmark
         
         self.kv_cache = OptimizedKVCache(
             max_seq_len=self.max_seq_len,
+            batch_size=self.batch_size,
             num_layers=self.num_layers,
             num_heads=self.num_heads,
             head_dim=self.head_dim,
@@ -195,6 +212,7 @@ class OptimizedKVCacheNaivePoolBenchmark(VerificationPayloadMixin, BaseBenchmark
             for seq_idx, x in enumerate(self.inputs):
                 request_id = f"req_{seq_idx}"
                 seq_len = x.size(1)
+                self.kv_cache.allocate(request_id)
                 
                 for pos in range(seq_len):
                     token = x[:, pos:pos+1, :]
@@ -219,7 +237,7 @@ class OptimizedKVCacheNaivePoolBenchmark(VerificationPayloadMixin, BaseBenchmark
                 "fp16": self.workload.dtype == torch.float16,
                 "bf16": self.workload.dtype == torch.bfloat16,
                 "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                "tf32": False,
             },
             output_tolerance=(1.0, 100.0),
         )

@@ -26,93 +26,65 @@ class OptimizedKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.chunk_size = 256
         self.num_chunks = 32
         self.pipeline_depth = 2
+        self.dtype = torch.float16
         self.input_chunks: Optional[torch.Tensor] = None
         self.weight: Optional[torch.Tensor] = None
         self.workspace: Optional[torch.Tensor] = None
         self.kv_dest: Optional[torch.Tensor] = None
         self.compute_stream = torch.cuda.Stream()
         self.copy_stream = torch.cuda.Stream()
-        self.events: List[torch.cuda.Event] = [
+        # Use per-chunk events to avoid unsafe reuse that can mis-order waits.
+        self.compute_done_events: List[torch.cuda.Event] = [
             torch.cuda.Event(enable_timing=False, blocking=False)
-            for _ in range(self.pipeline_depth)
+            for _ in range(self.num_chunks)
         ]
         tokens = self.num_chunks * self.chunk_size
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.num_chunks),
             tokens_per_iteration=float(tokens),
         )
+        self._payload_meta: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
-        import gc
-        
-        # Clean up any leftover CUDA graph state from previous benchmarks
-        # to prevent "Offset increment outside graph capture" errors
-        gc.collect()
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        
-        try:
-            if hasattr(torch.cuda, 'graph_pool_trim'):
-                torch.cuda.graph_pool_trim()
-        except Exception:
-            pass
-        
-        # CRITICAL: Reset CUDA random number generator state
-        # CUDA graphs capture the RNG offset, which causes "Offset increment 
-        # outside graph capture" errors when using torch.randn
-        try:
-            device_idx = torch.cuda.current_device()
-            gen = torch.cuda.default_generators[device_idx]
-            # set_offset(0) properly resets the graph capture state
-            gen.set_offset(0)
-            gen.manual_seed(42)
-        except Exception:
-            pass
-        
-        try:
-            torch._dynamo.reset()
-        except Exception:
-            pass
-        
-        try:
-            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
-        except Exception:
-            pass
-        
+        if not torch.cuda.is_available():
+            raise RuntimeError("labs.moe_cuda KV transfer requires CUDA")
+
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        # Create tensors using CPU randn + to(device) to avoid CUDA RNG graph capture issues
-        # This is safer because CPU randn doesn't interact with CUDA graph capture state
         self.input_chunks = torch.randn(
             self.num_chunks,
             self.chunk_size,
             self.hidden_size,
-            dtype=torch.float16,
-        ).to(self.device)
-        self.weight = torch.randn(self.hidden_size, self.hidden_size, dtype=torch.float16).to(self.device)
+            dtype=self.dtype,
+            device=self.device,
+        )
+        self.weight = torch.randn(
+            self.hidden_size,
+            self.hidden_size,
+            dtype=self.dtype,
+            device=self.device,
+        )
         self.workspace = torch.zeros_like(self.input_chunks)
         self.kv_dest = torch.zeros_like(self.input_chunks)
         
-        # Warmup the streams to avoid capture issues
+        # Warmup the streams so the steady-state path doesn't include one-time setup overhead.
         with torch.cuda.stream(self.compute_stream):
-            _ = torch.matmul(self.input_chunks[0], self.weight)
+            torch.matmul(self.input_chunks[0], self.weight, out=self.workspace[0])
         with torch.cuda.stream(self.copy_stream):
             self.kv_dest[0].copy_(self.workspace[0])
-        torch.cuda.synchronize(self.device)
+        self._synchronize()
 
     def _launch_compute(self, idx: int, event: torch.cuda.Event) -> None:
         assert self.input_chunks is not None and self.weight is not None and self.workspace is not None
-        with torch.cuda.stream(self.compute_stream):
-            chunk = self.input_chunks[idx]  # [chunk_size, hidden]
-            out = torch.matmul(chunk, self.weight)
-            self.workspace[idx].copy_(out)
-            event.record(self.compute_stream)
+        chunk = self.input_chunks[idx]  # [chunk_size, hidden]
+        torch.matmul(chunk, self.weight, out=self.workspace[idx])
+        event.record(self.compute_stream)
 
     def _launch_copy(self, idx: int, event: torch.cuda.Event) -> None:
         assert self.workspace is not None and self.kv_dest is not None
         self.copy_stream.wait_event(event)
-        with torch.cuda.stream(self.copy_stream):
-            self.kv_dest[idx].copy_(self.workspace[idx], non_blocking=True)
+        self.kv_dest[idx].copy_(self.workspace[idx])
 
     def benchmark_fn(self) -> None:
         if any(t is None for t in (self.input_chunks, self.weight, self.workspace, self.kv_dest)):
@@ -121,21 +93,28 @@ class OptimizedKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("moe_cuda_kv_overlap", enable=enable_nvtx):
-            for i in range(self.num_chunks):
-                compute_event = self.events[i % self.pipeline_depth]
-                self._launch_compute(i, compute_event)
-                self._launch_copy(i, compute_event)
-            torch.cuda.current_stream().wait_stream(self.compute_stream)
-            torch.cuda.current_stream().wait_stream(self.copy_stream)
-        torch.cuda.synchronize(self.device)
+            # Reduce Python overhead by issuing all compute on one stream context
+            # and all dependent copies on a second stream context.
+            with torch.cuda.stream(self.compute_stream):
+                for i in range(self.num_chunks):
+                    compute_event = self.compute_done_events[i]
+                    self._launch_compute(i, compute_event)
+            with torch.cuda.stream(self.copy_stream):
+                for i in range(self.num_chunks):
+                    self._launch_copy(i, self.compute_done_events[i])
+            torch.cuda.current_stream(self.device).wait_stream(self.copy_stream)
         if self.kv_dest is None:
             raise RuntimeError("KV destination missing")
         self.output = self.kv_dest[0, :1, : min(8, self.hidden_size)].detach().float().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() did not produce output")
         meta = torch.tensor([self.hidden_size], dtype=torch.int64, device="cpu")
         self._payload_meta = meta
 
     def capture_verification_payload(self) -> None:
         meta = self._payload_meta
+        if meta is None or self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"meta": meta},
             output=self.output,
@@ -159,19 +138,7 @@ class OptimizedKVTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return roofline analysis metrics."""
-        # Estimate problem size for roofline analysis
-        n = getattr(self, 'N', 0) or getattr(self, 'hidden_dim', 0) or 4096
-        batch = getattr(self, 'batch_size', 1) or getattr(self, 'batch', 1)
-        # Simple FLOP estimate for linear layers
-        flops = 2.0 * batch * n * n  # Rough estimate
-        bytes_moved = batch * n * 4.0  # Input/output bytes
-        arithmetic_intensity = flops / max(bytes_moved, 1.0)
-        return {
-            "kv_transfer.estimated_flops": flops,
-            "kv_transfer.estimated_bytes": bytes_moved,
-            "kv_transfer.arithmetic_intensity": arithmetic_intensity,
-        }
+        return None
 
     def validate_result(self) -> Optional[str]:
         if any(t is None for t in (self.input_chunks, self.weight, self.workspace, self.kv_dest)):

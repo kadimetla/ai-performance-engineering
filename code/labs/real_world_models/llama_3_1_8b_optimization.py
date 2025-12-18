@@ -2,24 +2,25 @@
 """Real-world case study: Llama 3.1 8B optimization for Blackwell.
 
 Demonstrates end-to-end optimization of Llama 3.1 8B:
-- torch.compile with optimal settings
-- FlexAttention for long contexts
-- FP8 quantization with Transformer Engine
-- CUDA graph capture
-- Context Parallelism for 128K+ contexts
+- torch.compile with Blackwell-friendly settings
+- Preferred SDPA backends (TE/Flash) via sdpa_kernel
+- Avoids naive materialized attention when optimized
 """
+
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
-from typing import Dict, Any, Optional
+import torch.nn.functional as F
+from typing import Any, Dict, Optional
 import sys
 from pathlib import Path
-import time
 
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core.harness.benchmark_harness import BenchmarkHarness, BenchmarkConfig, BenchmarkMode
+from core.harness.arch_config import prefer_sdpa_backends
+from core.utils.compile_utils import compile_model
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,63 +39,84 @@ class Llama31_8B_Optimization:
     def __init__(
         self,
         batch_size: int = 1,
-        seq_length: int = 8192,
+        seq_length: int = 2048,
         use_compile: bool = True,
         use_fp8: bool = False,
         use_flex_attention: bool = True,
+        prefer_sdpa: bool = True,
     ):
         self.batch_size = batch_size
         self.seq_length = seq_length
         self.use_compile = use_compile
         self.use_fp8 = use_fp8
         self.use_flex_attention = use_flex_attention
+        self.prefer_sdpa = prefer_sdpa
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.output: Optional[torch.Tensor] = None
+        self.model: Optional[nn.Module] = None
         
-        logger.info(f"Llama 3.1 8B Optimization")
-        logger.info(f"  Compile: {use_compile}")
-        logger.info(f"  FP8: {use_fp8}")
-        logger.info(f"  FlexAttention: {use_flex_attention}")
+        logger.info("Llama 3.1 8B Optimization")
+        logger.info("  Compile: %s", use_compile)
+        logger.info("  FP8: %s", use_fp8)
+        logger.info("  Fast attention (SDPA): %s", use_flex_attention)
+        logger.info("  Prefer SDPA backends: %s", prefer_sdpa)
     
     def _create_attention_layer(self):
         """Create attention layer (simplified for benchmark)."""
+        use_fast_attention = bool(self.use_flex_attention)
+        prefer_sdpa = bool(self.prefer_sdpa)
+
         class SimplifiedAttention(nn.Module):
-            def __init__(self, hidden_size, num_heads):
+            def __init__(self, hidden_size: int, num_heads: int, seq_len: int):
                 super().__init__()
                 self.hidden_size = hidden_size
                 self.num_heads = num_heads
                 self.head_dim = hidden_size // num_heads
+                self._scale = 1.0 / (self.head_dim ** 0.5)
                 
                 self.q_proj = nn.Linear(hidden_size, hidden_size, bias=False)
                 self.k_proj = nn.Linear(hidden_size, hidden_size, bias=False)
                 self.v_proj = nn.Linear(hidden_size, hidden_size, bias=False)
                 self.o_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+
+                # For the naive baseline attention path, precompute a causal mask once
+                # to avoid measuring mask materialization overhead.
+                causal = torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), diagonal=1)
+                self.register_buffer("_causal_mask", causal, persistent=False)
             
-            def forward(self, x, use_sdpa=True):
+            def forward(self, x):
                 B, T, C = x.shape
+                if T != self._causal_mask.shape[0]:
+                    raise RuntimeError(
+                        f"Unexpected sequence length: got T={T}, expected {self._causal_mask.shape[0]}"
+                    )
                 
                 q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
                 k = self.k_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
                 v = self.v_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
                 
-                if use_sdpa:
-                    # Use Flash Attention / SDPA
-                    attn_output = torch.nn.functional.scaled_dot_product_attention(
-                        q, k, v, is_causal=True
-                    )
+                if use_fast_attention:
+                    cm = prefer_sdpa_backends() if prefer_sdpa else None
+                    if cm is None:
+                        attn = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+                    else:
+                        with cm:
+                            attn = F.scaled_dot_product_attention(q, k, v, is_causal=True)
                 else:
-                    # Manual attention
-                    scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
-                    mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
-                    scores.masked_fill_(mask, float('-inf'))
-                    attn_weights = torch.softmax(scores, dim=-1)
-                    attn_output = torch.matmul(attn_weights, v)
+                    # NAIVE baseline attention: materializes [B, H, T, T] and uses explicit softmax.
+                    q_fp32 = q.float()
+                    k_fp32 = k.float()
+                    v_fp32 = v.float()
+                    scores = torch.matmul(q_fp32, k_fp32.transpose(-2, -1)) * self._scale
+                    scores = scores.masked_fill(self._causal_mask, float("-inf"))
+                    probs = torch.softmax(scores, dim=-1)
+                    attn = torch.matmul(probs, v_fp32).to(dtype=q.dtype)
                 
-                attn_output = attn_output.transpose(1, 2).contiguous().view(B, T, C)
-                return self.o_proj(attn_output)
+                attn = attn.transpose(1, 2).contiguous().view(B, T, C)
+                return self.o_proj(attn)
         
-        return SimplifiedAttention(self.HIDDEN_SIZE, self.NUM_HEADS)
+        return SimplifiedAttention(self.HIDDEN_SIZE, self.NUM_HEADS, self.seq_length)
     
     def _create_mlp_layer(self):
         """Create MLP layer (SwiGLU)."""
@@ -112,6 +134,9 @@ class Llama31_8B_Optimization:
     
     def setup(self):
         """Initialize Llama 3.1 8B model (simplified)."""
+        if self.use_fp8:
+            raise RuntimeError("SKIPPED: use_fp8 is not implemented for this benchmark yet.")
+
         class SimplifiedLlamaLayer(nn.Module):
             def __init__(self, attention, mlp):
                 super().__init__()
@@ -126,6 +151,16 @@ class Llama31_8B_Optimization:
                 # MLP with residual
                 out = h + self.mlp(self.post_attention_layernorm(h))
                 return out
+
+        class LayerStack(nn.Module):
+            def __init__(self, layers: nn.ModuleList):
+                super().__init__()
+                self.layers = layers
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                for layer in self.layers:
+                    x = layer(x)
+                return x
         
         # Create simplified model (just a few layers for benchmarking)
         self.layers = nn.ModuleList([
@@ -134,19 +169,19 @@ class Llama31_8B_Optimization:
                 self._create_mlp_layer()
             )
             for _ in range(4)  # Use 4 layers for faster benchmarking
-        ]).to(self.device).to(torch.bfloat16)
+        ]).to(self.device).to(torch.bfloat16).eval()
         
-        # Apply torch.compile if requested - compile each layer individually
+        self.model = LayerStack(self.layers)
+        self.model.eval()
+
+        # Apply torch.compile if requested.
         if self.use_compile:
-            logger.info("Compiling model with torch.compile...")
-            compiled_layers = []
-            for i, layer in enumerate(self.layers):
-                compiled_layers.append(torch.compile(
-                    layer,
-                    mode="max-autotune",  # Best for Blackwell
-                    fullgraph=True,
-                ))
-            self.layers = nn.ModuleList(compiled_layers)
+            self.model = compile_model(
+                self.model,
+                mode="max-autotune",
+                fullgraph=False,
+                dynamic=False,
+            )
         
         # Create input
         self.input = torch.randn(
@@ -160,34 +195,18 @@ class Llama31_8B_Optimization:
         
         logger.info(f"Model setup complete: {self.seq_length} tokens")
     
-    def run(self) -> float:
-        """Execute forward pass."""
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        
-        # Forward pass through all layers
-        x = self.input
-        for layer in self.layers:
-            x = layer(x)
-        self.output = x.detach()
-        
-        torch.cuda.synchronize()
-        end = time.perf_counter()
-        
-        elapsed_ms = (end - start) * 1000
-        
-        # Calculate throughput
-        tokens_per_sec = (self.batch_size * self.seq_length) / (elapsed_ms / 1000)
-        
-        logger.info(f"Throughput: {tokens_per_sec:.2f} tokens/sec")
-        logger.info(f"Latency: {elapsed_ms:.2f} ms")
-        
-        return elapsed_ms
+    def run(self) -> None:
+        """Execute forward pass (timed by the harness)."""
+        if self.model is None:
+            raise RuntimeError("Model not initialized (call setup() first)")
+        with torch.inference_mode():
+            self.output = self.model(self.input)
     
     def cleanup(self):
         """Clean up resources."""
-        del self.layers
-        del self.input
+        self.model = None
+        self.layers = None
+        self.input = None
         torch.cuda.empty_cache()
 
     # Harness adapter
@@ -198,7 +217,7 @@ class Llama31_8B_Optimization:
 
 def run_benchmark(
     batch_size: int = 1,
-    seq_length: int = 8192,
+    seq_length: int = 2048,
     use_compile: bool = True,
     use_fp8: bool = False,
     use_flex_attention: bool = True,
@@ -215,33 +234,6 @@ def run_benchmark(
         use_flex_attention=use_flex_attention,
     )
     benchmark.setup()
-    
-    config = BenchmarkConfig(
-        iterations=5,
-        warmup=10,  # Warmup for compile
-        profile_mode=profile,
-    )
-    
-    harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
-    
-    result = harness.benchmark(
-        benchmark.run,
-        name="llama_3_1_8b_optimization"
-    )
-    
+    benchmark.run()
     benchmark.cleanup()
-    
-    return {
-        "mean_time_ms": result.timing.mean_ms,
-        "seq_length": seq_length,
-        "optimizations": {
-            "compile": use_compile,
-            "fp8": use_fp8,
-            "flex_attention": use_flex_attention,
-        }
-    }
-
-
-if __name__ == "__main__":
-    from core.harness.benchmark_harness import benchmark_main
-    benchmark_main(get_benchmark)
+    return {"seq_length": seq_length, "optimizations": {"compile": use_compile, "fp8": use_fp8, "flex_attention": use_flex_attention}}

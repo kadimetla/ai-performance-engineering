@@ -27,6 +27,8 @@
 #include <string>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t err = call; \
@@ -245,6 +247,17 @@ int main(int argc, char** argv) {
             out.write(reinterpret_cast<const char*>(h_C.data()), h_C.size() * sizeof(__half));
             out.close();
         }
+
+#ifdef VERIFY
+        std::vector<__half> h_C_verify(elements_C);
+        CUDA_CHECK(cudaMemcpy(h_C_verify.data(), d_C, elements_C * sizeof(__half), cudaMemcpyDeviceToHost));
+        double checksum = 0.0;
+        for (const auto& v : h_C_verify) {
+            checksum += static_cast<double>(__half2float(v));
+        }
+        checksum /= static_cast<double>(elements_C);
+        VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
         CUDA_CHECK(cudaEventDestroy(start));
         CUDA_CHECK(cudaEventDestroy(stop));
