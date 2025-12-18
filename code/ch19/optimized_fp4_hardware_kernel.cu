@@ -239,7 +239,7 @@ int main(int argc, char** argv) {
     double flops = 2.0 * M * N * K;
     double tflops = flops / (avg_ms * 1e9);
 
-    std::cout << "RESULT_MS: " << avg_ms << std::endl;
+    std::cout << "TIME_MS: " << avg_ms << std::endl;
 
     // Optional dump for harness verification: --dump-output <path>
     std::string dump_path;

@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
         CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
         float avg_ms = total_ms / iterations;
 
-        std::cout << "RESULT_MS: " << avg_ms << std::endl;
+        std::cout << "TIME_MS: " << avg_ms << std::endl;
 
         if (!dump_path.empty()) {
             std::vector<__half> h_C(elements_C);
