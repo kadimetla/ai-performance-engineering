@@ -84,7 +84,7 @@ class OptimizedNanochatInferenceBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.model = torch.compile(  # type: ignore[attr-defined]
             model,
             mode="max-autotune-no-cudagraphs",
-            fullgraph=True,
+            fullgraph=False,
             dynamic=True,
         )
 

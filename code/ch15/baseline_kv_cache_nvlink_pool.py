@@ -11,6 +11,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.benchmark.gpu_requirements import skip_if_insufficient_gpus
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch15.verification_payload_mixin import VerificationPayloadMixin
 
@@ -38,6 +39,7 @@ class BaselineKVCacheLocalOnlyBenchmark(VerificationPayloadMixin, BaseBenchmark)
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
+        skip_if_insufficient_gpus(2)
         self.model = nn.MultiheadAttention(self.hidden, self.heads, batch_first=True).to(self.device).eval()
         # KV cache stored locally only
         self.cache = torch.zeros(self.cache_limit, self.batch, self.hidden, device=self.device)

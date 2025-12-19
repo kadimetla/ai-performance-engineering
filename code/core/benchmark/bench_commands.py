@@ -200,7 +200,7 @@ def _execute_benchmarks(
     suite_timeout: Optional[int] = 14400,
     timeout_multiplier: float = 1.0,
     allow_invalid_environment: bool = False,
-    allow_virtualization: bool = False,
+    allow_virtualization: bool = True,
     reproducible: bool = False,
     cold_start: bool = False,
     iterations: Optional[int] = None,
@@ -384,13 +384,12 @@ if TYPER_AVAILABLE:
             is_flag=True,
         ),
         allow_virtualization: bool = Option(
-            False,
-            "--allow-virtualization",
+            True,
+            "--allow-virtualization/--disallow-virtualization",
             help=(
                 "Allow running in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
-                "virtualization check to a loud warning. Results are still invalid; bare metal is required."
+                "virtualization check to a loud warning. Use --disallow-virtualization to enforce bare metal."
             ),
-            is_flag=True,
         ),
         reproducible: bool = Option(False, "--reproducible", help="Enable reproducible mode: set all seeds to 42 and force deterministic algorithms (uses slower fallbacks; ops without deterministic support may error)."),
         cold_start: bool = Option(False, "--cold-start", help="Reset GPU state between benchmarks for cold start measurements"),

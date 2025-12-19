@@ -100,7 +100,6 @@ class _DisaggregatedInferenceBenchmark(BaselineMoeInferenceBenchmark):
 
         self._disagg_history["prefill_ms"].extend(ttft_samples)
         self._disagg_history["decode_ms"].extend(decode_samples)
-        self._finalize_verification_payload()
         return {"prefill_ms": ttft_samples, "decode_ms": decode_samples}
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -71,7 +72,14 @@ class TorchrunScriptBenchmark(BaseBenchmark):
     
     def get_input_signature(self) -> Optional[dict]:
         """Return input signature for verification (static script identity)."""
-        workload_id = abs(hash((self._script_path.name, tuple(self._base_args), self._target_label, self._multi_gpu_required))) % 10_000_000 + 1
+        identity = (
+            f"target={self._target_label}|"
+            f"script={self._script_path.name}|"
+            f"multi_gpu_required={int(self._multi_gpu_required)}|"
+            f"nproc_per_node={self._default_nproc_per_node}"
+        )
+        digest = hashlib.sha256(identity.encode("utf-8")).digest()
+        workload_id = int.from_bytes(digest[:4], byteorder="little", signed=False) % 10_000_000 + 1
         return simple_signature(batch_size=1, dtype="float32", workload=workload_id, script_len=len(self._script_path.name))
 
     def get_verify_output(self) -> "torch.Tensor":

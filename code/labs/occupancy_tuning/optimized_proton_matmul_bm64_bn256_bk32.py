@@ -36,7 +36,7 @@ class OptimizedProtonMatmul(TritonMatmulProtonBenchmark):
     Benefit: Better compute density on high-bandwidth SM
     """
 
-    def __init__(self, size: int = 4096):
+    def __init__(self, size: int = 8192):
         super().__init__(
             schedule=SCHEDULE,
             size=size,

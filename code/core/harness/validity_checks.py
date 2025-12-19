@@ -676,19 +676,19 @@ def validate_environment(
     if is_virtualized:
         product_hint = f" (dmi_product_name={product_name!r})" if product_name else ""
         message = (
-            "BARE METAL REQUIRED: Virtualization detected (hypervisor present). "
-            "This repo's benchmark results are not valid in virtualized environments "
+            "Virtualization detected (hypervisor present). "
+            "Bare metal is recommended for final benchmark numbers "
             "(Nsight tools like nsys/ncu may be unavailable or misleading)."
             f"{product_hint}"
         )
         if allow_virtualization:
             warnings_list.append(
-                f"{message} Continuing ONLY because allow_virtualization=True; do not trust results."
+                f"{message} Continuing because allow_virtualization=True."
             )
         else:
             errors.append(
-                f"{message} Run on bare metal for valid results. "
-                "If you must run in a VM for development only, pass --allow-virtualization."
+                f"{message} Run on bare metal for final results. "
+                "If you want to run anyway, pass --allow-virtualization or set allow_virtualization=True."
             )
 
     # torch.compile backend sanity (Compile category)

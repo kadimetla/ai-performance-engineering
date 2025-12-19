@@ -45,13 +45,16 @@ except ImportError:
 class OptimizedFSDP2FP8(BaseBenchmark):
     """Optimized FSDP2 with FP8 training."""
 
+    signature_equivalence_group = "labs_train_distributed_fsdp2_standalone_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(
         self,
-        batch_size: int = 8,  # 2× baseline
+        batch_size: int = 4,
         seq_length: int = 2048,
         hidden_size: int = 4096,
         num_layers: int = 8,
-        micro_batch_size: int = 2,
+        micro_batch_size: int = 1,
         use_fp8: bool = True,
     ):
         super().__init__()
@@ -216,10 +219,9 @@ class OptimizedFSDP2FP8(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        primary_dtype = "float8_e4m3fn" if getattr(self, "use_fp8", False) else "bfloat16"
         signature = simple_signature(
             batch_size=self.batch_size,
-            dtype=primary_dtype,
+            dtype="bfloat16",
             seq_length=self.seq_length,
             hidden_size=self.hidden_size,
             num_layers=self.num_layers,

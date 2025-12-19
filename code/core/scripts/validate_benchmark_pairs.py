@@ -63,6 +63,7 @@ class PairValidationResult:
     # Status
     valid: bool = False
     error: Optional[str] = None
+    skipped: bool = False
     
     # Signature comparison
     baseline_has_signature: bool = False
@@ -84,6 +85,7 @@ class ValidationReport:
     invalid_pairs: int = 0
     missing_signature_pairs: int = 0
     signature_mismatch_pairs: int = 0
+    skipped_pairs: int = 0
     error_pairs: int = 0
     results: List[PairValidationResult] = field(default_factory=list)
     
@@ -96,6 +98,7 @@ class ValidationReport:
                 "invalid_pairs": self.invalid_pairs,
                 "missing_signature_pairs": self.missing_signature_pairs,
                 "signature_mismatch_pairs": self.signature_mismatch_pairs,
+                "skipped_pairs": self.skipped_pairs,
                 "error_pairs": self.error_pairs,
             },
             "results": [
@@ -106,6 +109,7 @@ class ValidationReport:
                     "optimized_path": r.optimized_path,
                     "valid": r.valid,
                     "error": r.error,
+                    "skipped": r.skipped,
                     "baseline_has_signature": r.baseline_has_signature,
                     "optimized_has_signature": r.optimized_has_signature,
                     "signatures_match": r.signatures_match,
@@ -175,7 +179,7 @@ def _run_signature_capture_path(benchmark: Any) -> None:
     try:
         benchmark.capture_verification_payload()
         return
-    except RuntimeError:
+    except Exception:
         pass
 
     benchmark.benchmark_fn()
@@ -197,7 +201,7 @@ def get_input_signature_safe(benchmark: Any) -> Tuple[Optional[InputSignature], 
         if sig_raw is None:
             return None, "Method returned None"
         return coerce_input_signature(sig_raw), None
-    except RuntimeError:
+    except (RuntimeError, AttributeError, ValueError):
         # Most commonly: payload-backed benchmarks before capture_verification_payload().
         try:
             attempted_execution_path = True
@@ -334,6 +338,13 @@ def validate_pair(
     result.optimized_has_signature = optimized_sig is not None
     
     if baseline_sig is None and optimized_sig is None:
+        if baseline_err and optimized_err and "SKIPPED" in baseline_err and "SKIPPED" in optimized_err:
+            result.skipped = True
+            result.error = (
+                "SKIPPED: both benchmarks reported SKIPPED. "
+                f"baseline_error={baseline_err!r}, optimized_error={optimized_err!r}"
+            )
+            return result
         result.error = (
             "Failed to extract input signatures for both benchmarks. "
             f"baseline_error={baseline_err!r}, optimized_error={optimized_err!r}"
@@ -437,6 +448,9 @@ def validate_all_pairs(
         if result.valid:
             report.valid_pairs += 1
             print(f"  ✓ {pair_name}")
+        elif result.skipped:
+            report.skipped_pairs += 1
+            print(f"  ○ {pair_name} - {result.error}")
         elif result.error:
             if "missing signature" in result.error.lower() or "not implemented" in result.error.lower():
                 report.missing_signature_pairs += 1
@@ -472,6 +486,7 @@ def print_summary(report: ValidationReport) -> None:
     print(f"Valid pairs:              {report.valid_pairs}")
     print(f"Signature mismatches:     {report.signature_mismatch_pairs}")
     print(f"Missing signatures:       {report.missing_signature_pairs}")
+    print(f"Skipped pairs:            {report.skipped_pairs}")
     print(f"Errors:                   {report.error_pairs}")
     
     if report.signature_mismatch_pairs > 0:

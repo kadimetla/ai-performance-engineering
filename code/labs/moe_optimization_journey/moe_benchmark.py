@@ -58,7 +58,7 @@ class MoEJourneyBenchmark(VerificationPayloadMixin, BaseBenchmark):
     INTERMEDIATE_SIZE = 2048  # scale down to avoid OOM
     NUM_LAYERS = 1           # Just 1 layer for benchmarking MoE
     NUM_HEADS = 32
-    NUM_EXPERTS = 4
+    NUM_EXPERTS = 64
     NUM_EXPERTS_PER_TOK = 2
     BATCH_SIZE = 4    # lighter workload to keep footprint manageable
     SEQ_LEN = 128

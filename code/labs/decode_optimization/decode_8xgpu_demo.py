@@ -1,4 +1,8 @@
-"""8-GPU decode benchmark to stress NVLink-C2C throughput on B200 nodes."""
+"""8-GPU decode demo to stress NVLink-C2C throughput on B200 nodes.
+
+This script is a multi-GPU demo/tool and is intentionally *not* a harness-comparable
+baseline/optimized benchmark pair.
+"""
 
 from __future__ import annotations
 

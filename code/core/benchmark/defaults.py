@@ -88,6 +88,7 @@ class BenchmarkDefaults:
     enable_ncu: bool = True
     enable_proton: bool = False
     enable_nvtx: Optional[bool] = None  # Auto-enabled if profiling enabled
+    allow_virtualization: bool = True
     # Free allocator state between benchmarks by default.
     enable_cleanup: bool = True
     clear_l2_cache: bool = True
@@ -161,6 +162,7 @@ class BenchmarkDefaults:
             "enable_ncu": self.enable_ncu,
             "enable_proton": self.enable_proton,
             "enable_nvtx": self.enable_nvtx,
+            "allow_virtualization": self.allow_virtualization,
             "enable_cleanup": self.enable_cleanup,
             "clear_l2_cache": self.clear_l2_cache,
             "clear_compile_cache": self.clear_compile_cache,

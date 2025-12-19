@@ -35,7 +35,7 @@ class BaselineProtonMatmul(TritonMatmulProtonBenchmark):
     Characteristic: High occupancy but lower compute throughput per block.
     """
 
-    def __init__(self, size: int = 4096):
+    def __init__(self, size: int = 8192):
         super().__init__(
             schedule=SCHEDULE,
             size=size,

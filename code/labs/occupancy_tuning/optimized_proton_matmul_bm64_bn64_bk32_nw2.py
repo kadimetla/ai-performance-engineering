@@ -35,7 +35,7 @@ class OptimizedProtonMatmulLargeTile(TritonMatmulProtonBenchmark):
     Benefit: Larger tiles do more compute per block, improving throughput.
     """
 
-    def __init__(self, size: int = 4096):
+    def __init__(self, size: int = 8192):
         super().__init__(
             schedule=SCHEDULE,
             size=size,

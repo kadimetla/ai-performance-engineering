@@ -2,8 +2,9 @@
 //
 // Baseline for the cluster multicast example:
 // - Blocks are launched in clusters (same shape as optimized).
-// - Every CTA issues its own TMA bulk tensor load for the shared B tile
-//   (no multicast), causing redundant loads within the cluster.
+// - Cluster rank 0 loads the B tile into its SMEM via TMA.
+// - Other CTAs read the B tile remotely via DSMEM (map_shared_rank),
+//   which is functionally correct but slower than having a local copy.
 //
 // COMPARE WITH: tma_multicast_cluster.cu
 //   - Optimized uses TMA multicast so a single load feeds all CTAs in the cluster.
@@ -35,11 +36,12 @@ namespace cde = cuda::device::experimental;
     } while (0)
 
 // Tile dimensions (same as optimized for fair comparison)
-// NOTE: Use a smaller output tile to push this example into a more
-// bandwidth-sensitive regime where multicast has clear upside.
-constexpr int TILE_M = 32;
-constexpr int TILE_N = 32;
-constexpr int TILE_K = 32;
+// NOTE: This example is designed to be *bandwidth sensitive* so that cluster
+// multicast has a clear win: keep TILE_M small (low reuse of each B element)
+// while keeping TILE_N/TILE_K large (large B tile).
+constexpr int TILE_M = 8;
+constexpr int TILE_N = 128;
+constexpr int TILE_K = 128;
 constexpr int BLOCK_SIZE = 256;
 
 // Cluster configuration: 8x1 cluster along M (shares B tiles).
@@ -53,19 +55,21 @@ void tma_nomulticast_gemm_kernel(
     const float* __restrict__ B,  // [K, N]
     float* __restrict__ C,        // [M, N]
     int M, int N, int K
-) {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
-    cg::cluster_group cluster = cg::this_cluster();
-    const int cluster_rank = cluster.block_rank();
-
-    const int tile_m = blockIdx.x;
-    const int tile_n = blockIdx.y;
-    const bool tile_valid = (tile_m * TILE_M < M) && (tile_n * TILE_N < N);
+	) {
+	#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+	    cg::cluster_group cluster = cg::this_cluster();
+	    const int cluster_rank = cluster.block_rank();
+	
+	    const int tile_m = blockIdx.x;
+	    const int tile_n = blockIdx.y;
+	    const bool tile_valid = (tile_m * TILE_M < M) && (tile_n * TILE_N < N);
 
     const int tid = threadIdx.x;
-    // 256 threads × (2×2 outputs/thread) = 1024 outputs = 32×32 tile.
-    const int thread_m = (tid / 16) * 2;  // 0, 2, 4, ... 30
-    const int thread_n = (tid % 16) * 2;  // 0, 2, 4, ... 30
+    // 256 threads × (1×4 outputs/thread) = 1024 outputs = 8×128 tile.
+    constexpr int COLS_PER_THREAD = 4;
+    constexpr int THREADS_PER_ROW = TILE_N / COLS_PER_THREAD;  // 32
+    const int thread_m = tid / THREADS_PER_ROW;                // 0..7
+    const int thread_n = (tid % THREADS_PER_ROW) * COLS_PER_THREAD;  // 0..124
 
     __shared__ alignas(128) float A_smem[TILE_M][TILE_K];
     __shared__ alignas(128) float B_smem[TILE_K][TILE_N];
@@ -79,76 +83,69 @@ void tma_nomulticast_gemm_kernel(
     }
     __syncthreads();
 
-    float acc[2][2] = {0.0f};
-    const int num_k_tiles = (K + TILE_K - 1) / TILE_K;
-
-    for (int k_tile = 0; k_tile < num_k_tiles; ++k_tile) {
-        const int k_base = k_tile * TILE_K;
-
-        // No multicast: each CTA redundantly fetches the same B tile.
-        if (tid == 0) {
-            const int coords[2] = {k_base, tile_n * TILE_N};
-            const uint16_t cta_mask = static_cast<uint16_t>(1u << cluster_rank);
-            cptx::cp_async_bulk_tensor(
-                cptx::space_cluster,
-                cptx::space_global,
-                &B_smem[0][0],
-                &b_desc,
-                coords,
-                cuda::device::barrier_native_handle(*bar),
-                cta_mask);
-        }
-
-        block_barrier::arrival_token token;
-        if (tid == 0) {
-            token = cuda::device::barrier_arrive_tx(*bar, 1, sizeof(B_smem));
-        } else {
-            token = bar->arrive();
-        }
-
-        // Load A tile while the (redundant) B load is in flight.
-        for (int i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
-            int mm = i / TILE_K;
+	    float acc[COLS_PER_THREAD] = {0.0f};
+	    const int num_k_tiles = (K + TILE_K - 1) / TILE_K;
+	
+	    for (int k_tile = 0; k_tile < num_k_tiles; ++k_tile) {
+	        const int k_base = k_tile * TILE_K;
+	
+	        // DSMEM baseline (no multicast):
+	        // - Cluster rank 0 loads B into its SMEM via TMA.
+	        // - Other CTAs read B remotely via cluster.map_shared_rank().
+	        block_barrier::arrival_token token;
+	        if (cluster_rank == 0) {
+	            if (tid == 0) {
+	                const int coords[2] = {k_base, tile_n * TILE_N};
+	                cptx::cp_async_bulk_tensor(
+	                    cptx::space_shared,
+	                    cptx::space_global,
+	                    &B_smem[0][0],
+	                    &b_desc,
+	                    coords,
+	                    cuda::device::barrier_native_handle(*bar));
+	            }
+	            if (tid == 0) {
+	                token = cuda::device::barrier_arrive_tx(*bar, 1, sizeof(B_smem));
+	            } else {
+	                token = bar->arrive();
+	            }
+	        }
+	
+	        // Load A tile while the rank-0 B load is in flight.
+	        for (int i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
+	            int mm = i / TILE_K;
             int kk = i % TILE_K;
             int global_m = tile_m * TILE_M + mm;
             int global_k = k_base + kk;
             A_smem[mm][kk] = (global_m < M && global_k < K) ? A[global_m * K + global_k] : 0.0f;
-        }
-        __syncthreads();
-
-        bar->wait(std::move(token));
-        __syncthreads();
-
-        #pragma unroll
-        for (int kk = 0; kk < TILE_K; ++kk) {
-            float a_vals[2], b_vals[2];
-            #pragma unroll
-            for (int i = 0; i < 2; ++i) {
-                a_vals[i] = A_smem[thread_m + i][kk];
-                b_vals[i] = B_smem[kk][thread_n + i];
-            }
-            #pragma unroll
-            for (int i = 0; i < 2; ++i) {
-                #pragma unroll
-                for (int j = 0; j < 2; ++j) {
-                    acc[i][j] += a_vals[i] * b_vals[j];
-                }
-            }
-        }
-
-        __syncthreads();
-        cluster.sync();  // Keep CTAs in lockstep like the multicast baseline.
-    }
+	        }
+	        __syncthreads();
+	
+	        if (cluster_rank == 0) {
+	            bar->wait(std::move(token));
+	        }
+	        cluster.sync();
+	        const float* b_remote = cluster.map_shared_rank(&B_smem[0][0], 0);
+	
+	        #pragma unroll
+	        for (int kk = 0; kk < TILE_K; ++kk) {
+	            float a_val = A_smem[thread_m][kk];
+	            #pragma unroll
+	            for (int j = 0; j < COLS_PER_THREAD; ++j) {
+	                acc[j] += a_val * b_remote[kk * TILE_N + thread_n + j];
+	            }
+	        }
+	
+	        __syncthreads();
+	        cluster.sync();  // Keep CTAs in lockstep like the multicast baseline.
+	    }
 
     #pragma unroll
-    for (int i = 0; i < 2; ++i) {
-        #pragma unroll
-        for (int j = 0; j < 2; ++j) {
-            int global_m = tile_m * TILE_M + thread_m + i;
-            int global_n = tile_n * TILE_N + thread_n + j;
-            if (tile_valid && global_m < M && global_n < N) {
-                C[global_m * N + global_n] = acc[i][j];
-            }
+    for (int j = 0; j < COLS_PER_THREAD; ++j) {
+        int global_m = tile_m * TILE_M + thread_m;
+        int global_n = tile_n * TILE_N + thread_n + j;
+        if (tile_valid && global_m < M && global_n < N) {
+            C[global_m * N + global_n] = acc[j];
         }
     }
 #else
@@ -159,7 +156,9 @@ void tma_nomulticast_gemm_kernel(
 
     __shared__ float A_smem[TILE_M][TILE_K];
     __shared__ float B_smem[TILE_K][TILE_N];
-    float acc[2][2] = {0.0f};
+    constexpr int COLS_PER_THREAD = 4;
+    constexpr int THREADS_PER_ROW = TILE_N / COLS_PER_THREAD;
+    float acc[COLS_PER_THREAD] = {0.0f};
 
     for (int k_tile = 0; k_tile < (K + TILE_K - 1) / TILE_K; ++k_tile) {
         const int k_base = k_tile * TILE_K;
@@ -179,27 +178,24 @@ void tma_nomulticast_gemm_kernel(
         }
         __syncthreads();
 
-        int tm = (tid / 16) * 2;
-        int tn = (tid % 16) * 2;
+        int tm = tid / THREADS_PER_ROW;
+        int tn = (tid % THREADS_PER_ROW) * COLS_PER_THREAD;
         for (int kk = 0; kk < TILE_K; ++kk) {
-            for (int i = 0; i < 2; ++i) {
-                for (int j = 0; j < 2; ++j) {
-                    acc[i][j] += A_smem[tm + i][kk] * B_smem[kk][tn + j];
-                }
+            float a_val = A_smem[tm][kk];
+            for (int j = 0; j < COLS_PER_THREAD; ++j) {
+                acc[j] += a_val * B_smem[kk][tn + j];
             }
         }
         __syncthreads();
     }
 
-    int tm = (tid / 16) * 2;
-    int tn = (tid % 16) * 2;
-    for (int i = 0; i < 2; ++i) {
-        for (int j = 0; j < 2; ++j) {
-            int global_m = tile_m * TILE_M + tm + i;
-            int global_n = tile_n * TILE_N + tn + j;
-            if (global_m < M && global_n < N) {
-                C[global_m * N + global_n] = acc[i][j];
-            }
+    int tm = tid / THREADS_PER_ROW;
+    int tn = (tid % THREADS_PER_ROW) * COLS_PER_THREAD;
+    for (int j = 0; j < COLS_PER_THREAD; ++j) {
+        int global_m = tile_m * TILE_M + tm;
+        int global_n = tile_n * TILE_N + tn + j;
+        if (global_m < M && global_n < N) {
+            C[global_m * N + global_n] = acc[j];
         }
     }
 #endif

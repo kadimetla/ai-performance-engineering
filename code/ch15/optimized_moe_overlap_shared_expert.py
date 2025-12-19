@@ -30,7 +30,7 @@ if str(repo_root) not in sys.path:
 from ch15.verification_payload_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.optimization.moe_inference import ExpertMLP
-from core.optimization.shared_expert_dispatch import dispatch_shared_expert_active_experts
+from core.optimization.shared_expert_dispatch import dispatch_shared_expert_sort_scatter
 
 
 def _pseudo_uniform_expert_ids(token_ids: torch.Tensor, num_experts: int) -> torch.Tensor:
@@ -45,14 +45,16 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
     def __init__(self) -> None:
         super().__init__()
         self.hidden_size = 2048
-        self.ffn_size = 512
-        self.num_experts = 64
+        self.shared_ffn_size = 8192
+        self.routed_ffn_size = 256
+        self.num_experts = 4
         self.batch = 64
         self.seq = 64
         self.dtype = torch.bfloat16
         # Simulate expert-parallel comm as many small messages (chunked copies).
         # The comm stream can overlap these copies with shared expert compute.
-        self.comm_chunks = 4096
+        self.comm_chunks = 1
+        self.comm_round_trips = 4
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(
@@ -68,6 +70,8 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
         self.routed_expert: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         self.expert_ids: Optional[torch.Tensor] = None
+        self._dispatch_order: Optional[torch.Tensor] = None
+        self._remote_cpu_flat: Optional[torch.Tensor] = None
         self._comm_flat: Optional[torch.Tensor] = None
         self._routed_out_flat: Optional[torch.Tensor] = None
         self._comm_stream: Optional[torch.cuda.Stream] = None
@@ -82,15 +86,27 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
 
-        self.shared_expert = ExpertMLP(self.hidden_size, self.ffn_size, device=self.device, dtype=self.dtype).eval()
-        self.routed_expert = ExpertMLP(self.hidden_size, self.ffn_size, device=self.device, dtype=self.dtype).eval()
+        self.shared_expert = ExpertMLP(
+            self.hidden_size,
+            self.shared_ffn_size,
+            device=self.device,
+            dtype=self.dtype,
+        ).eval()
+        self.routed_expert = ExpertMLP(
+            self.hidden_size,
+            self.routed_ffn_size,
+            device=self.device,
+            dtype=self.dtype,
+        ).eval()
         self.inputs = torch.randn(self.batch, self.seq, self.hidden_size, device=self.device, dtype=self.dtype)
 
         token_ids = torch.arange(self.batch * self.seq, device=self.device, dtype=torch.int64)
         self.expert_ids = _pseudo_uniform_expert_ids(token_ids, self.num_experts).view(self.batch, self.seq)
+        self._dispatch_order = torch.argsort(self.expert_ids.reshape(-1))
         self._comm_flat = torch.empty(self.batch * self.seq, self.hidden_size, device=self.device, dtype=self.dtype)
         self._routed_out_flat = torch.empty(self.batch * self.seq, self.hidden_size, device=self.device, dtype=self.dtype)
         self._comm_stream = torch.cuda.Stream(device=self.device)
+        self._remote_cpu_flat = self.inputs.view(-1, self.hidden_size).detach().cpu().pin_memory()
 
         self._verify_probe = self.inputs[:1, :1, :256].detach().cpu()
         self._verify_meta = torch.zeros(self.num_experts, dtype=torch.int8)
@@ -112,6 +128,8 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
             or self.routed_expert is None
             or self.inputs is None
             or self.expert_ids is None
+            or self._dispatch_order is None
+            or self._remote_cpu_flat is None
             or self._comm_flat is None
             or self._routed_out_flat is None
             or self._comm_stream is None
@@ -125,19 +143,21 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
             with torch.no_grad():
                 total_tokens = flat.shape[0]
                 chunk_tokens = max(1, (total_tokens + self.comm_chunks - 1) // self.comm_chunks)
-                with torch.cuda.stream(self._comm_stream):
-                    for start in range(0, total_tokens, chunk_tokens):
-                        end = min(start + chunk_tokens, total_tokens)
-                        self._comm_flat[start:end].copy_(flat[start:end])
-
-                # Overlap shared-expert compute with comm copies in flight.
+                # Launch the shared expert on the default stream, then overlap the
+                # expert-parallel H2D transfers on a dedicated copy stream.
                 shared_out = self.shared_expert(flat)
+                with torch.cuda.stream(self._comm_stream):
+                    for _ in range(self.comm_round_trips):
+                        for start in range(0, total_tokens, chunk_tokens):
+                            end = min(start + chunk_tokens, total_tokens)
+                            self._comm_flat[start:end].copy_(self._remote_cpu_flat[start:end], non_blocking=True)
                 torch.cuda.current_stream(self.device).wait_stream(self._comm_stream)
-                dispatch_shared_expert_active_experts(
+                dispatch_shared_expert_sort_scatter(
                     self._comm_flat,
                     expert_ids_flat,
                     self.routed_expert,
                     out=self._routed_out_flat,
+                    sort_idx=self._dispatch_order,
                 )
                 combined = self._routed_out_flat + shared_out
                 self.output = combined.view(self.batch, self.seq, self.hidden_size)
@@ -172,6 +192,8 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
         self.routed_expert = None
         self.inputs = None
         self.expert_ids = None
+        self._dispatch_order = None
+        self._remote_cpu_flat = None
         self._comm_flat = None
         self._routed_out_flat = None
         self._comm_stream = None

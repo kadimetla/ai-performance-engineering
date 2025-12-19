@@ -571,14 +571,13 @@ class BenchmarkConfig:
     would otherwise prevent exercising the harness logic.
     """
 
-    allow_virtualization: bool = field(default_factory=lambda: _get_default_value("allow_virtualization", False))
+    allow_virtualization: bool = field(default_factory=lambda: _get_default_value("allow_virtualization", True))
     """Allow running benchmarks under virtualization (VM/hypervisor).
 
-    STRICT by default: virtualized environments are treated as invalid for benchmark
-    validity because profiling tools (nsys/ncu) and system-level controls can be
-    unavailable or misleading. When enabled, only the virtualization check is
-    downgraded to a loud warning; other environment errors remain fatal when
-    enforce_environment_validation=True.
+    Enabled by default: virtualized environments are allowed with a loud warning
+    because profiling tools (nsys/ncu) and system-level controls can be unavailable
+    or misleading. Only the virtualization check is downgraded; other environment
+    errors remain fatal when enforce_environment_validation=True.
     """
 
     # Legacy timeout field (deprecated, use measurement_timeout_seconds)

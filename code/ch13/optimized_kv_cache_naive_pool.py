@@ -237,7 +237,7 @@ class OptimizedKVCacheNaivePoolBenchmark(VerificationPayloadMixin, BaseBenchmark
                 "fp16": self.workload.dtype == torch.float16,
                 "bf16": self.workload.dtype == torch.bfloat16,
                 "fp8": False,
-                "tf32": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
             },
             output_tolerance=(1.0, 100.0),
         )

@@ -45,14 +45,14 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
     def __init__(self) -> None:
         super().__init__()
         self.hidden_size = 1024
-        self.ffn_size = 1024
+        self.ffn_size = 256
         self.num_islands = 4
         self.experts_per_island = 16
         self.num_experts = self.num_islands * self.experts_per_island
-        self.batch = 128
-        self.seq = 32
+        self.batch = 256
+        self.seq = 64
         self.dtype = torch.bfloat16
-        self.remote_round_trips = 16
+        self.remote_round_trips = 128
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(
@@ -68,6 +68,9 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.inputs: Optional[torch.Tensor] = None
         self.expert_ids: Optional[torch.Tensor] = None
         self.local_island: Optional[torch.Tensor] = None
+        self._remote_idx: Optional[torch.Tensor] = None
+        self._remote_buf_a: Optional[torch.Tensor] = None
+        self._remote_buf_b: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self._verify_probe: Optional[torch.Tensor] = None
         self._verify_meta: Optional[torch.Tensor] = None
@@ -107,6 +110,17 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
 
         self.expert_ids = expert_ids.view(self.batch, self.seq)
 
+        expert_ids_flat = self.expert_ids.reshape(-1)
+        local_island_flat = self.local_island.reshape(-1)
+        dest_island = torch.div(expert_ids_flat, self.experts_per_island, rounding_mode="floor")
+        remote_mask = dest_island != local_island_flat
+        self._remote_idx = remote_mask.nonzero(as_tuple=False).squeeze(-1)
+        if self._remote_idx.numel() > 0:
+            remote_tokens = int(self._remote_idx.numel())
+            payload_dim = int(self.hidden_size) * int(self.remote_round_trips)
+            self._remote_buf_a = torch.zeros((remote_tokens, payload_dim), device=self.device, dtype=self.dtype)
+            self._remote_buf_b = torch.zeros((remote_tokens, payload_dim), device=self.device, dtype=self.dtype)
+
         self._verify_probe = self.inputs[:1, :1, :256].detach().cpu()
         self._verify_meta = torch.tensor(
             [int(self.num_islands), int(self.experts_per_island), int(self.num_experts)],
@@ -119,26 +133,25 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
         self._synchronize()
 
     def benchmark_fn(self) -> None:
-        if self.expert is None or self.inputs is None or self.expert_ids is None or self.local_island is None:
+        if (
+            self.expert is None
+            or self.inputs is None
+            or self.expert_ids is None
+            or self.local_island is None
+            or self._remote_idx is None
+        ):
             raise RuntimeError("setup() must run before benchmark_fn()")
 
         flat = self.inputs.view(-1, self.hidden_size)
-        expert_ids_flat = self.expert_ids.reshape(-1)
-        local_island_flat = self.local_island.reshape(-1)
-        dest_island = torch.div(expert_ids_flat, self.experts_per_island, rounding_mode="floor")
 
         with self._nvtx_range("optimized_moe_router_topology"):
             with torch.no_grad():
-                remote_mask = dest_island != local_island_flat
-                remote_idx = remote_mask.nonzero(as_tuple=False).squeeze(-1)
-                if remote_idx.numel() > 0:
-                    remote_send = flat.index_select(0, remote_idx)
-                    buf_a = torch.empty_like(remote_send)
-                    buf_b = torch.empty_like(remote_send)
-                    buf_a.copy_(remote_send)
-                    for _ in range(self.remote_round_trips):
-                        buf_b.copy_(buf_a)
-                        buf_a.copy_(buf_b)
+                if self._remote_idx.numel() > 0:
+                    if self._remote_buf_a is None or self._remote_buf_b is None:
+                        raise RuntimeError("Remote buffers not initialized")
+                    torch.index_select(flat, 0, self._remote_idx, out=self._remote_buf_a[:, : self.hidden_size])
+                    self._remote_buf_b.copy_(self._remote_buf_a)
+                    self._remote_buf_a.copy_(self._remote_buf_b)
 
                 out_flat = self.expert(flat)
                 self.output = out_flat.view(self.batch, self.seq, self.hidden_size)
@@ -169,6 +182,9 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.inputs = None
         self.expert_ids = None
         self.local_island = None
+        self._remote_idx = None
+        self._remote_buf_a = None
+        self._remote_buf_b = None
         self.output = None
         super().teardown()
 

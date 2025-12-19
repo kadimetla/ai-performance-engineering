@@ -220,9 +220,13 @@ def get_benchmark() -> BaseBenchmark:
                     f"SKIPPED: torchcomms benchmark requires 2+ GPUs (found {gpu_count})"
                 )
             def get_verify_output(self) -> torch.Tensor:
-                return super().get_verify_output()
+                raise RuntimeError(
+                    f"SKIPPED: torchcomms benchmark requires 2+ GPUs (found {gpu_count})"
+                )
             def get_input_signature(self) -> dict:
-                return super().get_input_signature()
+                raise RuntimeError(
+                    f"SKIPPED: torchcomms benchmark requires 2+ GPUs (found {gpu_count})"
+                )
             def get_output_tolerance(self) -> tuple:
                 return (0.1, 1.0)
         return _SkipBenchmark()

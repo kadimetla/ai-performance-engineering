@@ -33,6 +33,9 @@ logger = get_logger(__name__)
 class BaselineFSDP2Standard(BaseBenchmark):
     """Baseline FSDP2 with BF16."""
 
+    signature_equivalence_group = "labs_train_distributed_fsdp2_standalone_precision"
+    signature_equivalence_ignore_fields = ("precision_flags",)
+
     def __init__(
         self,
         batch_size: int = 4,

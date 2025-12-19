@@ -39,7 +39,7 @@ __global__ void baseline_kernel(const half* __restrict__ A,
   float acc = 0.0f;
   for (int k = 0; k < K; ++k) {
     float lhs = __half2float(A[row * K + k]);
-    float rhs = __half2float(B[k * N + col]);
+    float rhs = __half2float(B[col * K + k]);
     acc += lhs * rhs;
   }
   C[row * N + col] = __float2half(acc);
@@ -79,7 +79,7 @@ __device__ inline void compute_rows(const half* __restrict__ A_tile,
     float acc = accum_tile[row * PIPE_TILE_N + col];
     for (int k_it = 0; k_it < k_extent; ++k_it) {
       float lhs = __half2float(A_tile[row * PIPE_TILE_K + k_it]);
-      float rhs = __half2float(B_tile[k_it * PIPE_TILE_N + col]);
+      float rhs = __half2float(B_tile[col * PIPE_TILE_K + k_it]);
       acc += lhs * rhs;
     }
     accum_tile[row * PIPE_TILE_N + col] = acc;
@@ -137,15 +137,15 @@ __global__ void pipeline_prefetch_kernel(const half* __restrict__ A,
         A_tile[idx] = val;
       }
       for (int idx = lane_id; idx < TILE_K * TILE_N; idx += warpSize) {
-        const int i = idx / TILE_N;
-        const int j = idx % TILE_N;
-        const int global_i = global_k + i;
+        const int j = idx / TILE_K;  // N within tile
+        const int i = idx - j * TILE_K;  // K within tile
         const int global_j = block_col + j;
+        const int global_i = global_k + i;
         half val = __float2half(0.0f);
         if (i < k_extent && j < cols && global_i < K && global_j < N) {
-          val = B[global_i * N + global_j];
+          val = B[global_j * K + global_i];
         }
-        B_tile[idx] = val;
+        B_tile[j * TILE_K + i] = val;
       }
   }
     pipe.producer_commit();
@@ -224,15 +224,15 @@ __global__ void cluster_kernel(const half* __restrict__ A,
           A_tile[idx] = val;
         }
         for (int idx = lane_id; idx < TILE_K * TILE_N; idx += warpSize) {
-          const int i = idx / TILE_N;
-          const int j = idx % TILE_N;
-          const int global_i = global_k + i;
+          const int j = idx / TILE_K;  // N within tile
+          const int i = idx - j * TILE_K;  // K within tile
           const int global_j = block_col + j;
+          const int global_i = global_k + i;
           half val = __float2half(0.0f);
           if (i < k_extent && j < cols && global_i < K && global_j < N) {
-            val = B[global_i * N + global_j];
+            val = B[global_j * K + global_i];
           }
-          B_tile[idx] = val;
+          B_tile[j * TILE_K + i] = val;
         }
       }
       pipe.producer_commit();
@@ -335,7 +335,7 @@ __global__ void tma_prefetch_kernel(const __grid_constant__ CUtensorMap A_desc,
   cg::thread_block cta = cg::this_thread_block();
 
   __shared__ alignas(128) half A_stage[2][PIPE_TILE_M][PIPE_TILE_K];
-  __shared__ alignas(128) half B_stage[2][PIPE_TILE_K][PIPE_TILE_N];
+  __shared__ alignas(128) half B_stage[2][PIPE_TILE_N][PIPE_TILE_K];
   __shared__ float C_tile[PIPE_TILE_M][PIPE_TILE_N];
   __shared__ alignas(block_barrier) unsigned char barrier_storage[2][sizeof(block_barrier)];
 
@@ -378,7 +378,7 @@ __global__ void tma_prefetch_kernel(const __grid_constant__ CUtensorMap A_desc,
                                 sizeof(half);
       if (threadIdx.x == 0) {
         cuda::device::experimental::cp_async_bulk_tensor_2d_global_to_shared(
-            &A_stage[stage], &A_desc, block_row, global_k, *bar);
+            &A_stage[stage], &A_desc, global_k, block_row, *bar);
         cuda::device::experimental::cp_async_bulk_tensor_2d_global_to_shared(
             &B_stage[stage], &B_desc, global_k, block_col, *bar);
         return cuda::device::barrier_arrive_tx(*bar, 1, bytes);
@@ -398,16 +398,16 @@ __global__ void tma_prefetch_kernel(const __grid_constant__ CUtensorMap A_desc,
       }
       A_stage[stage][r][k] = val;
     }
-    for (int idx = threadIdx.x; idx < k_extent * cols; idx += blockDim.x) {
-      const int k = idx / cols;
-      const int c = idx - k * cols;
-      const int g_k = global_k + k;
+    for (int idx = threadIdx.x; idx < cols * k_extent; idx += blockDim.x) {
+      const int c = idx / k_extent;
+      const int k = idx - c * k_extent;
       const int g_c = block_col + c;
+      const int g_k = global_k + k;
       half val = __float2half(0.0f);
       if (g_k < K && g_c < N) {
-        val = B[g_k * N + g_c];
+        val = B[g_c * K + g_k];
       }
-      B_stage[stage][k][c] = val;
+      B_stage[stage][c][k] = val;
     }
     return bar->arrive();
   };
@@ -483,20 +483,20 @@ inline bool tma_supported_impl() {
 
 void launch_baseline(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
   dim3 block(BASELINE_BLOCK, BASELINE_BLOCK);
-  dim3 grid((b.size(1) + block.x - 1) / block.x,
+  dim3 grid((b.size(0) + block.x - 1) / block.x,
             (a.size(0) + block.y - 1) / block.y);
   auto stream = at::cuda::getCurrentCUDAStream();
   baseline_kernel<<<grid, block, 0, stream>>>(
       reinterpret_cast<const half*>(a.data_ptr<at::Half>()),
       reinterpret_cast<const half*>(b.data_ptr<at::Half>()),
       reinterpret_cast<half*>(c.data_ptr<at::Half>()), a.size(0),
-      b.size(1), a.size(1));
+      b.size(0), a.size(1));
   AT_CUDA_CHECK(cudaGetLastError());
 }
 
 void launch_pipeline(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
   dim3 block(PIPE_THREADS);
-  dim3 grid((b.size(1) + PIPE_TILE_N - 1) / PIPE_TILE_N,
+  dim3 grid((b.size(0) + PIPE_TILE_N - 1) / PIPE_TILE_N,
             (a.size(0) + PIPE_TILE_M - 1) / PIPE_TILE_M);
   const size_t shared_bytes =
       (PIPE_TILE_M * PIPE_TILE_K + PIPE_TILE_K * PIPE_TILE_N) * sizeof(half) +
@@ -510,7 +510,7 @@ void launch_pipeline(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
           reinterpret_cast<const half*>(a.data_ptr<at::Half>()),
           reinterpret_cast<const half*>(b.data_ptr<at::Half>()),
           reinterpret_cast<half*>(c.data_ptr<at::Half>()), a.size(0),
-          b.size(1), a.size(1));
+          b.size(0), a.size(1));
   AT_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -524,7 +524,7 @@ void launch_cluster(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
   cudaGetDeviceProperties(&prop, device);
   const int cluster_dim = prop.major >= 10 ? 8 : 4;
 
-  const int tiles_x = (b.size(1) + PIPE_TILE_N - 1) / PIPE_TILE_N;
+  const int tiles_x = (b.size(0) + PIPE_TILE_N - 1) / PIPE_TILE_N;
   const int tiles_y = (a.size(0) + PIPE_TILE_M - 1) / PIPE_TILE_M;
 
   cudaLaunchConfig_t cfg{};
@@ -555,7 +555,7 @@ void launch_cluster(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
   const half* B_ptr = reinterpret_cast<const half*>(b.data_ptr<at::Half>());
   half* C_ptr = reinterpret_cast<half*>(c.data_ptr<at::Half>());
   int M = a.size(0);
-  int N = b.size(1);
+  int N = b.size(0);
   int K = a.size(1);
 
   AT_CUDA_CHECK(cudaLaunchKernelEx(
@@ -596,16 +596,16 @@ void launch_tma(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
       encode_tensor_map_half(B_desc,
                              encode,
                              b.data_ptr(),
-                             b.size(1),   // width = N
-                             b.size(0),   // height = K
-                             b.size(1),   // ld = N
-                             PIPE_TILE_N,
+                             b.size(1),   // width = K
+                             b.size(0),   // height = N
+                             b.size(1),   // ld = K
                              PIPE_TILE_K,
+                             PIPE_TILE_N,
                              CU_TENSOR_MAP_SWIZZLE_NONE),
       "failed to encode B tensor map");
 
   dim3 block(TMA_THREADS);
-  dim3 grid((b.size(1) + PIPE_TILE_N - 1) / PIPE_TILE_N,
+  dim3 grid((b.size(0) + PIPE_TILE_N - 1) / PIPE_TILE_N,
             (a.size(0) + PIPE_TILE_M - 1) / PIPE_TILE_M);
   const size_t static_shared =
       2 * PIPE_TILE_M * PIPE_TILE_K * sizeof(half) +  // double-buffered A
@@ -619,7 +619,7 @@ void launch_tma(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
       A_desc, B_desc,
       reinterpret_cast<const half*>(a.data_ptr<at::Half>()),
       reinterpret_cast<const half*>(b.data_ptr<at::Half>()),
-      reinterpret_cast<half*>(c.data_ptr<at::Half>()), a.size(0), b.size(1),
+      reinterpret_cast<half*>(c.data_ptr<at::Half>()), a.size(0), b.size(0),
       a.size(1));
   AT_CUDA_CHECK(cudaGetLastError());
 }
@@ -628,11 +628,11 @@ torch::Tensor run_kernel(torch::Tensor a,
                          torch::Tensor b,
                          void (*launcher)(torch::Tensor, torch::Tensor, torch::Tensor)) {
   TORCH_CHECK(a.dim() == 2 && b.dim() == 2, "expected 2D tensors");
-  TORCH_CHECK(a.size(1) == b.size(0), "incompatible shapes");
+  TORCH_CHECK(a.size(1) == b.size(1), "incompatible shapes");
   TORCH_CHECK(a.is_cuda() && b.is_cuda(), "tensors must live on CUDA");
   TORCH_CHECK(a.dtype() == torch::kFloat16 && b.dtype() == torch::kFloat16,
               "use float16 tensors");
-  auto c = torch::empty({a.size(0), b.size(1)}, a.options());
+  auto c = torch::empty({a.size(0), b.size(0)}, a.options());
   launcher(a.contiguous(), b.contiguous(), c);
   return c;
 }
@@ -670,6 +670,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     return run_kernel(a, b, launch_baseline);
   });
   m.def("optimized_blackwell_matmul_pseudo", [](torch::Tensor a, torch::Tensor b) {
+    return run_kernel(a, b, launch_pipeline);
+  });
+  m.def("optimized_blackwell_matmul_pipeline", [](torch::Tensor a, torch::Tensor b) {
     return run_kernel(a, b, launch_pipeline);
   });
   m.def("optimized_blackwell_matmul_tma",

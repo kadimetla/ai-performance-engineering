@@ -30,7 +30,8 @@ __global__ void baseline_matmul_kernel(const half* __restrict__ A,
   float acc = 0.0f;
   for (int k = 0; k < K; ++k) {
     float a = __half2float(A[row * K + k]);
-    float b = __half2float(B[k * N + col]);
+    // Treat B as (N, K) row-major so the GEMM computes A @ B^T.
+    float b = __half2float(B[col * K + k]);
     acc += a * b;
   }
   C[row * N + col] = __float2half(acc);
@@ -68,8 +69,9 @@ __global__ void optimized_matmul_kernel(const half* __restrict__ A,
       for (int j = thread_col; j < TILE_N; j += blockDim.x) {
         int global_row = tile_k + i;
         int global_col = block_col + j;
+        // B is stored as (N, K) row-major, so fetch B^T(k, n) via B(n, k).
         half value = (global_row < K && global_col < N)
-                         ? B[global_row * N + global_col]
+                         ? B[global_col * K + global_row]
                          : __float2half(0.0f);
         Bs[i][j] = value;
       }
@@ -98,7 +100,7 @@ __global__ void optimized_matmul_kernel(const half* __restrict__ A,
 
 void launch_baseline(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
   dim3 block(16, 16);
-  dim3 grid((b.size(1) + block.x - 1) / block.x,
+  dim3 grid((b.size(0) + block.x - 1) / block.x,
             (a.size(0) + block.y - 1) / block.y);
 
   baseline_matmul_kernel<<<grid, block, 0,
@@ -106,17 +108,17 @@ void launch_baseline(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
       reinterpret_cast<const half*>(a.data_ptr<at::Half>()),
       reinterpret_cast<const half*>(b.data_ptr<at::Half>()),
       reinterpret_cast<half*>(c.data_ptr<at::Half>()), a.size(0),
-      b.size(1), a.size(1));
+      b.size(0), a.size(1));
   AT_CUDA_CHECK(cudaGetLastError());
 }
 
 void launch_optimized(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
-  constexpr int TILE_M = 64;
-  constexpr int TILE_N = 64;
+  constexpr int TILE_M = 16;
+  constexpr int TILE_N = 16;
   constexpr int TILE_K = 32;
 
   dim3 block(16, 16);
-  dim3 grid((b.size(1) + TILE_N - 1) / TILE_N,
+  dim3 grid((b.size(0) + TILE_N - 1) / TILE_N,
             (a.size(0) + TILE_M - 1) / TILE_M);
 
   optimized_matmul_kernel<TILE_M, TILE_N, TILE_K>
@@ -124,30 +126,30 @@ void launch_optimized(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
           reinterpret_cast<const half*>(a.data_ptr<at::Half>()),
           reinterpret_cast<const half*>(b.data_ptr<at::Half>()),
           reinterpret_cast<half*>(c.data_ptr<at::Half>()), a.size(0),
-          b.size(1), a.size(1));
+          b.size(0), a.size(1));
   AT_CUDA_CHECK(cudaGetLastError());
 }
 
 torch::Tensor baseline_matmul(torch::Tensor a, torch::Tensor b) {
   TORCH_CHECK(a.dim() == 2 && b.dim() == 2, "expected 2D tensors");
-  TORCH_CHECK(a.size(1) == b.size(0), "incompatible shapes");
+  TORCH_CHECK(a.size(1) == b.size(1), "incompatible shapes");
   TORCH_CHECK(a.is_cuda() && b.is_cuda(), "tensors must live on CUDA");
   TORCH_CHECK(a.dtype() == torch::kFloat16 && b.dtype() == torch::kFloat16,
               "use float16 tensors");
 
-  auto c = torch::empty({a.size(0), b.size(1)}, a.options());
+  auto c = torch::empty({a.size(0), b.size(0)}, a.options());
   launch_baseline(a.contiguous(), b.contiguous(), c);
   return c;
 }
 
 torch::Tensor optimized_matmul(torch::Tensor a, torch::Tensor b) {
   TORCH_CHECK(a.dim() == 2 && b.dim() == 2, "expected 2D tensors");
-  TORCH_CHECK(a.size(1) == b.size(0), "incompatible shapes");
+  TORCH_CHECK(a.size(1) == b.size(1), "incompatible shapes");
   TORCH_CHECK(a.is_cuda() && b.is_cuda(), "tensors must live on CUDA");
   TORCH_CHECK(a.dtype() == torch::kFloat16 && b.dtype() == torch::kFloat16,
               "use float16 tensors");
 
-  auto c = torch::empty({a.size(0), b.size(1)}, a.options());
+  auto c = torch::empty({a.size(0), b.size(0)}, a.options());
   launch_optimized(a.contiguous(), b.contiguous(), c);
   return c;
 }

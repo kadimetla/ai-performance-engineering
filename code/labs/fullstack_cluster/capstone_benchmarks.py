@@ -56,8 +56,8 @@ class CapstoneMatmulBenchmark(BaseBenchmark):
         self._workload_registered = True
 
     def setup(self) -> None:
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: requires >=2 GPUs")
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: requires CUDA")
         self._lhs = torch.randn(
             self._size, self._size, device=self.device, dtype=torch.float16
         )

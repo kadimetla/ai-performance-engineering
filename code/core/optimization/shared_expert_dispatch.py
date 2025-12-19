@@ -76,3 +76,28 @@ def dispatch_shared_expert_active_experts(
         out.index_copy_(0, indices, expert(flat_tokens.index_select(0, indices)))
     return out
 
+
+def dispatch_shared_expert_sort_scatter(
+    flat_tokens: torch.Tensor,
+    expert_ids: torch.Tensor,
+    expert: nn.Module,
+    *,
+    out: torch.Tensor,
+    sort_idx: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Dispatch by sorting tokens by expert id, then scattering back.
+
+    This avoids Python loops and host synchronization while still paying a
+    realistic pack (gather) + unpack (scatter) cost.
+    """
+    _validate_dispatch_inputs(flat_tokens, expert_ids, out)
+    if sort_idx is None:
+        sort_idx = torch.argsort(expert_ids)
+    if sort_idx.dim() != 1 or sort_idx.shape[0] != expert_ids.shape[0]:
+        raise ValueError(f"sort_idx must be 1D [T], got shape {tuple(sort_idx.shape)}")
+    if sort_idx.dtype != torch.int64:
+        sort_idx = sort_idx.to(torch.int64)
+    packed = flat_tokens.index_select(0, sort_idx)
+    packed_out = expert(packed)
+    out.index_copy_(0, sort_idx, packed_out)
+    return out

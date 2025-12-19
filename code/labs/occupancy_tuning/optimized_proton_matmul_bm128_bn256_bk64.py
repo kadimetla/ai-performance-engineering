@@ -34,7 +34,7 @@ class OptimizedProtonMatmulWideN(TritonMatmulProtonBenchmark):
     Use case: Higher throughput via larger output tile and more warps.
     """
 
-    def __init__(self, size: int = 4096):
+    def __init__(self, size: int = 8192):
         super().__init__(
             schedule=SCHEDULE,
             size=size,

@@ -95,9 +95,12 @@ class MoEExperts(nn.Module):
         self.w1_stacked = nn.Parameter(torch.empty(num_experts, hidden_size, intermediate_size))
         self.w2_stacked = nn.Parameter(torch.empty(num_experts, intermediate_size, hidden_size))
         self.w3_stacked = nn.Parameter(torch.empty(num_experts, hidden_size, intermediate_size))
-        
-        for w in [self.w1_stacked, self.w2_stacked, self.w3_stacked]:
-            nn.init.kaiming_uniform_(w)
+
+        with torch.no_grad():
+            for idx, expert in enumerate(self.experts):
+                self.w1_stacked[idx].copy_(expert["w1"].weight.t())
+                self.w2_stacked[idx].copy_(expert["w2"].weight.t())
+                self.w3_stacked[idx].copy_(expert["w3"].weight.t())
         
         # Pre-allocated buffers for memory-efficient mode
         self._gate_buffer: Optional[torch.Tensor] = None

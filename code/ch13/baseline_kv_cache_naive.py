@@ -201,7 +201,7 @@ class BaselineKVCacheNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "fp16": True,
                 "bf16": False,
                 "fp8": False,
-                "tf32": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32,
             },
             output_tolerance=(1.0, 100.0),
         )

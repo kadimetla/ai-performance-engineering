@@ -36,11 +36,12 @@ namespace cde = cuda::device::experimental;
     } while (0)
 
 // Tile dimensions
-// NOTE: Use a smaller output tile to push this example into a more
-// bandwidth-sensitive regime where multicast has clear upside.
-constexpr int TILE_M = 32;
-constexpr int TILE_N = 32;
-constexpr int TILE_K = 32;
+// NOTE: This example is designed to be *bandwidth sensitive* so that cluster
+// multicast has a clear win: keep TILE_M small (low reuse of each B element)
+// while keeping TILE_N/TILE_K large (large B tile).
+constexpr int TILE_M = 8;
+constexpr int TILE_N = 128;
+constexpr int TILE_K = 128;
 constexpr int BLOCK_SIZE = 256;
 
 // Cluster configuration: 8x1 cluster along M (shares B tiles).
@@ -68,9 +69,11 @@ void tma_multicast_gemm_kernel(
     const bool tile_valid = (tile_m * TILE_M < M) && (tile_n * TILE_N < N);
 
     const int tid = threadIdx.x;
-    // 256 threads × (2×2 outputs/thread) = 1024 outputs = 32×32 tile.
-    const int thread_m = (tid / 16) * 2;  // 0, 2, 4, ... 30
-    const int thread_n = (tid % 16) * 2;  // 0, 2, 4, ... 30
+    // 256 threads × (1×4 outputs/thread) = 1024 outputs = 8×128 tile.
+    constexpr int COLS_PER_THREAD = 4;
+    constexpr int THREADS_PER_ROW = TILE_N / COLS_PER_THREAD;  // 32
+    const int thread_m = tid / THREADS_PER_ROW;                // 0..7
+    const int thread_n = (tid % THREADS_PER_ROW) * COLS_PER_THREAD;  // 0..124
 
     __shared__ alignas(128) float A_smem[TILE_M][TILE_K];
     __shared__ alignas(128) float B_smem[TILE_K][TILE_N];
@@ -84,11 +87,23 @@ void tma_multicast_gemm_kernel(
     }
     __syncthreads();
 
-    float acc[2][2] = {0.0f};
+    float acc[COLS_PER_THREAD] = {0.0f};
     const int num_k_tiles = (K + TILE_K - 1) / TILE_K;
 
     for (int k_tile = 0; k_tile < num_k_tiles; ++k_tile) {
         const int k_base = k_tile * TILE_K;
+
+        block_barrier::arrival_token token;
+        if (tid == 0) {
+            token = cuda::device::barrier_arrive_tx(*bar, 1, sizeof(B_smem));
+        } else {
+            token = bar->arrive();
+        }
+
+        // Ensure every CTA has joined the barrier generation before the
+        // multicast is issued (avoids missed completions on large clusters).
+        __syncthreads();
+        cluster.sync();
 
         // Cluster multicast: issue one B tile load per cluster.
         if (cluster_rank == 0 && tid == 0) {
@@ -103,13 +118,6 @@ void tma_multicast_gemm_kernel(
                 coords,
                 cuda::device::barrier_native_handle(*bar),
                 cta_mask);
-        }
-
-        block_barrier::arrival_token token;
-        if (tid == 0) {
-            token = cuda::device::barrier_arrive_tx(*bar, 1, sizeof(B_smem));
-        } else {
-            token = bar->arrive();
         }
 
         // Each CTA loads its own A tile while the multicast B load is in flight.
@@ -127,18 +135,10 @@ void tma_multicast_gemm_kernel(
 
         #pragma unroll
         for (int kk = 0; kk < TILE_K; ++kk) {
-            float a_vals[2], b_vals[2];
+            float a_val = A_smem[thread_m][kk];
             #pragma unroll
-            for (int i = 0; i < 2; ++i) {
-                a_vals[i] = A_smem[thread_m + i][kk];
-                b_vals[i] = B_smem[kk][thread_n + i];
-            }
-            #pragma unroll
-            for (int i = 0; i < 2; ++i) {
-                #pragma unroll
-                for (int j = 0; j < 2; ++j) {
-                    acc[i][j] += a_vals[i] * b_vals[j];
-                }
+            for (int j = 0; j < COLS_PER_THREAD; ++j) {
+                acc[j] += a_val * B_smem[kk][thread_n + j];
             }
         }
 
@@ -147,14 +147,11 @@ void tma_multicast_gemm_kernel(
     }
 
     #pragma unroll
-    for (int i = 0; i < 2; ++i) {
-        #pragma unroll
-        for (int j = 0; j < 2; ++j) {
-            int global_m = tile_m * TILE_M + thread_m + i;
-            int global_n = tile_n * TILE_N + thread_n + j;
-            if (tile_valid && global_m < M && global_n < N) {
-                C[global_m * N + global_n] = acc[i][j];
-            }
+    for (int j = 0; j < COLS_PER_THREAD; ++j) {
+        int global_m = tile_m * TILE_M + thread_m;
+        int global_n = tile_n * TILE_N + thread_n + j;
+        if (tile_valid && global_m < M && global_n < N) {
+            C[global_m * N + global_n] = acc[j];
         }
     }
 #else
@@ -165,7 +162,9 @@ void tma_multicast_gemm_kernel(
 
     __shared__ float A_smem[TILE_M][TILE_K];
     __shared__ float B_smem[TILE_K][TILE_N];
-    float acc[2][2] = {0.0f};
+    constexpr int COLS_PER_THREAD = 4;
+    constexpr int THREADS_PER_ROW = TILE_N / COLS_PER_THREAD;
+    float acc[COLS_PER_THREAD] = {0.0f};
 
     for (int k_tile = 0; k_tile < (K + TILE_K - 1) / TILE_K; ++k_tile) {
         const int k_base = k_tile * TILE_K;
@@ -185,27 +184,24 @@ void tma_multicast_gemm_kernel(
         }
         __syncthreads();
 
-        int tm = (tid / 16) * 2;
-        int tn = (tid % 16) * 2;
+        int tm = tid / THREADS_PER_ROW;
+        int tn = (tid % THREADS_PER_ROW) * COLS_PER_THREAD;
         for (int kk = 0; kk < TILE_K; ++kk) {
-            for (int i = 0; i < 2; ++i) {
-                for (int j = 0; j < 2; ++j) {
-                    acc[i][j] += A_smem[tm + i][kk] * B_smem[kk][tn + j];
-                }
+            float a_val = A_smem[tm][kk];
+            for (int j = 0; j < COLS_PER_THREAD; ++j) {
+                acc[j] += a_val * B_smem[kk][tn + j];
             }
         }
         __syncthreads();
     }
 
-    int tm = (tid / 16) * 2;
-    int tn = (tid % 16) * 2;
-    for (int i = 0; i < 2; ++i) {
-        for (int j = 0; j < 2; ++j) {
-            int global_m = tile_m * TILE_M + tm + i;
-            int global_n = tile_n * TILE_N + tn + j;
-            if (global_m < M && global_n < N) {
-                C[global_m * N + global_n] = acc[i][j];
-            }
+    int tm = tid / THREADS_PER_ROW;
+    int tn = (tid % THREADS_PER_ROW) * COLS_PER_THREAD;
+    for (int j = 0; j < COLS_PER_THREAD; ++j) {
+        int global_m = tile_m * TILE_M + tm;
+        int global_n = tile_n * TILE_N + tn + j;
+        if (global_m < M && global_n < N) {
+            C[global_m * N + global_n] = acc[j];
         }
     }
 #endif

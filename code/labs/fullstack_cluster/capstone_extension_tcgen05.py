@@ -38,7 +38,8 @@ def load_tcgen05_module():
 
     extra_cuda_cflags = [
         "-std=c++20",
-        "-gencode=arch=compute_100,code=sm_100",
+        "-gencode=arch=compute_100a,code=sm_100a",
+        "-gencode=arch=compute_100f,code=sm_100f",
         "-lineinfo",
         "-DCUTE_PREFETCH_COPY_ATOM_DISABLED",
     ] + include_flags

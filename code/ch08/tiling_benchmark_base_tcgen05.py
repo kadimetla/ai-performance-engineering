@@ -40,8 +40,8 @@ class TilingBenchmarkBaseTCGen05(TilingBenchmarkBase):
     # the redundant baseline output copy a measurable fraction of runtime.
     # Keep the compute workload substantial while increasing the output tensor
     # footprint (M x N) so the avoided copy is not lost in noise.
-    matrix_rows: int = 4096
-    matrix_cols: int = 4096
+    matrix_rows: int = 8192
+    matrix_cols: int = 8192
     # Use a smaller K so the baseline's redundant output copy is a larger
     # fraction of end-to-end time (and the optimization is clearly measurable).
     shared_dim: int = 128

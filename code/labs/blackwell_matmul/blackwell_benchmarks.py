@@ -91,14 +91,14 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
         self.required_capabilities: dict[str, bool] = {}
 
     def setup(self) -> None:
-        if torch.cuda.device_count() < 2:
-            raise RuntimeError("SKIPPED: requires >=2 GPUs")
+        if not torch.cuda.is_available():
+            raise RuntimeError("SKIPPED: CUDA required")
         device = self.device
         self._lhs = torch.randn(
             self._size_m, self._size_k, device=device, dtype=self._dtype
         )
         self._rhs = torch.randn(
-            self._size_k, self._size_n, device=device, dtype=self._dtype
+            self._size_n, self._size_k, device=device, dtype=self._dtype
         )
         torch.cuda.synchronize(device)
         self._parameter_count = 0
@@ -167,20 +167,18 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
         return {"lhs": self._lhs, "rhs": self._rhs}
 
     def get_input_signature(self) -> dict:
-        if self._lhs is None or self._rhs is None:
-            raise RuntimeError("setup() must be called before get_input_signature()")
         return {
             "label": self._label,
             "size_m": self._size_m,
             "size_n": self._size_n,
             "size_k": self._size_k,
             "shapes": {
-                "lhs": tuple(self._lhs.shape),
-                "rhs": tuple(self._rhs.shape),
+                "lhs": (self._size_m, self._size_k),
+                "rhs": (self._size_n, self._size_k),
             },
             "dtypes": {
-                "lhs": str(self._lhs.dtype),
-                "rhs": str(self._rhs.dtype),
+                "lhs": str(self._dtype),
+                "rhs": str(self._dtype),
             },
             "batch_size": int(self._size_m),
             "parameter_count": int(self._parameter_count),

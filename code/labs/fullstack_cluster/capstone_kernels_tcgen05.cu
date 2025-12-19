@@ -20,7 +20,9 @@
 #include <cute/arch/tmem_allocator_sm100.hpp>
 #include <cute/arch/copy_sm100_tma.hpp>
 #include <cute/atom/copy_traits_sm90_tma.hpp>
+#include <cute/atom/copy_traits_sm100_tma.hpp>
 #include <cute/atom/mma_atom.hpp>
+#include <cute/atom/mma_traits_sm100.hpp>
 #include <cute/numeric/integral_constant.hpp>
 #include <cute/tensor.hpp>
 
@@ -54,29 +56,7 @@ struct SharedStorage {
 };
 
 template <typename Allocator>
-struct ClusterTmemHelper;
-
-template <>
-struct ClusterTmemHelper<cute::TMEM::Allocator1Sm> {
-  __device__ static uint32_t* slot(uint32_t* local) { return local; }
-  __device__ static void sync_before_alloc() {}
-  __device__ static void sync_after_alloc() {}
-  __device__ static void sync_before_free() {}
-  __device__ static void sync_after_free() {}
-};
-
-template <>
-struct ClusterTmemHelper<cute::TMEM::Allocator2Sm> {
-  __device__ static uint32_t* slot(uint32_t* local) {
-    auto cluster = cg::this_cluster();
-    return cluster.map_shared_rank(local, 0);
-  }
-
-  __device__ static void sync_before_alloc() { cg::this_cluster().sync(); }
-  __device__ static void sync_after_alloc() { cg::this_cluster().sync(); }
-  __device__ static void sync_before_free() { cg::this_cluster().sync(); }
-  __device__ static void sync_after_free() { cg::this_cluster().sync(); }
-};
+struct ClusterTmemHelper; // unused: CTA-group kernels allocate locally
 
 template <class MmaTag, int ClusterM>
 struct TcgenVariantConfig {
@@ -130,15 +110,21 @@ __global__ void gemm_device_variant(ATensor mA,
                  _);
 
   auto mma_coord = select<1, 2, 3>(mma_coord_vmnk);
-  Tensor gA = local_tile(mA, mma_tiler, mma_coord, Step<_1, X, _1>{});
-  Tensor gB = local_tile(mB, mma_tiler, mma_coord, Step<X, _1, _1>{});
+
+  Tensor tma_mA = tma_atom_A.get_tma_tensor(shape(mA));
+  Tensor tma_mB = tma_atom_B.get_tma_tensor(shape(mB));
+
+  Tensor gA = local_tile(tma_mA, mma_tiler, mma_coord, Step<_1, X, _1>{});
+  Tensor gB = local_tile(tma_mB, mma_tiler, mma_coord, Step<X, _1, _1>{});
   Tensor gC = local_tile(mC, mma_tiler, mma_coord, Step<_1, _1, X>{});
   Tensor gD = local_tile(mD, mma_tiler, mma_coord, Step<_1, _1, X>{});
 
   extern __shared__ char shared_memory[];
-  auto cluster = cg::this_cluster();
   SharedStorageT &shared_storage =
       *reinterpret_cast<SharedStorageT*>(shared_memory);
+
+  uint64_t* mma_barrier_ptr = &shared_storage.mma_barrier;
+  uint64_t* tma_barrier_ptr = &shared_storage.tma_barrier;
 
   Tensor tCsA = shared_storage.tensor_sA();
   Tensor tCsB = shared_storage.tensor_sB();
@@ -159,60 +145,124 @@ __global__ void gemm_device_variant(ATensor mA,
 
   using TmemAllocator = typename Variant::TmemAllocator;
   TmemAllocator tmem_allocator{};
-  auto *tmem_slot =
-      ClusterTmemHelper<TmemAllocator>::slot(&shared_storage.tmem_base_ptr);
 
-  ClusterTmemHelper<TmemAllocator>::sync_before_alloc();
   if (elect_one_warp) {
     tmem_allocator.allocate(TmemAllocator::Sm100TmemCapacityColumns,
-                            tmem_slot);
+                            &shared_storage.tmem_base_ptr);
   }
-  ClusterTmemHelper<TmemAllocator>::sync_after_alloc();
   __syncthreads();
-  uint32_t tmem_base = *tmem_slot;
+  uint32_t tmem_base = shared_storage.tmem_base_ptr;
   tCtAcc.data() = tmem_base;
 
-  auto [tAgA, tAsA] = tma_partition(
-      tma_atom_A, Int<0>{}, Layout<_1>{},
-      group_modes<0, 3>(tCsA), group_modes<0, 3>(tCgA));
-  auto [tBgB, tBsB] = tma_partition(
-      tma_atom_B, Int<0>{}, Layout<_1>{},
-      group_modes<0, 3>(tCsB), group_modes<0, 3>(tCgB));
+  auto cta_in_cluster_coord_vmnk =
+      cluster_layout_vmnk.get_flat_coord(int(cute::block_rank_in_cluster()));
+  auto elect_one_cta = get<0>(cta_in_cluster_coord_vmnk) == Int<0>{};
 
-  int tma_transaction_bytes =
-      sizeof(make_tensor_like(tAsA)) + sizeof(make_tensor_like(tBsB));
-
-  if (elect_one_warp && elect_one_thr) {
-    cute::initialize_barrier(shared_storage.mma_barrier, 1);
-    cute::initialize_barrier(shared_storage.tma_barrier, 1);
-  }
   int mma_barrier_phase_bit = 0;
   int tma_barrier_phase_bit = 0;
-  __syncthreads();
 
   tiled_mma.accumulate_ = UMMA::ScaleOut::Zero;
 
-  for (int k_tile = 0; k_tile < size<3>(tCgA); ++k_tile) {
+  if constexpr (Variant::kClusterM == 2) {
+    // Cutlass tutorial 04: 2SM MMA + 2SM TMA multicast.
+    auto [tAgA, tAsA] = tma_partition(
+        tma_atom_A,
+        get<2>(cta_in_cluster_coord_vmnk),
+        make_layout(size<2>(cluster_layout_vmnk)),
+        group_modes<0, 3>(tCsA),
+        group_modes<0, 3>(tCgA));
+    auto [tBgB, tBsB] = tma_partition(
+        tma_atom_B,
+        get<1>(cta_in_cluster_coord_vmnk),
+        make_layout(size<1>(cluster_layout_vmnk)),
+        group_modes<0, 3>(tCsB),
+        group_modes<0, 3>(tCgB));
+
+    uint16_t tma_mcast_mask_a =
+        create_tma_multicast_mask<2>(cluster_layout_vmnk, cta_in_cluster_coord_vmnk);
+    uint16_t tma_mcast_mask_b =
+        create_tma_multicast_mask<1>(cluster_layout_vmnk, cta_in_cluster_coord_vmnk);
+    uint16_t mma_mcast_mask_c =
+        create_tma_multicast_mask<0, 1>(cluster_layout_vmnk, cta_in_cluster_coord_vmnk) |
+        create_tma_multicast_mask<0, 2>(cluster_layout_vmnk, cta_in_cluster_coord_vmnk);
+
+    int tma_transaction_bytes =
+        size<0>(cluster_layout_vmnk) * sizeof(make_tensor_like(tAsA)) +
+        size<0>(cluster_layout_vmnk) * sizeof(make_tensor_like(tBsB));
+
     if (elect_one_warp && elect_one_thr) {
-      cute::set_barrier_transaction_bytes(shared_storage.tma_barrier,
-                                          tma_transaction_bytes);
-      copy(tma_atom_A.with(shared_storage.tma_barrier), tAgA(_, k_tile), tAsA);
-      copy(tma_atom_B.with(shared_storage.tma_barrier), tBgB(_, k_tile), tBsB);
+      int num_mcast_participants =
+          size<1>(cluster_layout_vmnk) + size<2>(cluster_layout_vmnk) - 1;
+      cute::initialize_barrier(*mma_barrier_ptr, num_mcast_participants);
+      cute::initialize_barrier(*tma_barrier_ptr, 1);
     }
+    cute::cluster_sync();
 
-    cute::wait_barrier(shared_storage.tma_barrier, tma_barrier_phase_bit);
-    tma_barrier_phase_bit ^= 1;
-
-    if (elect_one_warp) {
-      for (int k_block = 0; k_block < size<2>(tCrA); ++k_block) {
-        gemm(tiled_mma, tCrA(_, _, k_block), tCrB(_, _, k_block), tCtAcc);
-        tiled_mma.accumulate_ = UMMA::ScaleOut::One;
+    for (int k_tile = 0; k_tile < size<3>(tCgA); ++k_tile) {
+      if (elect_one_warp && elect_one_thr) {
+        if (elect_one_cta) {
+          cute::set_barrier_transaction_bytes(*tma_barrier_ptr, tma_transaction_bytes);
+        }
+        copy(tma_atom_A.with(*tma_barrier_ptr, tma_mcast_mask_a), tAgA(_, k_tile), tAsA);
+        copy(tma_atom_B.with(*tma_barrier_ptr, tma_mcast_mask_b), tBgB(_, k_tile), tBsB);
       }
-      cutlass::arch::umma_arrive(&shared_storage.mma_barrier);
-    }
 
-    cute::wait_barrier(shared_storage.mma_barrier, mma_barrier_phase_bit);
-    mma_barrier_phase_bit ^= 1;
+      if (elect_one_cta) {
+        cute::wait_barrier(*tma_barrier_ptr, tma_barrier_phase_bit);
+        tma_barrier_phase_bit ^= 1;
+
+        if (elect_one_warp) {
+          for (int k_block = 0; k_block < size<2>(tCrA); ++k_block) {
+            gemm(tiled_mma, tCrA(_, _, k_block), tCrB(_, _, k_block), tCtAcc);
+            tiled_mma.accumulate_ = UMMA::ScaleOut::One;
+          }
+          cutlass::arch::umma_arrive_multicast_2x1SM(mma_barrier_ptr, mma_mcast_mask_c);
+        }
+      }
+
+      cute::wait_barrier(*mma_barrier_ptr, mma_barrier_phase_bit);
+      mma_barrier_phase_bit ^= 1;
+    }
+  } else {
+    // 1SM MMA + SM90 TMA (no multicast).
+    auto [tAgA, tAsA] = tma_partition(
+        tma_atom_A, Int<0>{}, Layout<_1>{},
+        group_modes<0, 3>(tCsA), group_modes<0, 3>(tCgA));
+    auto [tBgB, tBsB] = tma_partition(
+        tma_atom_B, Int<0>{}, Layout<_1>{},
+        group_modes<0, 3>(tCsB), group_modes<0, 3>(tCgB));
+
+    int tma_transaction_bytes =
+        sizeof(make_tensor_like(tAsA)) + sizeof(make_tensor_like(tBsB));
+
+    if (elect_one_warp && elect_one_thr) {
+      cute::initialize_barrier(*mma_barrier_ptr, 1);
+      cute::initialize_barrier(*tma_barrier_ptr, 1);
+    }
+    __syncthreads();
+
+    for (int k_tile = 0; k_tile < size<3>(tCgA); ++k_tile) {
+      if (elect_one_warp && elect_one_thr) {
+        cute::set_barrier_transaction_bytes(*tma_barrier_ptr,
+                                            tma_transaction_bytes);
+        copy(tma_atom_A.with(*tma_barrier_ptr), tAgA(_, k_tile), tAsA);
+        copy(tma_atom_B.with(*tma_barrier_ptr), tBgB(_, k_tile), tBsB);
+      }
+
+      cute::wait_barrier(*tma_barrier_ptr, tma_barrier_phase_bit);
+      tma_barrier_phase_bit ^= 1;
+
+      if (elect_one_warp) {
+        for (int k_block = 0; k_block < size<2>(tCrA); ++k_block) {
+          gemm(tiled_mma, tCrA(_, _, k_block), tCrB(_, _, k_block), tCtAcc);
+          tiled_mma.accumulate_ = UMMA::ScaleOut::One;
+        }
+        cutlass::arch::umma_arrive(mma_barrier_ptr);
+      }
+
+      cute::wait_barrier(*mma_barrier_ptr, mma_barrier_phase_bit);
+      mma_barrier_phase_bit ^= 1;
+    }
   }
 
   auto tiled_t2r_copy = make_tmem_copy(SM100_TMEM_LOAD_32dp32b1x{}, tCtAcc);
@@ -231,19 +281,17 @@ __global__ void gemm_device_variant(ATensor mA,
   copy(tDrC, tDgD);
 
   __syncthreads();
-  ClusterTmemHelper<TmemAllocator>::sync_before_free();
   if (elect_one_warp) {
     tmem_allocator.release_allocation_lock();
     tmem_allocator.free(tmem_base,
                         TmemAllocator::Sm100TmemCapacityColumns);
   }
-  ClusterTmemHelper<TmemAllocator>::sync_after_free();
 }
 
 template <class Variant>
 torch::Tensor run_tcgen05_variant(torch::Tensor a, torch::Tensor b) {
   TORCH_CHECK(a.dim() == 2 && b.dim() == 2, "expected 2D inputs");
-  TORCH_CHECK(a.size(1) == b.size(0), "incompatible matmul shapes");
+  TORCH_CHECK(a.size(1) == b.size(1), "incompatible matmul shapes");
   TORCH_CHECK(a.dtype() == torch::kFloat16 && b.dtype() == torch::kFloat16,
               "tcgen05 kernels expect float16 inputs");
   TORCH_CHECK(a.is_cuda() && b.is_cuda(), "tensors must reside on CUDA");
@@ -253,7 +301,7 @@ torch::Tensor run_tcgen05_variant(torch::Tensor a, torch::Tensor b) {
 
   auto m = a_contig.size(0);
   auto k = a_contig.size(1);
-  auto n = b_contig.size(1);
+  auto n = b_contig.size(0);
 
   auto options = a.options().dtype(torch::kFloat32);
   auto c_buffer = torch::zeros({m, n}, options);
@@ -282,11 +330,9 @@ torch::Tensor run_tcgen05_variant(torch::Tensor a, torch::Tensor b) {
                         make_shape(size<1>(mma_tiler), size<2>(mma_tiler)));
 
   auto sA_layout =
-      tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeA>{},
-                              mma_shape_A);
+      UMMA::tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeA>{}, mma_shape_A);
   auto sB_layout =
-      tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeB>{},
-                              mma_shape_B);
+      UMMA::tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeB>{}, mma_shape_B);
 
   using SharedStorageT =
       SharedStorage<TypeA, TypeB, decltype(sA_layout), decltype(sB_layout)>;
@@ -306,14 +352,47 @@ torch::Tensor run_tcgen05_variant(torch::Tensor a, torch::Tensor b) {
       make_gmem_ptr(d_buffer.data_ptr<TypeD>()),
       make_layout(make_shape(m, n), make_stride(n, Int<1>{})));
 
-  auto tma_atom_A =
-      make_tma_atom(SM90_TMA_LOAD{}, mA, sA_layout, select<0, 2>(mma_tiler));
-  auto tma_atom_B =
-      make_tma_atom(SM90_TMA_LOAD{}, mB, sB_layout, select<1, 2>(mma_tiler));
-
   auto cluster_layout_vmnk =
       tiled_divide(make_layout(cluster_shape),
                    make_tile(typename decltype(tiled_mma)::AtomThrID{}));
+
+  // Build TMA atoms. 2SM variants must use SM100 TMA atoms + multicast semantics.
+  auto tma_atom_A = [&] {
+    if constexpr (Variant::kClusterM == 2) {
+      return make_tma_atom_A_sm100(
+          SM100_TMA_2SM_LOAD_MULTICAST{},
+          mA,
+          sA_layout,
+          mma_tiler,
+          tiled_mma,
+          cluster_layout_vmnk);
+    } else {
+      return make_tma_atom(
+          SM90_TMA_LOAD{},
+          mA,
+          sA_layout,
+          make_shape(size<0>(mma_tiler), size<2>(mma_tiler)));
+    }
+  }();
+
+  auto tma_atom_B = [&] {
+    if constexpr (Variant::kClusterM == 2) {
+      return make_tma_atom_B_sm100(
+          SM100_TMA_2SM_LOAD_MULTICAST{},
+          mB,
+          sB_layout,
+          mma_tiler,
+          tiled_mma,
+          cluster_layout_vmnk);
+    } else {
+      return make_tma_atom(
+          SM90_TMA_LOAD{},
+          mB,
+          sB_layout,
+          make_shape(size<1>(mma_tiler), size<2>(mma_tiler)));
+    }
+  }();
+
   auto cluster_m_tiles = size<1>(cluster_layout_vmnk);
   auto cluster_n_tiles = size<2>(cluster_layout_vmnk);
 

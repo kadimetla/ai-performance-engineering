@@ -18,7 +18,6 @@ except ImportError:  # pragma: no cover - older PyTorch fallback
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import enable_tf32
 from ch13.kv_cache_workload import get_workload
 
 WORKLOAD = get_workload()
@@ -221,7 +220,6 @@ class OptimizedKVCachePagedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            enable_tf32()
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
