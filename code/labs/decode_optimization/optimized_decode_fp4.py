@@ -25,7 +25,7 @@ def get_benchmark() -> DecodeBenchmark:
     """
     cfg = DecodeConfig(
         batch_size=64,
-        prompt_tokens=256,
+        prompt_tokens=1024,
         decode_tokens=0,
         hidden_size=8192,
         use_fp4=True,

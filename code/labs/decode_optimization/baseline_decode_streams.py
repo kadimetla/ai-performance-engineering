@@ -1,7 +1,8 @@
-"""Baseline for FP8 decode optimization: BF16 prefill-only workload.
+"""Baseline for dual-stream decode: pinned host copies on a single stream.
 
-This baseline matches `optimized_decode_fp8.py` exactly, but runs in BF16.
-Keeping a dedicated baseline ensures the FP8 comparison is workload-equivalent.
+This baseline matches `optimized_decode_streams.py` exactly (same workload and
+prefetch batching) but runs on a single stream to expose the copy/compute overlap
+benefits of the optimized variant.
 """
 
 from __future__ import annotations
@@ -17,25 +18,23 @@ from labs.decode_optimization.decode_common import DecodeBenchmark, DecodeConfig
 
 
 def get_benchmark() -> DecodeBenchmark:
-    # Prefill-dominant regime where FP8 benefits are visible.
     cfg = DecodeConfig(
-        batch_size=128,
-        prompt_tokens=1024,
-        decode_tokens=0,
-        hidden_size=8192,
-        use_pinned_host=False,
+        batch_size=64,
+        prompt_tokens=2048,
+        decode_tokens=64,
+        prefetch_batches=2,
+        host_payload_mb=512,
+        hidden_size=256,
+        use_pinned_host=True,
         use_copy_stream=False,
         use_compute_stream=False,
         use_cuda_graphs=False,
         use_torch_compile=False,
-        label="baseline_decode_fp8",
+        label="baseline_decode_streams",
         iterations=12,
         warmup=15,
     )
-    bench = attach_benchmark_metadata(DecodeBenchmark(cfg), __file__)
-    bench.signature_equivalence_group = "labs_decode_fp8_precision"
-    bench.signature_equivalence_ignore_fields = ("precision_flags",)
-    return bench
+    return attach_benchmark_metadata(DecodeBenchmark(cfg), __file__)
 
 
 if __name__ == "__main__":

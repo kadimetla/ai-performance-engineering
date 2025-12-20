@@ -80,6 +80,8 @@ class DecodeConfig:
     batch_size: int = 4
     prompt_tokens: int = 256
     decode_tokens: int = 64
+    prefetch_batches: int = 1
+    host_payload_mb: int = 0
     hidden_size: int = 1024
     vocab_size: int = 8192
     use_fp8: bool = False
@@ -118,30 +120,56 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.fp8_recipe = None
         self.output: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
-        if TE_AVAILABLE:
-            if self.cfg.use_fp4 and getattr(te_constants, "NVFP4_BLOCK_SCALING_SIZE", None) is not None:
-                try:
-                    from transformer_engine.common.recipe import NVFP4BlockScaling
+        self.host_prompts: list[torch.Tensor] = []
+        self.gpu_prompts: list[torch.Tensor] = []
+        self.host_payloads: list[torch.Tensor] = []
+        self.gpu_payloads: list[torch.Tensor] = []
+        self.host_payload: Optional[torch.Tensor] = None
+        self.gpu_payload: Optional[torch.Tensor] = None
+        self._copy_done_events: list[torch.cuda.Event] = []
+        self._payload_bytes = 0
 
-                    self.fp8_recipe = DelayedScaling(float8_block_scaling=NVFP4BlockScaling())
-                    self._fp4_enabled = True
-                except Exception:
-                    self.fp8_recipe = None
-                    self._fp4_enabled = False
-            elif self.cfg.use_fp8:
-                try:
-                    # Prefer an inference-friendly FP8 recipe for perf stability.
-                    # Float8CurrentScaling avoids delayed amax reductions that can introduce
-                    # iteration-to-iteration jitter in short microbench loops.
-                    from transformer_engine.common.recipe import Float8CurrentScaling
+        if self.cfg.prefetch_batches < 1:
+            raise ValueError("prefetch_batches must be >= 1")
+        if self.cfg.prefetch_batches > 2:
+            raise NotImplementedError("prefetch_batches > 2 is not supported")
+        if self.cfg.host_payload_mb < 0:
+            raise ValueError("host_payload_mb must be >= 0")
+        if self.cfg.use_fp4 and self.cfg.use_fp8:
+            raise ValueError("use_fp4 and use_fp8 are mutually exclusive")
 
-                    self.fp8_recipe = Float8CurrentScaling()
-                    self._fp8_enabled = True
-                except Exception:
-                    self.fp8_recipe = None
+        if self.cfg.use_fp4:
+            if not TE_AVAILABLE:
+                raise RuntimeError("FP4 requested but Transformer Engine is unavailable")
+            if not _is_blackwell_family():
+                raise RuntimeError("FP4 decode requires Blackwell-class hardware")
+            if getattr(te_constants, "NVFP4_BLOCK_SCALING_SIZE", None) is None:
+                raise RuntimeError("FP4 decode requires NVFP4 support in Transformer Engine")
+            try:
+                from transformer_engine.common.recipe import NVFP4BlockScaling
+            except Exception as exc:
+                raise RuntimeError("FP4 decode requires NVFP4BlockScaling support") from exc
+            self.fp8_recipe = DelayedScaling(float8_block_scaling=NVFP4BlockScaling())
+            self._fp4_enabled = True
+        elif self.cfg.use_fp8:
+            if not TE_AVAILABLE:
+                raise RuntimeError("FP8 requested but Transformer Engine is unavailable")
+            try:
+                # Prefer an inference-friendly FP8 recipe for perf stability.
+                # Float8CurrentScaling avoids delayed amax reductions that can introduce
+                # iteration-to-iteration jitter in short microbench loops.
+                from transformer_engine.common.recipe import Float8CurrentScaling
+            except Exception as exc:
+                raise RuntimeError("FP8 decode requires Float8CurrentScaling support") from exc
+            self.fp8_recipe = Float8CurrentScaling()
+            self._fp8_enabled = True
         self.register_workload_metadata(
-            requests_per_iteration=float(self.cfg.batch_size),
-            tokens_per_iteration=float(self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)),
+            requests_per_iteration=float(self.cfg.batch_size * self.cfg.prefetch_batches),
+            tokens_per_iteration=float(
+                self.cfg.prefetch_batches
+                * self.cfg.batch_size
+                * (self.cfg.prompt_tokens + self.cfg.decode_tokens)
+            ),
         )
 
     def setup(self) -> None:
@@ -189,8 +217,12 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.copy_stream = torch.cuda.Stream()
         if self.cfg.use_compute_stream:
             self.compute_stream = torch.cuda.Stream()
+        if self.cfg.prefetch_batches > 1 and self.cfg.use_cuda_graphs:
+            raise RuntimeError("prefetch_batches > 1 is incompatible with CUDA graphs")
         self._init_model()
         self._init_buffers()
+        if torch.cuda.is_available():
+            self._copy_done_events = [torch.cuda.Event() for _ in range(self.cfg.prefetch_batches)]
         self._cache_te_weight_workspaces()
         # Default to eager helpers; swap in compiled variants below when enabled.
         self.prefill_fn = self._prefill
@@ -199,9 +231,13 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self._maybe_compile()
         if self.cfg.use_cuda_graphs:
             self._capture_decode_graph()
-        total_tokens = self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)
+        total_tokens = (
+            self.cfg.prefetch_batches
+            * self.cfg.batch_size
+            * (self.cfg.prompt_tokens + self.cfg.decode_tokens)
+        )
         self.register_workload_metadata(
-            requests_per_iteration=float(self.cfg.batch_size),
+            requests_per_iteration=float(self.cfg.batch_size * self.cfg.prefetch_batches),
             tokens_per_iteration=float(total_tokens),
         )
 
@@ -294,13 +330,28 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def _init_buffers(self) -> None:
         bsz, prompt = self.cfg.batch_size, self.cfg.prompt_tokens
-        self.host_prompt = torch.randint(
-            0, self.cfg.vocab_size, (bsz, prompt), dtype=torch.long, device="cpu"
-        )
-        if self.cfg.use_pinned_host:
-            self.host_prompt = self.host_prompt.pin_memory()
-
-        self.gpu_prompt = torch.empty_like(self.host_prompt, device=self.device)
+        self.host_prompts = []
+        self.gpu_prompts = []
+        for _ in range(self.cfg.prefetch_batches):
+            host_prompt = torch.randint(
+                0, self.cfg.vocab_size, (bsz, prompt), dtype=torch.long, device="cpu"
+            )
+            if self.cfg.use_pinned_host:
+                host_prompt = host_prompt.pin_memory()
+            self.host_prompts.append(host_prompt)
+            self.gpu_prompts.append(torch.empty_like(host_prompt, device=self.device))
+        self.host_prompt = self.host_prompts[0]
+        self.gpu_prompt = self.gpu_prompts[0]
+        if self.cfg.host_payload_mb:
+            self._payload_bytes = int(self.cfg.host_payload_mb * 1024 * 1024)
+            for _ in range(self.cfg.prefetch_batches):
+                host_payload = torch.empty((self._payload_bytes,), dtype=torch.uint8, device="cpu")
+                if self.cfg.use_pinned_host:
+                    host_payload = host_payload.pin_memory()
+                self.host_payloads.append(host_payload)
+                self.gpu_payloads.append(torch.empty_like(host_payload, device=self.device))
+            self.host_payload = self.host_payloads[0]
+            self.gpu_payload = self.gpu_payloads[0]
         self.state_buffer = torch.zeros((bsz, self.cfg.hidden_size), device=self.device, dtype=self.dtype)
         self.current_tokens = torch.empty((bsz,), device=self.device, dtype=torch.long)
         self.next_token_out = torch.empty_like(self.current_tokens)
@@ -392,15 +443,151 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.copy_stream is not None:
             with torch.cuda.stream(self.copy_stream):
                 self.gpu_prompt.copy_(self.host_prompt, non_blocking=non_blocking)
+                if self.host_payload is not None and self.gpu_payload is not None:
+                    self.gpu_payload.copy_(self.host_payload, non_blocking=non_blocking)
             torch.cuda.current_stream().wait_stream(self.copy_stream)
         else:
             self.gpu_prompt.copy_(self.host_prompt, non_blocking=non_blocking)
+            if self.host_payload is not None and self.gpu_payload is not None:
+                self.gpu_payload.copy_(self.host_payload, non_blocking=non_blocking)
             # CRITICAL: If non_blocking copy with no stream, must synchronize
             # Otherwise gpu_prompt may contain garbage when immediately accessed
             if non_blocking:
                 torch.cuda.synchronize()
 
+    def _copy_prompt_to_device_idx(
+        self,
+        idx: int,
+        *,
+        stream: Optional[torch.cuda.Stream],
+        record_event: bool,
+    ) -> Optional[torch.cuda.Event]:
+        if idx < 0 or idx >= len(self.host_prompts):
+            raise ValueError(f"prompt index {idx} out of range")
+        non_blocking = bool(self.cfg.use_pinned_host)
+        active_stream = stream or torch.cuda.current_stream()
+        with torch.cuda.stream(active_stream):
+            self.gpu_prompts[idx].copy_(self.host_prompts[idx], non_blocking=non_blocking)
+            if self.host_payloads and self.gpu_payloads:
+                self.gpu_payloads[idx].copy_(self.host_payloads[idx], non_blocking=non_blocking)
+            if record_event:
+                if idx >= len(self._copy_done_events):
+                    raise RuntimeError("copy events not initialized")
+                event = self._copy_done_events[idx]
+                event.record(active_stream)
+                return event
+        if stream is None and non_blocking:
+            torch.cuda.synchronize()
+        return None
+
+    def _run_prefill_decode(self, prompt: torch.Tensor, stream: torch.cuda.Stream) -> None:
+        with torch.cuda.stream(stream):
+            prefill_state = self.prefill_fn(prompt)
+            self.state_buffer.copy_(prefill_state)
+            self.current_tokens.copy_(prompt[:, -1])
+            for _ in range(self.cfg.decode_tokens):
+                _, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
+                self.state_buffer.copy_(next_state)
+                self.current_tokens.copy_(next_token)
+
+    def _benchmark_prefetch_batches(self) -> None:
+        if self.cfg.prefetch_batches != 2:
+            raise RuntimeError("prefetch_batches must be 2 for pipelined decode")
+        if self.decode_graph is not None:
+            raise RuntimeError("prefetch_batches > 1 cannot run with CUDA graphs")
+
+        # Timers via CUDA events
+        iter_start = torch.cuda.Event(enable_timing=True)
+        batch0_end = torch.cuda.Event(enable_timing=True)
+        iter_end = torch.cuda.Event(enable_timing=True)
+
+        # Streams for copy/compute
+        prefill_stream = self.compute_stream or torch.cuda.current_stream()
+        copy_stream = self.copy_stream or prefill_stream
+        timing_stream = prefill_stream
+
+        # NVTX ranges for profiling clarity
+        try:
+            import torch.cuda.nvtx as nvtx  # type: ignore
+        except Exception:
+            nvtx = None  # type: ignore
+
+        iter_start.record(timing_stream)
+        event0 = self._copy_prompt_to_device_idx(0, stream=copy_stream, record_event=True)
+        if event0 is not None:
+            prefill_stream.wait_event(event0)
+
+        with self._get_fp8_context():
+            if nvtx:
+                nvtx.range_push("prefill_decode_0")
+            self._run_prefill_decode(self.gpu_prompts[0], prefill_stream)
+            if nvtx:
+                nvtx.range_pop()
+            batch0_end.record(timing_stream)
+
+            event1 = self._copy_prompt_to_device_idx(1, stream=copy_stream, record_event=True)
+            if event1 is not None:
+                prefill_stream.wait_event(event1)
+
+            if nvtx:
+                nvtx.range_push("prefill_decode_1")
+            self._run_prefill_decode(self.gpu_prompts[1], prefill_stream)
+            if nvtx:
+                nvtx.range_pop()
+            iter_end.record(timing_stream)
+
+        if self.compute_stream is not None:
+            torch.cuda.current_stream().wait_stream(self.compute_stream)
+        torch.cuda.synchronize()
+
+        ttft_ms = batch0_end.elapsed_time(iter_start) if batch0_end.query() else 0.0
+        total_ms = iter_end.elapsed_time(iter_start) if iter_end.query() else ttft_ms
+
+        # Defensive clamp to avoid negative/zero timing artifacts
+        eps_ms = 1e-6
+        ttft_ms = max(ttft_ms, eps_ms)
+        total_ms = max(total_ms, ttft_ms)
+
+        tokens_per_iter = float(
+            self.cfg.prefetch_batches * self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)
+        )
+        tokens_per_s = tokens_per_iter / max(total_ms / 1000.0, 1e-6)
+
+        self.gpu_prompt = self.gpu_prompts[1]
+        self.host_prompt = self.host_prompts[1]
+        if self.gpu_payloads:
+            self.gpu_payload = self.gpu_payloads[1]
+            self.host_payload = self.host_payloads[1]
+
+        self._custom_metrics = {
+            "tokens_per_iteration": tokens_per_iter,
+            "prompt_tokens": float(self.cfg.prompt_tokens),
+            "decode_tokens": float(self.cfg.decode_tokens),
+            "hidden_size": float(self.cfg.hidden_size),
+            "prefetch_batches": float(self.cfg.prefetch_batches),
+            "host_payload_mb": float(self.cfg.host_payload_mb),
+            "use_pinned_host": float(self.cfg.use_pinned_host),
+            "use_copy_stream": float(self.cfg.use_copy_stream),
+            "use_compute_stream": float(self.cfg.use_compute_stream),
+            "use_cuda_graphs": float(False),
+            "graph_full_iteration": float(False),
+            "use_torch_compile": float(self.cfg.use_torch_compile and not self._compile_error),
+            "use_fp8": float(self._fp8_enabled),
+            "fp8_fallback": float(1.0 if (self.cfg.use_fp8 and not self._fp8_enabled) else 0.0),
+            "use_fp4": float(self._fp4_enabled),
+            "ttft_ms": float(ttft_ms),
+            "decode_time_ms": float(max(total_ms - ttft_ms, eps_ms)),
+            "tpot_mean_ms": float((max(total_ms - ttft_ms, eps_ms)) / max(self.cfg.decode_tokens, 1)),
+            "tokens_per_s": float(tokens_per_s),
+            "total_time_ms": float(total_ms),
+        }
+        if self._compile_error:
+            self._custom_metrics["compile_error"] = 1.0
+
     def benchmark_fn(self) -> None:
+        if self.cfg.prefetch_batches > 1:
+            self._benchmark_prefetch_batches()
+            return
         # Timers via CUDA events
         prefill_start = torch.cuda.Event(enable_timing=True)
         prefill_end = torch.cuda.Event(enable_timing=True)
@@ -479,7 +666,9 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         total_ms = max(total_ms, ttft_ms + decode_ms)
 
         tpot_ms = decode_ms / max(self.cfg.decode_tokens, 1)
-        tokens_per_iter = float(self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens))
+        tokens_per_iter = float(
+            self.cfg.prefetch_batches * self.cfg.batch_size * (self.cfg.prompt_tokens + self.cfg.decode_tokens)
+        )
         tokens_per_s = tokens_per_iter / max(total_ms / 1000.0, 1e-6)
 
         self._custom_metrics = {
@@ -487,6 +676,8 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             "prompt_tokens": float(self.cfg.prompt_tokens),
             "decode_tokens": float(self.cfg.decode_tokens),
             "hidden_size": float(self.cfg.hidden_size),
+            "prefetch_batches": float(self.cfg.prefetch_batches),
+            "host_payload_mb": float(self.cfg.host_payload_mb),
             "use_pinned_host": float(self.cfg.use_pinned_host),
             "use_copy_stream": float(self.cfg.use_copy_stream),
             "use_compute_stream": float(self.cfg.use_compute_stream),
@@ -523,16 +714,25 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.output is None:
             raise RuntimeError("benchmark_fn() must populate output before capture_verification_payload()")
         config_tensor = torch.tensor(
-            [self.cfg.batch_size, self.cfg.prompt_tokens, self.cfg.decode_tokens],
+            [
+                self.cfg.batch_size,
+                self.cfg.prompt_tokens,
+                self.cfg.decode_tokens,
+                self.cfg.prefetch_batches,
+                self.cfg.host_payload_mb,
+            ],
             device="cpu",
             dtype=torch.int64,
         )
+        inputs = {
+            "gpu_prompt": self.gpu_prompt,
+            "state_buffer": self.state_buffer,
+            "config": config_tensor,
+        }
+        if self.gpu_payload is not None:
+            inputs["host_payload"] = self.gpu_payload
         self._set_verification_payload(
-            inputs={
-                "gpu_prompt": self.gpu_prompt,
-                "state_buffer": self.state_buffer,
-                "config": config_tensor,
-            },
+            inputs=inputs,
             output=self.output,
             batch_size=int(self.cfg.batch_size),
             parameter_count=int(self.parameter_count),
@@ -570,12 +770,19 @@ class DecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             "decode_mlp",
             "lm_head",
             "host_prompt",
+            "host_prompts",
             "gpu_prompt",
+            "gpu_prompts",
+            "host_payload",
+            "gpu_payload",
+            "host_payloads",
+            "gpu_payloads",
             "state_buffer",
             "current_tokens",
             "next_token_out",
             "graph_logits",
             "graph_next_token",
+            "_copy_done_events",
         ):
             if hasattr(self, attr):
                 setattr(self, attr, None)

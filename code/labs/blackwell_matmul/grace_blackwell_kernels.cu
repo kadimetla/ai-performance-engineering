@@ -51,6 +51,20 @@ __device__ inline void zero_tile(float* tile, int elements) {
   }
 }
 
+__device__ inline void zero_tile_range(float* tile,
+                                       int cols,
+                                       int row_begin,
+                                       int row_end) {
+  const int rows = max(0, row_end - row_begin);
+  const int elements = rows * cols;
+  for (int idx = threadIdx.x; idx < elements; idx += blockDim.x) {
+    const int local_row = idx / cols;
+    const int col = idx - local_row * cols;
+    const int row = row_begin + local_row;
+    tile[row * PIPE_TILE_N + col] = 0.0f;
+  }
+}
+
 __device__ inline void store_tile(const float* __restrict__ tile,
                                   half* __restrict__ C,
                                   int ld_c,
@@ -76,6 +90,29 @@ __device__ inline void compute_rows(const half* __restrict__ A_tile,
   for (int idx = threadIdx.x; idx < rows * cols; idx += blockDim.x) {
     const int row = idx / cols;
     const int col = idx - row * cols;
+    float acc = accum_tile[row * PIPE_TILE_N + col];
+    for (int k_it = 0; k_it < k_extent; ++k_it) {
+      float lhs = __half2float(A_tile[row * PIPE_TILE_K + k_it]);
+      float rhs = __half2float(B_tile[col * PIPE_TILE_K + k_it]);
+      acc += lhs * rhs;
+    }
+    accum_tile[row * PIPE_TILE_N + col] = acc;
+  }
+}
+
+__device__ inline void compute_rows_range(const half* __restrict__ A_tile,
+                                          const half* __restrict__ B_tile,
+                                          float* __restrict__ accum_tile,
+                                          int cols,
+                                          int k_extent,
+                                          int row_begin,
+                                          int row_end) {
+  const int rows = max(0, row_end - row_begin);
+  const int elements = rows * cols;
+  for (int idx = threadIdx.x; idx < elements; idx += blockDim.x) {
+    const int local_row = idx / cols;
+    const int col = idx - local_row * cols;
+    const int row = row_begin + local_row;
     float acc = accum_tile[row * PIPE_TILE_N + col];
     for (int k_it = 0; k_it < k_extent; ++k_it) {
       float lhs = __half2float(A_tile[row * PIPE_TILE_K + k_it]);
@@ -199,7 +236,7 @@ __global__ void cluster_kernel(const half* __restrict__ A,
   const int row_begin = min(cluster_rank * rows_per_block, rows);
   const int row_end = min(row_begin + rows_per_block, rows);
 
-  zero_tile(C_tile, TILE_M * TILE_N);
+  zero_tile_range(C_tile, cols, row_begin, row_end);
   cta.sync();
 
   const int total_k_tiles = (K + TILE_K - 1) / TILE_K;
@@ -243,13 +280,29 @@ __global__ void cluster_kernel(const half* __restrict__ A,
     const half* A_src = cluster.map_shared_rank(A_tile, 0);
     const half* B_src = cluster.map_shared_rank(B_tile, 0);
 
-    compute_rows(A_src, B_src, C_tile, rows, cols, k_extent);
+    const int row_count = max(0, row_end - row_begin);
+    for (int idx = threadIdx.x; idx < row_count * k_extent; idx += blockDim.x) {
+      const int local_row = idx / k_extent;
+      const int col = idx - local_row * k_extent;
+      const int row = row_begin + local_row;
+      A_tile[row * PIPE_TILE_K + col] = A_src[row * PIPE_TILE_K + col];
+    }
+    for (int idx = threadIdx.x; idx < cols * k_extent; idx += blockDim.x) {
+      const int col = idx / k_extent;
+      const int k_it = idx - col * k_extent;
+      B_tile[col * PIPE_TILE_K + k_it] = B_src[col * PIPE_TILE_K + k_it];
+    }
+    cta.sync();
+
+    if (row_begin < row_end) {
+      compute_rows_range(A_tile, B_tile, C_tile, cols, k_extent, row_begin, row_end);
+    }
 
     cta.sync();
     cluster.sync();
   }
 
-  if (warp_id == 2) {
+  if (warp_id == 2 && row_begin < row_end) {
     for (int row = row_begin + lane_id; row < row_end; row += warpSize) {
       for (int col = 0; col < cols; ++col) {
         const int global_row = block_row + row;

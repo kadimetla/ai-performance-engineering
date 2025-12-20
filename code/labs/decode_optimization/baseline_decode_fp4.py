@@ -20,7 +20,7 @@ def get_benchmark() -> DecodeBenchmark:
     # Prefill-dominant regime where FP4 benefits are visible.
     cfg = DecodeConfig(
         batch_size=64,
-        prompt_tokens=256,
+        prompt_tokens=1024,
         decode_tokens=0,
         hidden_size=8192,
         use_pinned_host=False,

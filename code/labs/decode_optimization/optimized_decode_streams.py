@@ -19,13 +19,17 @@ def get_benchmark() -> DecodeBenchmark:
     allowing overlap and hiding transfer latency with computation.
     """
     cfg = DecodeConfig(
-        batch_size=8,
-        prompt_tokens=256,
+        batch_size=64,
+        prompt_tokens=2048,
         decode_tokens=64,
-        hidden_size=1024,
+        prefetch_batches=2,
+        host_payload_mb=512,
+        hidden_size=256,
         use_pinned_host=True,
         use_copy_stream=True,
         use_compute_stream=True,
+        use_cuda_graphs=False,
+        use_torch_compile=False,
         label="optimized_decode_streams",
         iterations=12,
         warmup=15,

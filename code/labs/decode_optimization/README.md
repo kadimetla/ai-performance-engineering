@@ -20,7 +20,7 @@ Uses a simplified MLP-based model (not a transformer) to isolate optimization ef
 | `baseline_decode_double_buffer_tma.py` | Baseline CUDA kernel for the TMA double-buffered decode comparison. |
 | `optimized_decode_pinned.py`, `optimized_decode_streams.py` | Pinned-host and dual-stream variants that remove host bottlenecks. |
 | `optimized_decode_compile.py`, `optimized_decode_graph.py`, `optimized_decode_graph_full.py` | `torch.compile` and CUDA Graph variants (decode-only and full prefill+decode). |
-| `optimized_decode_fp8.py`, `optimized_decode_fp4.py` | Transformer Engine FP8/FP4 decode paths (FP4 falls back gracefully when unsupported). |
+| `optimized_decode_fp8.py`, `optimized_decode_fp4.py` | Transformer Engine FP8/FP4 decode paths (fail fast when unsupported). |
 | `optimized_decode_warp_specialized.py`, `triton_fused_decode.py` | Triton fused decode MLP with warp specialization/TMA-style pointers. |
 | `decode_8xgpu_demo.py` | Multi-GPU demo/tool to stress NVLink-C2C bandwidth on 8×B200 (torchrun required). |
 | `optimized_decode_double_buffer_tma.py` | CUDA double-buffered decode using TMA-style loads. |
@@ -50,6 +50,6 @@ python -m cli.aisp demos labs-decode-8xgpu --nproc-per-node 8 -- --iters 4 --war
 
 ## Notes
 - All targets emit TTFT, TPOT mean, decode time, total time, and tokens/sec in `custom_metrics` for easy diffing.
-- FP4 path requires NVFP4 (Blackwell); otherwise it reports the fallback in logs.
+- FP4 path requires NVFP4 (Blackwell); unsupported platforms fail fast.
 - Multi-GPU demo expects eight visible GPUs; reduce `--world-size` if you customize the script for smaller boxes.
 - This lab uses a simplified MLP model (no attention) to isolate serving optimization effects.
