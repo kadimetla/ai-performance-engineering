@@ -99,12 +99,15 @@ class OptimizedAutogradCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark
             raise RuntimeError("CUDA graph not initialized")
 
         with self._nvtx_range("autograd_standard"):
-            self.static_input.copy_(self.inputs)
-            self.static_target.copy_(self.targets)
-            self.graph.replay()
-            if self.output_buffer is None:
-                raise RuntimeError("Output buffer not initialized")
-            self.output = self.output_buffer.detach().clone()
+            if self.capture_stream is None:
+                raise RuntimeError("Capture stream not initialized")
+            with torch.cuda.stream(self.capture_stream):
+                self.static_input.copy_(self.inputs)
+                self.static_target.copy_(self.targets)
+                self.graph.replay()
+                if self.output_buffer is None:
+                    raise RuntimeError("Output buffer not initialized")
+                self.output = self.output_buffer.detach().clone()
         self._synchronize()
         if self.inputs is None or self.targets is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
