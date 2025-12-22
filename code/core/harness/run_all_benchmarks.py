@@ -1712,6 +1712,7 @@ benchmark.teardown()
         # Build ncu command
         ncu_command = [
             "ncu",
+            "--force-overwrite",
             "--set", "full",
             "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
             "--replay-mode", "kernel",
@@ -1779,6 +1780,7 @@ def profile_cuda_executable_ncu(
     # Build ncu command
     ncu_command = [
         "ncu",
+        "--force-overwrite",
         "--set", "full",
         "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
         "--replay-mode", "kernel",
@@ -4261,7 +4263,7 @@ def _rebenchmark_patched_variant(
                 try:
                     import subprocess
                     ncu_output = profile_output_dir / f"{patch_name}_ncu.ncu-rep" if profile_output_dir else Path(f"{patch_name}_ncu.ncu-rep")
-                    cmd = ["ncu", "-o", str(ncu_output.with_suffix('')), "--set", "full", 
+                    cmd = ["ncu", "--force-overwrite", "-o", str(ncu_output.with_suffix('')), "--set", "full", 
                            "python", patched_file]
                     subprocess.run(cmd, capture_output=True, timeout=300)
                     if ncu_output.exists():

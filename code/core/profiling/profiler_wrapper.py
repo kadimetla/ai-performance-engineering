@@ -84,6 +84,9 @@ def create_benchmark_wrapper(
         )
         
         # Determine how to instantiate the benchmark
+        nvtx_includes = getattr(config, "nsys_nvtx_include", None)
+        enable_profiling = getattr(config, "enable_profiling", False)
+        enable_nvtx = getattr(config, "enable_nvtx", None)
         instantiation_code = f"""# Get benchmark instance (try common patterns)
 benchmark = None
 try:
@@ -107,6 +110,15 @@ except Exception as e:
 
 if benchmark is None:
     raise RuntimeError("Could not find or instantiate benchmark instance")
+
+# Attach profiling config so NVTX ranges are emitted in wrapper runs.
+from core.harness.benchmark_harness import BenchmarkConfig, ReadOnlyBenchmarkConfigView
+_profiling_config = BenchmarkConfig(
+    enable_profiling={enable_profiling!r},
+    enable_nvtx={enable_nvtx!r},
+    nsys_nvtx_include={nvtx_includes!r},
+)
+benchmark._config = ReadOnlyBenchmarkConfigView.from_config(_profiling_config)
 """
         
         wrapper_content = f'''import sys

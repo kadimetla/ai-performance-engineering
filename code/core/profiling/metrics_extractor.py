@@ -160,7 +160,7 @@ def extract_nsys_metrics(nsys_rep_path: Path, timeout: int = 180) -> NsysMetrics
     return NsysMetrics(total_gpu_time_ms=total_gpu_time_ms, raw_metrics=raw_metrics, schemaVersion="1.0")
 
 
-def extract_ncu_metrics(ncu_rep_path: Path, timeout: int = 60) -> NcuMetrics:
+def extract_ncu_metrics(ncu_rep_path: Path, timeout: int = 300) -> NcuMetrics:
     """Extract metrics from ncu report file.
     
     Args:

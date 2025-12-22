@@ -107,11 +107,16 @@ def nvtx_range(name: str, enable: Optional[bool] = None) -> Generator[None, None
     canonical_name = canonicalize_nvtx_name(name)
     if enable and torch.cuda.is_available():
         with _suppress_nvtx_threading_error():
-            torch.cuda.nvtx.range_push(canonical_name)
+            # Nsight Compute NVTX filtering requires range_start/range_end ranges.
+            range_start = getattr(torch.cuda.nvtx, "range_start", None)
+            range_end = getattr(torch.cuda.nvtx, "range_end", None)
+            if range_start is None or range_end is None:
+                raise RuntimeError("NVTX range_start/range_end are required for profiling.")
+            range_id = range_start(canonical_name)
             try:
                 yield
             finally:
-                torch.cuda.nvtx.range_pop()
+                range_end(range_id)
         return
     # No-op when NVTX is disabled or CUDA is unavailable
     yield

@@ -85,7 +85,11 @@ class BaselineStructuredSparsityBatchBenchmark(VerificationPayloadMixin, BaseBen
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=5)
+        return BenchmarkConfig(
+            iterations=10,
+            warmup=5,
+            nsys_nvtx_include=["structured_sparsity"],
+        )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

@@ -213,6 +213,7 @@ benchmark.teardown()
         
         ncu_command = [
             "ncu",
+            "--force-overwrite",
             "--set", "full",
             "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
             "--replay-mode", "kernel",
@@ -274,6 +275,7 @@ def profile_with_ncu_cuda(
     
     ncu_command = [
         "ncu",
+        "--force-overwrite",
         "--set", "full",
         "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
         "--replay-mode", "kernel",

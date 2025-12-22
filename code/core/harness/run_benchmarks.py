@@ -1538,6 +1538,10 @@ def profile_python_benchmark(
     benchmark_name = benchmark_path.stem
     nsys_output = output_dir / f"{benchmark_name}_{variant}.nsys-rep"
     
+    bench_config = benchmark.get_config() if hasattr(benchmark, "get_config") else None
+    nvtx_includes = getattr(bench_config, "nsys_nvtx_include", None) if bench_config else None
+    repo_root = chapter_dir.parent
+
     # Create a temporary wrapper script that runs the benchmark
     wrapper_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
     
@@ -1546,6 +1550,9 @@ def profile_python_benchmark(
 import sys
 from pathlib import Path
 
+# Add repo root so NVTX helpers can be imported
+sys.path.insert(0, r'{repo_root}')
+
 # Add chapter directory to path
 sys.path.insert(0, r'{chapter_dir}')
 
@@ -1553,6 +1560,13 @@ sys.path.insert(0, r'{chapter_dir}')
 from {benchmark_path.stem} import get_benchmark
 
 benchmark = get_benchmark()
+from core.harness.benchmark_harness import BenchmarkConfig, ReadOnlyBenchmarkConfigView
+_profiling_config = BenchmarkConfig(
+    enable_profiling=True,
+    enable_nvtx=True,
+    nsys_nvtx_include={nvtx_includes!r},
+)
+benchmark._config = ReadOnlyBenchmarkConfigView.from_config(_profiling_config)
 benchmark.setup()
 
 # Warmup
@@ -1726,6 +1740,10 @@ def profile_python_benchmark_ncu(
     benchmark_name = benchmark_path.stem
     ncu_output = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
     
+    bench_config = benchmark.get_config() if hasattr(benchmark, "get_config") else None
+    nvtx_includes = getattr(bench_config, "nsys_nvtx_include", None) if bench_config else None
+    repo_root = chapter_dir.parent
+
     # Create a temporary wrapper script that runs the benchmark
     wrapper_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
     
@@ -1734,6 +1752,9 @@ def profile_python_benchmark_ncu(
 import sys
 from pathlib import Path
 
+# Add repo root so NVTX helpers can be imported
+sys.path.insert(0, r'{repo_root}')
+
 # Add chapter directory to path
 sys.path.insert(0, r'{chapter_dir}')
 
@@ -1741,6 +1762,13 @@ sys.path.insert(0, r'{chapter_dir}')
 from {benchmark_path.stem} import get_benchmark
 
 benchmark = get_benchmark()
+from core.harness.benchmark_harness import BenchmarkConfig, ReadOnlyBenchmarkConfigView
+_profiling_config = BenchmarkConfig(
+    enable_profiling=True,
+    enable_nvtx=True,
+    nsys_nvtx_include={nvtx_includes!r},
+)
+benchmark._config = ReadOnlyBenchmarkConfigView.from_config(_profiling_config)
 benchmark.setup()
 
 # Warmup
@@ -1764,13 +1792,17 @@ benchmark.teardown()
         # Build ncu command
         ncu_command = [
             "ncu",
+            "--force-overwrite",
             "--set", "full",
             "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
             "--replay-mode", "kernel",
             "-o", str(ncu_output.with_suffix("")),  # ncu adds .ncu-rep automatically
-            sys.executable,
-            wrapper_script.name
         ]
+        if nvtx_includes:
+            ncu_command.append("--nvtx")
+            for tag in nvtx_includes:
+                ncu_command.extend(["--nvtx-include", str(tag)])
+        ncu_command.extend([sys.executable, wrapper_script.name])
         
         # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
@@ -1844,6 +1876,7 @@ def profile_cuda_executable_ncu(
     # Build ncu command
     ncu_command = [
         "ncu",
+        "--force-overwrite",
         "--set", "full",
         "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
         "--replay-mode", "kernel",
@@ -4478,7 +4511,7 @@ def _rebenchmark_patched_variant(
                 try:
                     import subprocess
                     ncu_output = profile_output_dir / f"{patch_name}_ncu.ncu-rep" if profile_output_dir else Path(f"{patch_name}_ncu.ncu-rep")
-                    cmd = ["ncu", "-o", str(ncu_output.with_suffix('')), "--set", "full", 
+                    cmd = ["ncu", "--force-overwrite", "-o", str(ncu_output.with_suffix('')), "--set", "full", 
                            "python", patched_file]
                     subprocess.run(cmd, capture_output=True, timeout=300)
                     if ncu_output.exists():
