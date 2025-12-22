@@ -73,6 +73,7 @@ huggingface-hub<1.0,>=0.19.3  # Required by transformers 4.40.2 and tokenizers 0
 
 # Optional model serving & optimization
 torchtitan==0.2.0
+flashinfer==0.5.2
 
 # Profiling & diagnostics
 py-spy==0.4.1

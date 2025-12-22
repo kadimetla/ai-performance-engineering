@@ -13,7 +13,7 @@ Focuses on real-world inference services: paged attention, Flash SDP, FP8 servin
 | Path | Description |
 | --- | --- |
 | `inference_optimizations_blackwell.py`, `inference_profiling.py`, `inference_server_load_test.py`, `inference_serving_8xb200.py` | Top-level orchestration scripts for profiling and load testing multi-GPU inference deployments. |
-| `baseline_flash_sdp.py`, `optimized_flash_sdp.py`, `baseline_paged_attention.py`, `optimized_paged_attention.py` | Attention kernels that compare naive implementations vs Flash/paged variants. |
+| `baseline_flash_sdp.py`, `optimized_flash_sdp.py`, `baseline_paged_attention.py`, `optimized_paged_attention.py`, `baseline_flashinfer_block_sparse.py`, `optimized_flashinfer_block_sparse.py` | Attention kernels that compare naive implementations vs Flash/paged/FlashInfer block-sparse variants. |
 | `baseline_piece_graphs.py`, `optimized_piece_graphs.py`, `baseline_regional_compilation.py`, `optimized_regional_compilation.py` | Piecewise graph capture and regional compilation for stable low-latency decode. |
 | `fp8_transformer_engine.py`, `test_fp8_quantization_real.py`, `symmetric_memory_inference.py`, `multi_gpu_validation.py` | Serving-time FP8 and symmetric-memory validations to guarantee accuracy and NVLink efficiency. |
 | `moe_performance_benchmark.py`, `synthetic_moe_inference_benchmark.py`, `moe_workload.py` | MoE inference harnesses that stress router placement and per-expert batching. |

@@ -17,6 +17,7 @@ Captures the host-level changes-NUMA pinning, governor tweaks, container setting
 | `baseline_kubernetes.py`, `optimized_kubernetes.py`, `kubernetes_mig_pod.yaml`, `kubernetes_topology_pod.yaml` | Kubernetes manifests demonstrating topology-aware scheduling and MIG partitioning for multi-tenant fleets. |
 | `cpu_gpu_numa_optimizations.sh`, `system_tuning.sh`, `gpu_setup_commands.sh` | Workflow scripts for aligning CPU governors, cgroup limits, persistence mode, and driver settings with the benchmark harness. |
 | `baseline_gemm.py`, `optimized_gemm.py`, `train.py` | Simple GEMM + training loops that surface the impact of system tuning changes in measurable FLOP/s. |
+| `power_perf_watt_tool.py`, `green_context_demo.py` | Perf-per-watt estimator and CUDA 13 green-context demo (non-benchmark utilities). |
 | `compare.py`, `requirements.txt`, `expectations_b200.json` | Harness entry, Python deps, and regression thresholds. |
 
 ## Running the Benchmarks

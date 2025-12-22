@@ -98,6 +98,12 @@ DEMOS: Dict[str, DemoSpec] = {
         description="Chapter 12 CUDA graph instantiation overhead demo (non-benchmark).",
         launch_via=LaunchVia.PYTHON,
     ),
+    "ch03-green-context": DemoSpec(
+        name="ch03-green-context",
+        script_path=REPO_ROOT / "ch03" / "green_context_demo.py",
+        description="Chapter 3 CUDA 13 green-context demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
     "ch13-fp8-perchannel": DemoSpec(
         name="ch13-fp8-perchannel",
         script_path=REPO_ROOT / "ch13" / "fp8_perchannel_demo.py",

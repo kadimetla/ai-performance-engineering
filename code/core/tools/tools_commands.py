@@ -146,6 +146,11 @@ TOOLS: Dict[str, ToolSpec] = {
         script_path=REPO_ROOT / "ch20" / "kernel_verification_tool.py",
         description="Run Chapter 20 kernel verification utility (tool; not a benchmark pair).",
     ),
+    "perf-per-watt": ToolSpec(
+        name="perf-per-watt",
+        script_path=REPO_ROOT / "ch03" / "power_perf_watt_tool.py",
+        description="Estimate GEMM perf-per-watt using NVML power sampling.",
+    ),
     "proofwright-verify": ToolSpec(
         name="proofwright-verify",
         script_path=REPO_ROOT / "ch20" / "proofwright_verify_tool.py",
