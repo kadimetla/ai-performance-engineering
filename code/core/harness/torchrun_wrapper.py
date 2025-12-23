@@ -14,6 +14,7 @@ original benchmark script path + args through unchanged.
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import runpy
 import sys
@@ -36,6 +37,27 @@ def _set_seeds(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _parse_int_env(name: str) -> Optional[int]:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid integer for {name}: {value!r}") from exc
+
+
+def _resolve_local_rank() -> int:
+    for key in ("LOCAL_RANK", "RANK"):
+        value = os.environ.get(key)
+        if value is not None and value != "":
+            try:
+                return int(value)
+            except ValueError as exc:
+                raise RuntimeError(f"Invalid {key} value: {value!r}") from exc
+    return 0
 
 
 def _run_target_script(script_path: Path, argv: list[str]) -> None:
@@ -95,7 +117,27 @@ def main(argv: Optional[list[str]] = None) -> None:
     expected_torch_seed = int(args.aisp_expected_torch_seed)
     expected_cuda_seed: Optional[int] = args.aisp_expected_cuda_seed
 
-    _run_target_script(script_path, remainder)
+    lock_requested = os.environ.get("AISP_LOCK_GPU_CLOCKS") == "1"
+    ramp_requested = os.environ.get("AISP_RAMP_GPU_CLOCKS", "1") == "1"
+    local_rank = _resolve_local_rank()
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+
+    if lock_requested and torch.cuda.is_available():
+        from core.harness.benchmark_harness import lock_gpu_clocks, ramp_gpu_clocks
+
+        lock_ctx = lock_gpu_clocks(
+            device=local_rank,
+            sm_clock_mhz=_parse_int_env("AISP_GPU_SM_CLOCK_MHZ"),
+            mem_clock_mhz=_parse_int_env("AISP_GPU_MEM_CLOCK_MHZ"),
+        )
+        with lock_ctx:
+            if ramp_requested:
+                ramp_gpu_clocks(device=local_rank)
+            _run_target_script(script_path, remainder)
+    else:
+        _run_target_script(script_path, remainder)
 
     current_torch_seed = int(torch.initial_seed())
     if current_torch_seed != expected_torch_seed:

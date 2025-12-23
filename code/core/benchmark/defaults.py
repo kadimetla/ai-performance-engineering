@@ -91,6 +91,10 @@ class BenchmarkDefaults:
     allow_virtualization: bool = True
     # Free allocator state between benchmarks by default.
     enable_cleanup: bool = True
+    # Lock GPU clocks by default for consistent benchmarking.
+    lock_gpu_clocks: bool = True
+    gpu_sm_clock_mhz: Optional[int] = None
+    gpu_mem_clock_mhz: Optional[int] = None
     clear_l2_cache: bool = True
     clear_compile_cache: bool = True
     reset_memory_pool: bool = True
@@ -165,6 +169,9 @@ class BenchmarkDefaults:
             "enable_nvtx": self.enable_nvtx,
             "allow_virtualization": self.allow_virtualization,
             "enable_cleanup": self.enable_cleanup,
+            "lock_gpu_clocks": self.lock_gpu_clocks,
+            "gpu_sm_clock_mhz": self.gpu_sm_clock_mhz,
+            "gpu_mem_clock_mhz": self.gpu_mem_clock_mhz,
             "clear_l2_cache": self.clear_l2_cache,
             "clear_compile_cache": self.clear_compile_cache,
             "reset_memory_pool": self.reset_memory_pool,

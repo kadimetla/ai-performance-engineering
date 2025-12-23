@@ -15,6 +15,8 @@ from core.harness.benchmark_harness import BaseBenchmark
 class BaselineTcgen05WarpSpecializationBenchmark(Tcgen05MatmulBenchmarkBase):
     """Chapter 10 baseline: pipelined tcgen05 GEMM without warp specialization."""
 
+    matrix_rows = 16384
+    matrix_cols = 16384
     shared_dim = 2048
     nvtx_label = "baseline_tcgen05_warp_specialization"
 

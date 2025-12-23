@@ -2167,11 +2167,13 @@ def _test_chapter_impl(
     except Exception:
         _defaults_obj = None
 
+    measurement_timeout_default = getattr(_defaults_obj, "measurement_timeout_seconds", 1200) if _defaults_obj else 1200
+    setup_timeout_default = getattr(_defaults_obj, "setup_timeout_seconds", 300) if _defaults_obj else 300
     config_kwargs: Dict[str, Any] = dict(
         iterations=iterations,
         warmup=warmup,
-        measurement_timeout_seconds=180,  # Increased for CUDA JIT compilation (can take 30+ seconds)
-        setup_timeout_seconds=120,  # Allow more time for setup (CUDA extension loading)
+        measurement_timeout_seconds=measurement_timeout_default,
+        setup_timeout_seconds=setup_timeout_default,
         timeout_multiplier=timeout_multiplier,  # Apply timeout multiplier from CLI
         enable_memory_tracking=True,  # Enable memory metrics display
         enable_profiling=enable_profiling,  # Respect profiling flag (opt-in via CLI)

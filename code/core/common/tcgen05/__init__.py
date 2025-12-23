@@ -256,6 +256,25 @@ def _load_extension(name: str, sources: Sequence[Path]):
     # Clean up stale build artifacts (incomplete builds)
     _clean_stale_build(name)
     
+    build_dir = _get_extension_build_dir(name)
+    so_path = build_dir / f"{name}.so"
+    if so_path.exists():
+        try:
+            import importlib.util
+            import sys
+
+            spec = importlib.util.spec_from_file_location(name, so_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load extension module from {so_path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            return module
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load existing tcgen05 extension '{name}' from {so_path}: {e}"
+            ) from e
+
     try:
         module = load(
             name=name,
@@ -267,7 +286,6 @@ def _load_extension(name: str, sources: Sequence[Path]):
         )
         
         # After successful load, update fingerprint file to mark cache as valid
-        build_dir = _get_extension_build_dir(name)
         fingerprint_file = build_dir / ".build_fingerprint"
         current_fingerprint = _compute_build_fingerprint(sources, cuda_flags)
         fingerprint_file.write_text(json.dumps({

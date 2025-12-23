@@ -64,8 +64,8 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
                       CUTE_GRID_CONSTANT TmaAtomB const tma_atom_B) {
   int warp_idx = threadIdx.x / 32;
   int lane_idx = threadIdx.x % 32;
-  bool is_consumer = (warp_idx == 0);
-  bool is_producer = (warp_idx == 1);
+  bool is_consumer = (warp_idx == 1);
+  bool is_producer = (warp_idx == 0);
   bool is_lane0 = (lane_idx == 0);
 
   // Swizzled tile coord
@@ -192,43 +192,34 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
 
   tiled_mma.accumulate_ = UMMA::ScaleOut::Zero;
 
-  // Producer prologue: issue first kStages-1 TMA loads.
+  // Prologue: issue first kStages-1 TMA loads.
   if (is_producer && is_lane0) {
     for (int i = 0; i < min(kStages - 1, num_k_tiles); ++i) {
       issue_tma(i, i);
     }
   }
+  __syncthreads();
 
-  // Producer mainloop: issue remaining TMA loads after stages are released.
-  if (is_producer && is_lane0) {
-    int empty_phase[kStages] = {0, 0, 0, 0};
-    for (int k = kStages - 1; k < num_k_tiles; ++k) {
-      int stage = k % kStages;
-      if (k >= kStages) {
-        cute::wait_barrier(storage.empty_barrier[stage], empty_phase[stage]);
-        empty_phase[stage] ^= 1;
-      }
-      issue_tma(stage, k);
+  int full_phase[kStages] = {0};
+
+  // Mainloop: producer issues next TMA while consumer warps compute.
+  for (int k = 0; k < num_k_tiles; ++k) {
+    int curr = k % kStages;
+    int next_k = k + (kStages - 1);
+    int next_s = next_k % kStages;
+
+    if (next_k < num_k_tiles && is_producer && is_lane0) {
+      issue_tma(next_s, next_k);
     }
-  }
 
-  // Consumer mainloop: wait for stages and execute MMA.
-  if (is_consumer) {
-    int full_phase[kStages] = {0, 0, 0, 0};
-    tiled_mma.accumulate_ = UMMA::ScaleOut::Zero;
-    for (int k = 0; k < num_k_tiles; ++k) {
-      int stage = k % kStages;
+    cute::wait_barrier(storage.full_barrier[curr], full_phase[curr]);
+    full_phase[curr] ^= 1;
 
-      if (is_lane0) {
-        cute::wait_barrier(storage.full_barrier[stage], full_phase[stage]);
-        full_phase[stage] ^= 1;
-      }
-      __syncwarp();
-
-      auto& tCrA = (stage == 0) ? tCrA_0 : (stage == 1) ? tCrA_1 :
-                   (stage == 2) ? tCrA_2 : tCrA_3;
-      auto& tCrB = (stage == 0) ? tCrB_0 : (stage == 1) ? tCrB_1 :
-                   (stage == 2) ? tCrB_2 : tCrB_3;
+    if (is_consumer) {
+      auto& tCrA = (curr == 0) ? tCrA_0 : (curr == 1) ? tCrA_1 :
+                   (curr == 2) ? tCrA_2 : tCrA_3;
+      auto& tCrB = (curr == 0) ? tCrB_0 : (curr == 1) ? tCrB_1 :
+                   (curr == 2) ? tCrB_2 : tCrB_3;
 
       for (int kb = 0; kb < size<2>(tCrA_0); ++kb) {
         gemm(tiled_mma, tCrA(_, _, kb), tCrB(_, _, kb), tCtAcc);
@@ -236,15 +227,14 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
       }
 
       if (is_lane0) {
-        uint64_t* empty_ptr = reinterpret_cast<uint64_t*>(&storage.empty_barrier[stage]);
+        uint64_t* empty_ptr = reinterpret_cast<uint64_t*>(&storage.empty_barrier[curr]);
         cutlass::arch::umma_arrive(empty_ptr);
       }
-      __syncwarp();
     }
+  }
 
-    if (is_lane0) {
-      cutlass::arch::umma_arrive(&storage.mma_barrier);
-    }
+  if (is_consumer && is_lane0) {
+    cutlass::arch::umma_arrive(&storage.mma_barrier);
   }
 
   // Wait for ALL MMA to complete

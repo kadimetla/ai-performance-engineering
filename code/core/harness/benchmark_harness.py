@@ -25,7 +25,7 @@ import time
 import traceback
 import warnings
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeoutError
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -158,6 +158,71 @@ _QUICK_WINS_CONFIGURED = False
 _SDPA_KERNEL_CONTEXT = None
 
 
+def _resolve_physical_device_index(device_index: int) -> int:
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not visible:
+        return device_index
+    tokens = [tok.strip() for tok in visible.split(",") if tok.strip()]
+    if not tokens:
+        return device_index
+    if device_index < 0 or device_index >= len(tokens):
+        raise RuntimeError(
+            f"CUDA_VISIBLE_DEVICES={visible!r} does not include index {device_index}"
+        )
+    token = tokens[device_index]
+    if token.isdigit():
+        return int(token)
+    if token.startswith("GPU-"):
+        try:
+            import pynvml
+        except ImportError as exc:
+            raise RuntimeError("CUDA_VISIBLE_DEVICES uses UUIDs but pynvml is unavailable") from exc
+        try:
+            pynvml.nvmlInit()
+            count = pynvml.nvmlDeviceGetCount()
+            for idx in range(count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(idx)
+                uuid = pynvml.nvmlDeviceGetUUID(handle)
+                if isinstance(uuid, bytes):
+                    uuid = uuid.decode()
+                if uuid == token:
+                    return idx
+        finally:
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:
+                pass
+        raise RuntimeError(f"Unable to map CUDA_VISIBLE_DEVICES entry {token!r} to a GPU index")
+    raise RuntimeError(f"Unsupported CUDA_VISIBLE_DEVICES entry {token!r}")
+
+
+def ramp_gpu_clocks(device: int = 0, duration_ms: float = 50.0, max_iters: int = 200) -> None:
+    """Run a short GPU workload to ramp clocks before measurement."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("ramp_gpu_clocks requires CUDA")
+    torch.cuda.set_device(device)
+    dev = torch.device("cuda", device)
+    size = 2048
+    dtype = torch.float16
+    a = torch.ones((size, size), device=dev, dtype=dtype)
+    b = torch.ones((size, size), device=dev, dtype=dtype)
+    c = torch.empty((size, size), device=dev, dtype=dtype)
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    torch.cuda.synchronize(device)
+    start.record()
+    iters = 0
+    while iters < max_iters:
+        torch.matmul(a, b, out=c)
+        iters += 1
+        if iters % 4 == 0:
+            end.record()
+            torch.cuda.synchronize(device)
+            if start.elapsed_time(end) >= duration_ms:
+                break
+    torch.cuda.synchronize(device)
+
+
 @contextmanager
 def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clock_mhz: Optional[int] = None):
     """Lock GPU clocks for consistent benchmarking.
@@ -185,13 +250,14 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
     if not torch.cuda.is_available():
         raise RuntimeError("lock_gpu_clocks requires CUDA")
     props = torch.cuda.get_device_properties(device)
+    physical_index = _resolve_physical_device_index(device)
     try:
         # Enable persistence mode
-        subprocess.check_output(["nvidia-smi", "-i", str(device), "-pm", "1"], stderr=subprocess.STDOUT)
+        subprocess.check_output(["nvidia-smi", "-i", str(physical_index), "-pm", "1"], stderr=subprocess.STDOUT)
         
         # Get max clocks if not specified
         if sm_clock_mhz is None or mem_clock_mhz is None:
-            cmd = ["nvidia-smi", "-i", str(device), "--query-gpu=clocks.max.sm,clocks.max.memory", "--format=csv,noheader,nounits"]
+            cmd = ["nvidia-smi", "-i", str(physical_index), "--query-gpu=clocks.max.sm,clocks.max.memory", "--format=csv,noheader,nounits"]
             out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
             max_sm, max_mem = [int(x.strip()) for x in out.decode().split(',')]
             sm_clock_mhz = sm_clock_mhz or max_sm
@@ -202,25 +268,49 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
         
         # Lock GPU clocks
         subprocess.check_output([
-            "nvidia-smi", "-i", str(device),
+            "nvidia-smi", "-i", str(physical_index),
             f"--lock-gpu-clocks={sm_clock_mhz},{sm_clock_mhz}"
         ], stderr=subprocess.STDOUT)
         
         # Lock memory clocks
         subprocess.check_output([
-            "nvidia-smi", "-i", str(device),
+            "nvidia-smi", "-i", str(physical_index),
             f"--lock-memory-clocks={mem_clock_mhz},{mem_clock_mhz}"
         ], stderr=subprocess.STDOUT)
         
-        # Verify clocks are set
-        cmd = ["nvidia-smi", "-i", str(device), "--query-gpu=clocks.current.sm,clocks.current.memory", "--format=csv,noheader,nounits"]
-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-        cur_sm, cur_mem = [int(x.strip()) for x in out.decode().split(',')]
+        # Verify application clocks via NVML (current clocks may be lower when idle)
+        try:
+            import pynvml
+        except ImportError as exc:
+            raise RuntimeError("lock_gpu_clocks requires pynvml for clock verification") from exc
+        try:
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(physical_index)
+            app_sm = int(pynvml.nvmlDeviceGetApplicationsClock(handle, pynvml.NVML_CLOCK_SM))
+            app_mem = int(pynvml.nvmlDeviceGetApplicationsClock(handle, pynvml.NVML_CLOCK_MEM))
+            cur_sm = int(pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM))
+            cur_mem = int(pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM))
+        except Exception as exc:
+            raise RuntimeError(f"Failed to query NVML clocks: {exc}") from exc
+        finally:
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:
+                pass
         
-        if abs(cur_sm - sm_clock_mhz) > 50 or abs(cur_mem - mem_clock_mhz) > 50:
+        if abs(app_sm - sm_clock_mhz) > 50 or abs(app_mem - mem_clock_mhz) > 50:
             raise RuntimeError(
                 f"GPU clock lock failed: requested SM={sm_clock_mhz}MHz Mem={mem_clock_mhz}MHz, "
-                f"observed SM={cur_sm}MHz Mem={cur_mem}MHz"
+                f"applications SM={app_sm}MHz Mem={app_mem}MHz"
+            )
+        if LOGGER_AVAILABLE and (abs(cur_sm - sm_clock_mhz) > 50 or abs(cur_mem - mem_clock_mhz) > 50):
+            logger.info(
+                "GPU current clocks below locked target (idle/throttled): "
+                "current SM=%dMHz Mem=%dMHz, target SM=%dMHz Mem=%dMHz",
+                cur_sm,
+                cur_mem,
+                sm_clock_mhz,
+                mem_clock_mhz,
             )
         
         # Calculate theoretical performance at these clocks using device properties
@@ -250,9 +340,9 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
     finally:
         # Reset clocks
         try:
-            subprocess.check_output(["nvidia-smi", "-i", str(device), "-rgc"], stderr=subprocess.STDOUT)
-            subprocess.check_output(["nvidia-smi", "-i", str(device), "-rmc"], stderr=subprocess.STDOUT)
-            subprocess.check_output(["nvidia-smi", "-i", str(device), "-pm", "0"], stderr=subprocess.STDOUT)
+            subprocess.check_output(["nvidia-smi", "-i", str(physical_index), "-rgc"], stderr=subprocess.STDOUT)
+            subprocess.check_output(["nvidia-smi", "-i", str(physical_index), "-rmc"], stderr=subprocess.STDOUT)
+            subprocess.check_output(["nvidia-smi", "-i", str(physical_index), "-pm", "0"], stderr=subprocess.STDOUT)
             logger.info("GPU clocks reset to default")
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass  # Best effort cleanup
@@ -1658,6 +1748,13 @@ class BenchmarkHarness:
                 env[key] = os.environ[key]
         print(f"[harness] torchrun env passthrough: {getattr(config, 'env_passthrough', [])}", flush=True)
         env.update(spec.env)
+        if getattr(config, "lock_gpu_clocks", False) and torch.cuda.is_available():
+            env["AISP_LOCK_GPU_CLOCKS"] = "1"
+            if getattr(config, "gpu_sm_clock_mhz", None) is not None:
+                env["AISP_GPU_SM_CLOCK_MHZ"] = str(config.gpu_sm_clock_mhz)
+            if getattr(config, "gpu_mem_clock_mhz", None) is not None:
+                env["AISP_GPU_MEM_CLOCK_MHZ"] = str(config.gpu_mem_clock_mhz)
+            env["AISP_RAMP_GPU_CLOCKS"] = "1"
         if not sockets_permitted:
             env.setdefault("RANK", "0")
             env.setdefault("LOCAL_RANK", "0")
@@ -2785,7 +2882,18 @@ class BenchmarkHarness:
             nonlocal times_ms, memory_peak_mb, memory_allocated_mb, profiling_outputs, errors, nsys_metrics, ncu_metrics, timeout_result_storage, inference_timing_data
             
             with execution_lock:  # Acquire lock during execution
+                lock_stack = ExitStack()
                 try:
+                    if getattr(config, "lock_gpu_clocks", False) and self.device.type == "cuda":
+                        device_index = self.device.index if self.device.index is not None else 0
+                        lock_stack.enter_context(
+                            lock_gpu_clocks(
+                                device=device_index,
+                                sm_clock_mhz=getattr(config, "gpu_sm_clock_mhz", None),
+                                mem_clock_mhz=getattr(config, "gpu_mem_clock_mhz", None),
+                            )
+                        )
+
                     def _init_cuda_for_worker_thread() -> None:
                         if not torch.cuda.is_available():
                             return
@@ -2889,6 +2997,14 @@ class BenchmarkHarness:
                         measurement_timeout = config.get_effective_timeout('measurement')
                         if measurement_timeout is not None and setup_time > measurement_timeout * 0.5:
                             logger.warning(f"Setup took {setup_time:.1f}s (consider setting setup_timeout_seconds)")
+
+                    if getattr(config, "lock_gpu_clocks", False) and self.device.type == "cuda":
+                        device_index = self.device.index if self.device.index is not None else 0
+                        ramp_gpu_clocks(device=device_index)
+                        if getattr(config, "reset_memory_pool", True):
+                            from core.harness.validity_checks import reset_cuda_memory_pool
+
+                            reset_cuda_memory_pool(self.device)
                     
                     # Warmup with timeout enforcement
                     warmup_timeout = config.get_effective_timeout('warmup')
@@ -3077,6 +3193,7 @@ class BenchmarkHarness:
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
                         gc.collect()
+                    lock_stack.close()
         
         # ALWAYS run with timeout (required, default 15 seconds). Thread-mode benchmarks execute
         # inside a managed executor so we can recycle workers if a benchmark hangs.
