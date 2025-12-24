@@ -4,16 +4,16 @@ on:
   push:
     paths:
       - 'ch*/**'
-      - 'common/**'
+      - 'core/**'
+      - 'core/scripts/ci/run_compare_builds.sh'
       - 'docs/dual_arch_builds.md'
-      - 'scripts/ci/run_compare_builds.sh'
       - '.github/workflows/dual-arch-compare.yml'
   pull_request:
     paths:
       - 'ch*/**'
-      - 'common/**'
+      - 'core/**'
+      - 'core/scripts/ci/run_compare_builds.sh'
       - 'docs/dual_arch_builds.md'
-      - 'scripts/ci/run_compare_builds.sh'
       - '.github/workflows/dual-arch-compare.yml'
 
 jobs:
@@ -32,4 +32,4 @@ jobs:
 
       - name: Run dual-architecture compare builds
         run: |
-          bash scripts/ci/run_compare_builds.sh
+          bash core/scripts/ci/run_compare_builds.sh

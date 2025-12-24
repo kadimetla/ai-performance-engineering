@@ -18,7 +18,7 @@ namespace {
         }                                                                     \
     } while (0)
 
-constexpr int NUM_STREAMS = 3;
+constexpr int NUM_STREAMS = 8;
 
 __global__ void scale_kernel(const float* __restrict__ input,
                              float* __restrict__ output,

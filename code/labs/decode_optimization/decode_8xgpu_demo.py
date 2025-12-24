@@ -73,7 +73,7 @@ class MultiGPUDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             },
             parse_rank0_only=True,
             multi_gpu_required=True,
-            name="decode_8xgpu",
+            name="optimized_decode_8xgpu",
             config_arg_map={
                 "iterations": "--iters",
                 "warmup": "--warmup",
@@ -101,7 +101,7 @@ def _run_worker(iters: int, warmup: int) -> None:
         use_cuda_graphs=True,
         graph_full_iteration=True,
         use_torch_compile=True,
-        label="decode_8xgpu",
+        label="optimized_decode_8xgpu",
     )
 
     bench = DecodeBenchmark(cfg)

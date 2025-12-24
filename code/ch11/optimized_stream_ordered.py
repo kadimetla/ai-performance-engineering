@@ -24,12 +24,13 @@ class OptimizedStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Must match baseline for a fair comparison.
         self.elements = 1 << 12  # 4,096 floats (~16KB) per stream buffer
         self.inner_iterations = 200
+        self.num_streams = 8
         self.output: Optional[torch.Tensor] = None
         self._payload_inputs: Optional[dict] = None
 
         bytes_per_buffer = float(self.elements * 4)
         self.register_workload_metadata(
-            bytes_per_iteration=3.0 * float(self.inner_iterations) * bytes_per_buffer * 2.0,
+            bytes_per_iteration=float(self.num_streams) * float(self.inner_iterations) * bytes_per_buffer * 2.0,
             requests_per_iteration=float(self.inner_iterations),
         )
 

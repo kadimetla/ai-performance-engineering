@@ -169,6 +169,13 @@ def _load_expectations_file(path: Path) -> Dict[str, Any]:
         raise RuntimeError(f"Failed to load expectations file {path}: {exc}") from exc
 
 
+def _expectation_example_key(example_name: str, bench_type: str) -> str:
+    bench_type_norm = (bench_type or "python").strip().lower()
+    if bench_type_norm == "python":
+        return example_name
+    return f"{example_name}_{bench_type_norm}"
+
+
 def _file_uses_torchrun(path: Path) -> bool:
     content = path.read_text(encoding="utf-8")
     markers = ("TorchrunLaunchSpec", "get_torchrun_spec", "LaunchVia.TORCHRUN")
@@ -188,10 +195,27 @@ def _collect_multi_gpu_examples(chapter_dir: Path) -> Dict[str, bool]:
                 uses_torchrun = uses_torchrun or _file_uses_torchrun(opt_path)
             except Exception as exc:
                 raise RuntimeError(f"Failed to read {opt_path}: {exc}") from exc
-        if example_name in multi_gpu:
-            multi_gpu[example_name] = multi_gpu[example_name] or uses_torchrun
+        example_key = _expectation_example_key(example_name, "python")
+        if example_key in multi_gpu:
+            multi_gpu[example_key] = multi_gpu[example_key] or uses_torchrun
         else:
-            multi_gpu[example_name] = uses_torchrun
+            multi_gpu[example_key] = uses_torchrun
+
+    try:
+        from core.harness.run_benchmarks import discover_cuda_benchmarks, cuda_binary_requires_multi_gpu
+    except Exception as exc:
+        raise RuntimeError(f"Failed to import CUDA benchmark discovery: {exc}") from exc
+
+    cuda_pairs = discover_cuda_benchmarks(chapter_dir)
+    for baseline_path, optimized_paths, example_name in cuda_pairs:
+        uses_multi_gpu = cuda_binary_requires_multi_gpu(baseline_path)
+        for opt_path in optimized_paths:
+            uses_multi_gpu = uses_multi_gpu or cuda_binary_requires_multi_gpu(opt_path)
+        example_key = _expectation_example_key(example_name, "cuda")
+        if example_key in multi_gpu:
+            multi_gpu[example_key] = multi_gpu[example_key] or uses_multi_gpu
+        else:
+            multi_gpu[example_key] = uses_multi_gpu
     return multi_gpu
 
 
@@ -1374,13 +1398,18 @@ if TYPER_AVAILABLE:
             for example_name, entry in examples.items():
                 if not isinstance(entry, dict):
                     continue
-                total_entries += 1
                 metadata = entry.get("metadata", {}) or {}
                 entry_goal = (metadata.get("optimization_goal") or "speed").strip().lower()
                 if goal_norm != "any" and entry_goal != goal_norm:
                     continue
+                entry_type = (entry.get("type") or "python").strip().lower()
+                entry_example = entry.get("example") or example_name
+                example_key = _expectation_example_key(entry_example, entry_type)
+                if example_key not in multi_map:
+                    continue
+                total_entries += 1
                 metrics = entry.get("metrics", {}) or {}
-                multi_gpu = multi_map.get(example_name)
+                multi_gpu = multi_map.get(example_key)
                 if multi_gpu_only and not multi_gpu:
                     continue
                 if single_gpu_only and multi_gpu:

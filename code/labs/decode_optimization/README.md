@@ -9,7 +9,7 @@ Uses a simplified MLP-based model (not a transformer) to isolate optimization ef
 - Contrast eager vs pinned/streamed vs compiled/graph decode paths on the same workload.
 - Measure FP8/FP4 tensor-core benefits relative to FP16/BF16 baselines.
 - Validate Triton warp-specialized decode kernels against Python math and harness expectations.
-- Observe NVLink-C2C behavior by scaling the decode loop to 4×/8× B200.
+- Observe NVLink-C2C behavior by scaling the decode loop to 4x/8x B200.
 
 ## Directory Layout
 | Path | Description |
@@ -24,7 +24,7 @@ Uses a simplified MLP-based model (not a transformer) to isolate optimization ef
 | `optimized_decode_fp8.py`, `optimized_decode_fp4.py` | Transformer Engine FP8/FP4 decode paths (fail fast when unsupported). |
 | `optimized_decode_warp_specialized.py`, `triton_fused_decode.py` | Triton fused decode MLP with warp specialization/TMA-style pointers. |
 | `optimized_decode_ultimate.py` | All decode optimizations enabled together for a single harness target. |
-| `decode_4xgpu_demo.py`, `decode_8xgpu_demo.py` | Multi-GPU demos/tools to stress NVLink-C2C bandwidth on 4×/8× B200 (torchrun required). |
+| `decode_4xgpu_demo.py`, `decode_8xgpu_demo.py` | Multi-GPU demos/tools to stress NVLink-C2C bandwidth on 4x/8x B200 (torchrun required). |
 | `optimized_decode_double_buffer_tma.py` | CUDA double-buffered decode using TMA-style loads. |
 | `decode_common.py`, `expectations_b200.json`, `__init__.py` | Shared helpers, regression thresholds, and harness target exports. |
 
@@ -38,11 +38,11 @@ python -m cli.aisp bench run --targets labs/decode_optimization --profile none
 - Target labels: `baseline_decode`, `optimized_decode_pinned`, `..._streams`, `..._compile`, `..._graph`, `..._graph_full`, `..._fp8`, `..._fp4`, `..._warp_specialized`.
 - Pass extra flags via `--target-extra-arg labs/decode_optimization:<target>="--flag value"`.
 
-To run the 4×GPU NVLink-C2C demo, use the demos runner:
+To run the 4xGPU NVLink-C2C demo, use the demos runner:
 ```bash
 python -m cli.aisp demos labs-decode-4xgpu --nproc-per-node 4 -- --iters 4 --warmup 1
 ```
-To run the 8×GPU NVLink-C2C demo:
+To run the 8xGPU NVLink-C2C demo:
 ```bash
 python -m cli.aisp demos labs-decode-8xgpu --nproc-per-node 8 -- --iters 4 --warmup 1
 ```
@@ -52,7 +52,7 @@ python -m cli.aisp demos labs-decode-8xgpu --nproc-per-node 8 -- --iters 4 --war
 - Compile/graph variants emit fewer kernels and higher tokens/sec than the baseline in harness output.
 - FP8/FP4 runs use a prefill-focused workload (decode_tokens=0) to surface tensor-core benefits; outputs remain within tolerance.
 - Warp-specialized Triton kernel is validated against a workload-matched eager baseline; expectation file stays green.
-- 4×GPU demo exercises NVLink-C2C without graph capture failures when launched via `torchrun`.
+- 4xGPU demo exercises NVLink-C2C without graph capture failures when launched via `torchrun`.
 
 ## Notes
 - All targets emit TTFT, TPOT mean, decode time, total time, and tokens/sec in `custom_metrics` for easy diffing.

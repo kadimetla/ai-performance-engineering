@@ -44,9 +44,9 @@ class BaselineKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.batch_size = 4
         self.hidden_dim = 2048
         self.num_heads = 16
-        self.prefill_seq = 256
+        self.prefill_seq = 320
         self.decode_seq = 16
-        self.decode_steps = 8
+        self.decode_steps = 12
         self.prefill_inputs: List[torch.Tensor] = []
         self.decode_inputs: List[torch.Tensor] = []
         self.cache: Optional[KVCache] = None

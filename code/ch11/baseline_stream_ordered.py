@@ -25,13 +25,14 @@ class BaselineStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.elements = 1 << 12  # 4,096 floats (~16KB) per stream buffer
         # Many alloc/free cycles to amplify stream-ordered allocator benefit.
         self.inner_iterations = 200
+        self.num_streams = 8
         self.output: Optional[torch.Tensor] = None
         self._payload_inputs: Optional[dict] = None
 
         bytes_per_buffer = float(self.elements * 4)
-        # Each inner-iteration: 3 streams, H2D + D2H per stream.
+        # Each inner-iteration: one H2D + D2H per stream.
         self.register_workload_metadata(
-            bytes_per_iteration=3.0 * float(self.inner_iterations) * bytes_per_buffer * 2.0,
+            bytes_per_iteration=float(self.num_streams) * float(self.inner_iterations) * bytes_per_buffer * 2.0,
             requests_per_iteration=float(self.inner_iterations),
         )
 

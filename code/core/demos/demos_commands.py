@@ -164,6 +164,12 @@ DEMOS: Dict[str, DemoSpec] = {
         description="Lab decode optimization: 4-GPU NVLink-C2C decode stress demo (torchrun required).",
         launch_via=LaunchVia.TORCHRUN,
     ),
+    "labs-decode-8xgpu": DemoSpec(
+        name="labs-decode-8xgpu",
+        script_path=REPO_ROOT / "labs" / "decode_optimization" / "decode_8xgpu_demo.py",
+        description="Lab decode optimization: 8-GPU NVLink-C2C decode stress demo (torchrun required).",
+        launch_via=LaunchVia.TORCHRUN,
+    ),
 }
 
 

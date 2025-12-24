@@ -75,33 +75,43 @@ def _benchmark(label: str, fn, iters: int) -> float:
     return elapsed
 
 
-def _score_mod_causal():
-    """Standard causal mask: allow attending to current and previous positions."""
+def _score_mod_causal(window_size: int):
+    """Causal mask with a sliding window."""
     def score_mod(score, _b, _h, q_idx, kv_idx):
-        return torch.where(q_idx >= kv_idx, score, score - 1e9)
+        delta = q_idx - kv_idx
+        in_window = (delta >= 0) & (delta <= window_size)
+        return torch.where(in_window, score, score - 1e9)
 
     return score_mod
 
 
-def _score_mod_causal_with_offset(offset: torch.Tensor):
-    """Causal mask with a captured offset for FlexDecoding decode steps."""
+def _score_mod_causal_with_offset(window_size: int, offset: torch.Tensor):
+    """Causal mask with a sliding window and captured offset."""
     def score_mod(score, _b, _h, q_idx, kv_idx):
-        return torch.where((q_idx + offset) >= kv_idx, score, score - 1e9)
+        delta = q_idx + offset - kv_idx
+        in_window = (delta >= 0) & (delta <= window_size)
+        return torch.where(in_window, score, score - 1e9)
 
     return score_mod
 
 
 @dataclass
 class FlexDecodingConfig:
-    dim: int = 256
-    heads: int = 4
-    max_seq_len: int = 1024
-    window: int = 128
+    dim: int = 512
+    heads: int = 8
+    max_seq_len: int = 4096
+    window: int = 512
     dtype: torch.dtype = torch.bfloat16
 
 
 class FlexDecodingModule(torch.nn.Module):
-    def __init__(self, cfg: FlexDecodingConfig, *, compile_enabled: bool = True):
+    def __init__(
+        self,
+        cfg: FlexDecodingConfig,
+        *,
+        use_flex_attention: bool = True,
+        compile_enabled: bool = True,
+    ):
         super().__init__()
         assert cfg.dim % cfg.heads == 0
         self.cfg = cfg
@@ -124,7 +134,8 @@ class FlexDecodingModule(torch.nn.Module):
 
         self.prefill_impl = None
         self.decode_impl = None
-        self.flex_enabled = HAS_FLEX
+        self.use_flex_attention = bool(use_flex_attention) and HAS_FLEX
+        self.flex_enabled = self.use_flex_attention
         self.compile_enabled = compile_enabled
         assert torch.cuda.is_available(), "CUDA required for FlexDecoding demo"
         major, minor = torch.cuda.get_device_capability()
@@ -133,6 +144,8 @@ class FlexDecodingModule(torch.nn.Module):
             raise RuntimeError(f"SKIPPED: FlexDecoding targets Blackwell (sm_100+); found sm_{major}{minor}")
         enable_tf32()
         self.compile_mode = COMPILE_MODE
+        if self.use_flex_attention and not QUICK_MODE:
+            self.compile_mode = "max-autotune"
 
     def _compile(self, pattern: str = "causal") -> None:
         device = next(self.parameters()).device
@@ -193,24 +206,17 @@ class FlexDecodingModule(torch.nn.Module):
             self.decode_impl = compiled_decode
             self.flex_enabled = False
 
-        if HAS_FLEX:
+        if self.use_flex_attention:
             score_mod_prefill = _score_mod_causal()
             score_mod_decode = _score_mod_causal_with_offset(self.offset)
-            kernel_options = {
-                "PRESCALE_QK": True,
-                "ROWS_GUARANTEED_SAFE": True,
-                "BLOCKS_ARE_CONTIGUOUS": True,
-                "USE_TMA": True,
-            }
-
             def prefill(q, k, v):
                 return flex_attention.flex_attention(
-                    q, k, v, score_mod=score_mod_prefill, kernel_options=kernel_options
+                    q, k, v, score_mod=score_mod_prefill
                 )
 
             def decode(q, k, v):
                 return flex_attention.flex_attention(
-                    q, k, v, score_mod=score_mod_decode, kernel_options=kernel_options
+                    q, k, v, score_mod=score_mod_decode
                 )
 
             if self.compile_enabled:

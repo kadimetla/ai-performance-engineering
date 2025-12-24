@@ -2,9 +2,8 @@
 //
 // Baseline for the cluster multicast example:
 // - Blocks are launched in clusters (same shape as optimized).
-// - Cluster rank 0 loads the B tile into its SMEM via TMA.
-// - Other CTAs read the B tile remotely via DSMEM (map_shared_rank),
-//   which is functionally correct but slower than having a local copy.
+// - Each CTA loads the B tile into its own SMEM via TMA (no multicast).
+//   This causes redundant global loads for the same tile across the cluster.
 //
 // COMPARE WITH: tma_multicast_cluster.cu
 //   - Optimized uses TMA multicast so a single load feeds all CTAs in the cluster.
@@ -57,10 +56,7 @@ void tma_nomulticast_gemm_kernel(
     int M, int N, int K
 	) {
 	#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
-	    cg::cluster_group cluster = cg::this_cluster();
-	    const int cluster_rank = cluster.block_rank();
-	
-	    const int tile_m = blockIdx.x;
+    const int tile_m = blockIdx.x;
 	    const int tile_n = blockIdx.y;
 	    const bool tile_valid = (tile_m * TILE_M < M) && (tile_n * TILE_N < N);
 
@@ -89,27 +85,21 @@ void tma_nomulticast_gemm_kernel(
 	    for (int k_tile = 0; k_tile < num_k_tiles; ++k_tile) {
 	        const int k_base = k_tile * TILE_K;
 	
-	        // DSMEM baseline (no multicast):
-	        // - Cluster rank 0 loads B into its SMEM via TMA.
-	        // - Other CTAs read B remotely via cluster.map_shared_rank().
-	        block_barrier::arrival_token token;
-	        if (cluster_rank == 0) {
-	            if (tid == 0) {
-	                const int coords[2] = {k_base, tile_n * TILE_N};
-	                cptx::cp_async_bulk_tensor(
-	                    cptx::space_shared,
-	                    cptx::space_global,
-	                    &B_smem[0][0],
-	                    &b_desc,
-	                    coords,
-	                    cuda::device::barrier_native_handle(*bar));
-	            }
-	            if (tid == 0) {
-	                token = cuda::device::barrier_arrive_tx(*bar, 1, sizeof(B_smem));
-	            } else {
-	                token = bar->arrive();
-	            }
-	        }
+        // Baseline: every CTA issues its own TMA load for B.
+        block_barrier::arrival_token token;
+        if (tid == 0) {
+            const int coords[2] = {k_base, tile_n * TILE_N};
+            cptx::cp_async_bulk_tensor(
+                cptx::space_shared,
+                cptx::space_global,
+                &B_smem[0][0],
+                &b_desc,
+                coords,
+                cuda::device::barrier_native_handle(*bar));
+            token = cuda::device::barrier_arrive_tx(*bar, 1, sizeof(B_smem));
+        } else {
+            token = bar->arrive();
+        }
 	
 	        // Load A tile while the rank-0 B load is in flight.
 	        for (int i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
@@ -121,24 +111,20 @@ void tma_nomulticast_gemm_kernel(
 	        }
 	        __syncthreads();
 	
-	        if (cluster_rank == 0) {
-	            bar->wait(std::move(token));
-	        }
-	        cluster.sync();
-	        const float* b_remote = cluster.map_shared_rank(&B_smem[0][0], 0);
+        bar->wait(std::move(token));
+        const float* b_tile = &B_smem[0][0];
 	
 	        #pragma unroll
 	        for (int kk = 0; kk < TILE_K; ++kk) {
 	            float a_val = A_smem[thread_m][kk];
 	            #pragma unroll
 	            for (int j = 0; j < COLS_PER_THREAD; ++j) {
-	                acc[j] += a_val * b_remote[kk * TILE_N + thread_n + j];
-	            }
-	        }
+                acc[j] += a_val * b_tile[kk * TILE_N + thread_n + j];
+            }
+        }
 	
 	        __syncthreads();
-	        cluster.sync();  // Keep CTAs in lockstep like the multicast baseline.
-	    }
+    }
 
     #pragma unroll
     for (int j = 0; j < COLS_PER_THREAD; ++j) {

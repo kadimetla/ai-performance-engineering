@@ -61,17 +61,15 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
         if self.require_flex and not getattr(flexdemo, "HAS_FLEX", False):
             raise RuntimeError("FlexAttention is not available; optimized path cannot run.")
 
-        previous_flag = flexdemo.HAS_FLEX
-        flexdemo.HAS_FLEX = self.use_flex_attention and previous_flag
         self.model = flexdemo.FlexDecodingModule(
             self.config,
+            use_flex_attention=self.use_flex_attention,
             compile_enabled=self.compile_enabled,
         ).to(
             self.device,
             dtype=self.config.dtype,
         ).eval()
         self.model.ensure_compiled()
-        flexdemo.HAS_FLEX = previous_flag
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         torch.manual_seed(42)
@@ -177,7 +175,7 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
 
 class BaselineFlexDecodingBenchmark(FlexDecodingHarness):
     def __init__(self):
-        super().__init__(use_flex_attention=False, require_flex=False, decode_tokens=512)
+        super().__init__(use_flex_attention=False, require_flex=False, decode_tokens=512, compile_enabled=False)
 
 
 def get_benchmark() -> BaseBenchmark:
