@@ -187,7 +187,7 @@ void run_multinode_demo(int argc, char **argv) {
 
 void run_multinode_demo(int, char **) {
     printf("NVSHMEM not available - conceptual multi-node example:\n");
-    printf("1. Split NVSHMEM_TEAM_WORLD into node-level teams (8 GPUs each)\n");
+    printf("1. Split NVSHMEM_TEAM_WORLD into node-level teams (4 GPUs each)\n");
     printf("2. Perform per-node reductions using NVSHMEM team collectives\n");
     printf("3. Aggregate node leaders via NVSHMEM atomics or NCCL\n");
     printf("4. Broadcast final result back to all PEs\n");
@@ -199,7 +199,7 @@ void run_multinode_demo(int, char **) {
 int main(int argc, char **argv) {
 #ifdef USE_NVSHMEM
     nvshmem_init();
-    CUDA_CHECK(cudaSetDevice(nvshmem_my_pe() % std::max(1, parse_int_flag("--gpus-per-node", argc, argv, 8))));
+    CUDA_CHECK(cudaSetDevice(nvshmem_my_pe() % std::max(1, parse_int_flag("--gpus-per-node", argc, argv, 4))));
 #endif
 
     run_multinode_demo(argc, argv);

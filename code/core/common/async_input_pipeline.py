@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, Tuple, List
 
 import torch
 from torch import nn
@@ -74,7 +74,9 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.compute_stream: Optional[torch.cuda.Stream] = None
         self._prefetched_batch: Optional[torch.Tensor] = None
-        self._prefetch_done: Optional[torch.cuda.Event] = None
+        self._prefetch_event: Optional[torch.cuda.Event] = None
+        self._prefetch_events: List[torch.cuda.Event] = []
+        self._prefetch_event_index: int = 0
         self._last_batch: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self._parameter_count: int = 0
@@ -94,11 +96,18 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def _launch_h2d(self, batch_cpu: torch.Tensor) -> torch.Tensor:
         if self.copy_stream is None:
             return batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
-        if self._prefetch_done is None:
-            self._prefetch_done = torch.cuda.Event(enable_timing=False, blocking=False)
+        if not self._prefetch_events:
+            self._prefetch_events = [
+                torch.cuda.Event(enable_timing=False, blocking=False),
+                torch.cuda.Event(enable_timing=False, blocking=False),
+            ]
+            self._prefetch_event_index = 0
+        event = self._prefetch_events[self._prefetch_event_index]
+        self._prefetch_event_index = (self._prefetch_event_index + 1) % len(self._prefetch_events)
         with torch.cuda.stream(self.copy_stream):
             batch_gpu = batch_cpu.to(self.device, non_blocking=self.cfg.non_blocking)
-            self._prefetch_done.record(self.copy_stream)
+            event.record(self.copy_stream)
+            self._prefetch_event = event
         return batch_gpu
 
     def setup(self) -> None:
@@ -150,8 +159,8 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("Prefetch buffer not initialized (setup() must run)")
         with self._nvtx_range(self.label):
             # Current batch is the one prefetched during the previous iteration.
-            if self._prefetch_done is not None and self.compute_stream is not None:
-                self.compute_stream.wait_event(self._prefetch_done)
+            if self._prefetch_event is not None and self.compute_stream is not None:
+                self.compute_stream.wait_event(self._prefetch_event)
             batch_gpu = self._prefetched_batch
 
             # Kick off H2D for the *next* batch on the copy stream while we run compute.
@@ -169,6 +178,7 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def capture_verification_payload(self) -> None:
         if self.output is None or self._last_batch is None:
             raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
+        torch.cuda.synchronize(self.device)
         self._set_verification_payload(
             inputs={"batch": self._last_batch},
             output=self.output,
@@ -185,7 +195,9 @@ class AsyncInputPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.copy_stream = None
         self.compute_stream = None
         self._prefetched_batch = None
-        self._prefetch_done = None
+        self._prefetch_event = None
+        self._prefetch_events = []
+        self._prefetch_event_index = 0
         self._last_batch = None
         self.output = None
         self._parameter_count = 0

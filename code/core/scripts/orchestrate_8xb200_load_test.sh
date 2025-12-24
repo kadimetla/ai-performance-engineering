@@ -1,5 +1,5 @@
 #!/bin/bash
-# Orchestration script for 8x B200 load testing
+# Orchestration script for 4x B200 load testing
 # This script coordinates load testing, power monitoring, and result collection
 
 set -e
@@ -18,10 +18,10 @@ NC='\033[0m'
 # Default parameters
 DURATION="${1:-300}"  # 5 minutes default
 TARGET_QPS="${2:-100}"
-OUTPUT_DIR="${3:-load_test_8xb200_$(date +%Y%m%d_%H%M%S)}"
+OUTPUT_DIR="${3:-load_test_4xb200_$(date +%Y%m%d_%H%M%S)}"
 
 echo "================================================================================"
-echo "8x B200 Load Test Orchestration"
+echo "4x B200 Load Test Orchestration"
 echo "================================================================================"
 echo ""
 echo "Duration: ${DURATION}s"
@@ -39,8 +39,8 @@ echo ""
 NUM_GPUS=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 echo "Detected GPUs: ${NUM_GPUS}"
 
-if [ "${NUM_GPUS}" -ne 8 ]; then
-    echo -e "${YELLOW}Warning: Expected 8 GPUs but found ${NUM_GPUS}${NC}"
+if [ "${NUM_GPUS}" -ne 4 ]; then
+    echo -e "${YELLOW}Warning: Expected 4 GPUs but found ${NUM_GPUS}${NC}"
     echo "Proceeding anyway, but results may differ..."
 fi
 
@@ -329,5 +329,4 @@ else
     echo "Check ${LOAD_TEST_LOG} for details"
     exit 1
 fi
-
 

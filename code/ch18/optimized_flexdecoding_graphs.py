@@ -20,42 +20,17 @@ class OptimizedFlexDecodingGraphsBenchmark(FlexDecodingHarness):
     """Capture a single-token decode in a CUDA Graph and replay per token."""
 
     def __init__(self) -> None:
-        super().__init__(use_flex_attention=False, require_flex=False, decode_tokens=512)
+        super().__init__(
+            use_flex_attention=False,
+            require_flex=False,
+            decode_tokens=512,
+            compile_enabled=False,
+        )
         self.graph: torch.cuda.CUDAGraph | None = None
         self.capture_stream: torch.cuda.Stream | None = None
         self.static_decode_in: torch.Tensor | None = None
         self.static_decode_out: torch.Tensor | None = None
         self.base_position: int = 0
-        self._orig_compile_callable = None
-        self._orig_flex_compile_callable = None
-        self._compile_disabled = False
-
-    def _patch_compile_to_eager(self) -> None:
-        """Fallback: disable torch.compile to keep capture safe."""
-        from core.utils import compile_utils
-        from ch18 import flexdecoding as flexdemo
-
-        if self._orig_compile_callable is None:
-            self._orig_compile_callable = compile_utils.compile_callable
-        if self._orig_flex_compile_callable is None:
-            self._orig_flex_compile_callable = flexdemo.compile_callable
-
-        compile_utils.compile_callable = lambda fn, **kwargs: fn  # type: ignore[assignment]
-        flexdemo.compile_callable = lambda fn, **kwargs: fn  # type: ignore[assignment]
-        self._compile_disabled = True
-
-    def _restore_compile_hooks(self) -> None:
-        if self._orig_compile_callable is not None:
-            from core.utils import compile_utils
-
-            compile_utils.compile_callable = self._orig_compile_callable  # type: ignore[assignment]
-            self._orig_compile_callable = None
-        if self._orig_flex_compile_callable is not None:
-            from ch18 import flexdecoding as flexdemo
-
-            flexdemo.compile_callable = self._orig_flex_compile_callable  # type: ignore[assignment]
-            self._orig_flex_compile_callable = None
-        self._compile_disabled = False
 
     def _run_warmup(self) -> None:
         """Compile and warm kernels before capture."""
@@ -67,16 +42,7 @@ class OptimizedFlexDecodingGraphsBenchmark(FlexDecodingHarness):
         torch.cuda.synchronize(self.device)
 
     def setup(self) -> None:
-        try:
-            self._initialize_and_capture()
-        except Exception:
-            # If capture failed (often due to torch.compile laziness), fallback to eager and retry once.
-            if not self._compile_disabled:
-                self._patch_compile_to_eager()
-                self._initialize_and_capture()
-            else:
-                self._restore_compile_hooks()
-                raise
+        self._initialize_and_capture()
 
     def _initialize_and_capture(self) -> None:
         super().setup()
@@ -94,7 +60,15 @@ class OptimizedFlexDecodingGraphsBenchmark(FlexDecodingHarness):
         self.graph = torch.cuda.CUDAGraph()
         assert self.capture_stream is not None
         with torch.cuda.graph(self.graph, stream=self.capture_stream):
-            out = self.model.decode(self.static_decode_in, self.base_position)  # type: ignore[arg-type]
+            if self.model is None:
+                raise RuntimeError("Model not initialized for capture")
+            q = self.model.q_proj(self.static_decode_in).view(
+                self.static_decode_in.size(0),
+                1,
+                self.model.cfg.heads,
+                self.model.head_dim,
+            )
+            out = self.model.decode_attention(q)
             self.static_decode_out.copy_(out)
         torch.cuda.synchronize(self.device)
 
@@ -123,10 +97,16 @@ class OptimizedFlexDecodingGraphsBenchmark(FlexDecodingHarness):
                 prefill_times.append((time.perf_counter() - start) * 1000.0)
 
             with self._nvtx_range("flex_decode_graph"):
-                for _ in range(self.decode_tokens):
+                self.static_decode_in.copy_(self.decode_token)
+                heads = self.model.cfg.heads
+                head_dim = self.model.head_dim
+                for pos in range(self.decode_tokens):
                     start = time.perf_counter()
+                    k = self.model.k_proj(self.decode_token).view(1, 1, heads, head_dim)
+                    v = self.model.v_proj(self.decode_token).view(1, 1, heads, head_dim)
+                    self.model._update_cache(k, v, self.base_position + pos)
+                    self.model._set_offset(self.base_position + pos)
                     with torch.cuda.stream(self.capture_stream):
-                        self.static_decode_in.copy_(self.decode_token)
                         self.graph.replay()
                     torch.cuda.synchronize(self.device)
                     decode_times.append((time.perf_counter() - start) * 1000.0)
@@ -140,7 +120,6 @@ class OptimizedFlexDecodingGraphsBenchmark(FlexDecodingHarness):
     def teardown(self) -> None:
         if self.model is not None and torch.cuda.is_available():
             torch.cuda.empty_cache()
-        self._restore_compile_hooks()
         super().teardown()
         self.graph = None
         self.capture_stream = None

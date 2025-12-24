@@ -1,18 +1,18 @@
 """
-Comprehensive Bandwidth Benchmark Suite for 8x B200 GPUs
+Comprehensive Bandwidth Benchmark Suite for 4x B200 GPUs
 =========================================================
 
 Measures all communication patterns and generates detailed analysis:
-1. P2P bandwidth matrix (all 28 GPU pairs)
+1. P2P bandwidth matrix (all GPU pairs)
 2. Collective operations (AllReduce, AllGather, ReduceScatter)
 3. Latency vs bandwidth curves
 4. NVLink topology visualization
 5. Scaling efficiency analysis
 
 Hardware:
-- 8x Blackwell B200 GPUs
+- 4x Blackwell B200 GPUs
 - NVLink 5.0: 1800 GB/s bidirectional per GPU pair
-- Total bandwidth: 62.4 TB/s aggregate
+- Total bandwidth: ~31.2 TB/s aggregate (directional)
 
 Expected Results:
 - P2P: 800-900 GB/s per GPU pair
@@ -21,16 +21,16 @@ Expected Results:
 
 Requirements:
 - PyTorch 2.10+
-- 8 GPUs (requires torchrun)
+- 4 GPUs (requires torchrun)
 
 Usage:
-    torchrun --nproc_per_node=8 bandwidth_benchmark_suite_8gpu.py --full
+    torchrun --nproc_per_node=4 bandwidth_benchmark_suite_8gpu.py --full
 
     # Quick test
-    torchrun --nproc_per_node=8 bandwidth_benchmark_suite_8gpu.py --quick
+    torchrun --nproc_per_node=4 bandwidth_benchmark_suite_8gpu.py --quick
 
     # Save results to file
-    torchrun --nproc_per_node=8 bandwidth_benchmark_suite_8gpu.py --output results.json
+    torchrun --nproc_per_node=4 bandwidth_benchmark_suite_8gpu.py --output results.json
 """
 import pathlib
 import sys
@@ -157,8 +157,9 @@ def measure_p2p_matrix(
         Dictionary mapping (src, dst) pairs to bandwidth in GB/s
     """
     if rank == 0:
+        pair_count = world_size * (world_size - 1) // 2
         print("\n" + "=" * 80)
-        print("P2P Bandwidth Matrix (8x8 = 28 unique pairs)")
+        print(f"P2P Bandwidth Matrix ({world_size}x{world_size} = {pair_count} unique pairs)")
         print("=" * 80)
         print("Testing bidirectional bandwidth for all GPU pairs...")
         print("Transfer size: 256 MB per direction\n")
@@ -423,7 +424,7 @@ def visualize_topology(rank: int, world_size: int, bandwidth_matrix: Dict[Tuple[
         return
     
     print("\n" + "=" * 80)
-    print("NVLink Topology Visualization (8x B200)")
+    print(f"NVLink Topology Visualization ({world_size}x B200)")
     print("=" * 80)
     
     # Print matrix
@@ -473,11 +474,11 @@ def visualize_topology(rank: int, world_size: int, bandwidth_matrix: Dict[Tuple[
 # ============================================================================
 
 def main():
-    # Check GPU requirements early - this script needs 8 GPUs
-    warn_optimal_gpu_count(8, "bandwidth_benchmark_suite_8gpu.py")
-    require_min_gpus(8, "bandwidth_benchmark_suite_8gpu.py")
+    # Check GPU requirements early - this script needs 4 GPUs
+    warn_optimal_gpu_count(4, "bandwidth_benchmark_suite_8gpu.py")
+    require_min_gpus(4, "bandwidth_benchmark_suite_8gpu.py")
 
-    parser = argparse.ArgumentParser(description="8-GPU Bandwidth Benchmark Suite")
+    parser = argparse.ArgumentParser(description="4-GPU Bandwidth Benchmark Suite")
     parser.add_argument("--quick", action="store_true", help="Quick test (fewer sizes)")
     parser.add_argument("--full", action="store_true", help="Full benchmark suite")
     parser.add_argument("--output", type=str, default=None, help="Save results to JSON file")
@@ -485,12 +486,12 @@ def main():
     
     rank, world_size = setup_distributed()
     
-    if world_size != 8 and rank == 0:
-        print(f"⚠ Warning: This benchmark is optimized for 8 GPUs, running with {world_size}")
+    if world_size != 4 and rank == 0:
+        print(f"⚠ Warning: This benchmark is optimized for 4 GPUs, running with {world_size}")
     
     if rank == 0:
         print("=" * 80)
-        print("8x B200 Comprehensive Bandwidth Benchmark Suite")
+        print("4x B200 Comprehensive Bandwidth Benchmark Suite")
         print("=" * 80)
         print(f"GPUs: {world_size}")
         print(f"Mode: {'Quick' if args.quick else 'Full' if args.full else 'Standard'}")
@@ -539,10 +540,10 @@ def main():
                 print(f"  ⚠ {efficiency:.1f}% of target")
         
         print("\nRecommendations:")
-        print("  1. Ensure NCCL 2.28+ with 8-GPU optimizations")
+        print("  1. Ensure NCCL 2.28+ with multi-GPU optimizations")
         print("  2. Check NVLink topology with nvidia-smi topo -m")
         print("  3. Verify no CPU throttling or power limits")
-        print("  4. Use NCCL_NVLS_ENABLE=1 for 8-GPU configurations")
+        print("  4. Use NCCL_NVLS_ENABLE=1 for dense NVLink domains")
         print("=" * 80)
     
     # Save results

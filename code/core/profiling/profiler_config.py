@@ -511,7 +511,26 @@ class ProfilerConfig:
                 metrics = MINIMAL_METRICS
             else:
                 metrics = DEEP_DIVE_METRICS
-        ncu_set = NCU_SET_BY_METRIC.get(metric_set, "full")
+        metric_set_norm = str(metric_set).lower()
+        if metric_set_norm == "auto":
+            minimal_allow = set(MINIMAL_METRICS)
+            minimal_allow.update(
+                {
+                    "gpu__time_duration.sum",
+                    "gpu__time_duration.avg",
+                    "gpc__cycles_elapsed.max",
+                    "sm__ctas_launched.sum",
+                }
+            )
+            metrics_set = set(metrics or [])
+            if metrics_set and metrics_set.issubset(minimal_allow):
+                ncu_set = "speed-of-light"
+            elif metrics_set and metrics_set.issubset(set(ROOFLINE_METRICS)):
+                ncu_set = "roofline"
+            else:
+                ncu_set = "full"
+        else:
+            ncu_set = NCU_SET_BY_METRIC.get(metric_set_norm, "full")
 
         cmd = [
             "ncu",
@@ -711,8 +730,10 @@ def build_profiler_config_from_benchmark(
     """Create a ProfilerConfig tuned to the benchmark + harness defaults."""
     preset = str(getattr(config, "profile_type", None) or "minimal").lower()
     metric_set = getattr(config, "ncu_metric_set", None)
-    if metric_set is None or str(metric_set).lower() == "auto":
+    if metric_set is None:
         metric_set = preset if preset in {"minimal", "roofline", "deep_dive"} else "deep_dive"
+    else:
+        metric_set = str(metric_set)
     sampling_interval = getattr(config, "pm_sampling_interval", None)
     replay_mode = getattr(config, "ncu_replay_mode", None)
     explicit_includes = getattr(config, "nsys_nvtx_include", None)

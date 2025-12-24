@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # The $1000 tier of nanochat
-# Designed to run end-to-end for $1000/24 ~= 41.6 hours on an 8xB200 node (faster in practice)
+# Designed to run end-to-end for $1000/24 ~= 41.6 hours on a 4xB200 node (faster in practice)
 # A bit sparser on comments, see speedrun.sh for more detail
 
 # all the setup stuff
@@ -30,7 +30,7 @@ python -m labs.nanochat_fullstack.scripts.tok_train --max_chars=4000000000
 python -m labs.nanochat_fullstack.scripts.tok_eval
 
 # Documenting my process for determining the hyperparameters for this run1000.sh script:
-# We want a budget of approx. $1000 ~= 41.6 hours of 8xB200 compute
+# We want a budget of approx. $1000 ~= 41.6 hours of 4xB200 compute
 # 1) I guessed the model size for this to be about depth=32
 # 2) Determine the device_batch_size that fits:
 # Running the base_train.py script with --depth=32, I saw that --device_batch_size=16
@@ -72,7 +72,7 @@ python -m labs.nanochat_fullstack.scripts.tok_eval
 # 5) That's it, everything else (e.g. the learning rates) is adjusted automatically by the training script.
 
 # Number of processes/GPUs to use
-NPROC_PER_NODE=8
+NPROC_PER_NODE=4
 
 torchrun --standalone --nproc_per_node=$NPROC_PER_NODE -m labs.nanochat_fullstack.scripts.base_train -- --depth=32 --device_batch_size=8 --run=$WANDB_RUN
 torchrun --standalone --nproc_per_node=$NPROC_PER_NODE -m labs.nanochat_fullstack.scripts.base_loss

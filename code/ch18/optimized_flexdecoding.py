@@ -16,12 +16,14 @@ class OptimizedFlexDecodingBenchmark(FlexDecodingHarness):
     """Optimized path: require FlexAttention; skip cleanly if it is unavailable/unstable."""
 
     def __init__(self) -> None:
-        super().__init__(use_flex_attention=True, require_flex=False, decode_tokens=512)
+        super().__init__(use_flex_attention=True, require_flex=True, decode_tokens=512)
 
     def setup(self) -> None:
         from ch18 import flexdecoding as flexdemo  # local import to read HAS_FLEX
         if not getattr(flexdemo, "HAS_FLEX", False):
             raise RuntimeError("SKIPPED: FlexAttention not available on this build.")
+        previous_mode = flexdemo.COMPILE_MODE
+        flexdemo.COMPILE_MODE = "max-autotune"
         try:
             super().setup()
         except Exception as exc:
@@ -30,6 +32,8 @@ class OptimizedFlexDecodingBenchmark(FlexDecodingHarness):
                 # Treat flex compile errors as a skipped optimization.
                 raise RuntimeError(f"SKIPPED: FlexAttention failed to compile on this GPU/build: {exc}")
             raise
+        finally:
+            flexdemo.COMPILE_MODE = previous_mode
 
 def get_benchmark():
     return OptimizedFlexDecodingBenchmark()

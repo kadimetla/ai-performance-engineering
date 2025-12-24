@@ -161,9 +161,9 @@ int main(int argc, char** argv) {
 
         std::cout << "=== Baseline FP4 Hardware Kernel (manual GEMM) ===" << std::endl;
 
-        const int M = 512;
-        const int N = 512;
-        const int K = 512;
+        const int M = 1024;
+        const int N = 1024;
+        const int K = 1024;
 
         const int packed_K = K / 2;
         const int packed_N = N / 2;

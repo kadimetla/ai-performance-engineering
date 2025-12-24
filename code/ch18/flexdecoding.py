@@ -75,16 +75,18 @@ def _benchmark(label: str, fn, iters: int) -> float:
     return elapsed
 
 
-def _score_mod_causal(offset: torch.Tensor):
-    """Create a causal score modification function.
-    
-    Note: Using a simpler causal mask pattern that is more compiler-friendly.
-    The offset tensor tracks position but we use standard causal masking.
-    """
+def _score_mod_causal():
+    """Standard causal mask: allow attending to current and previous positions."""
     def score_mod(score, _b, _h, q_idx, kv_idx):
-        # Simple causal: mask where kv_idx > q_idx (future tokens)
-        # This avoids the dynamic offset which triggers compiler bugs on B200.
         return torch.where(q_idx >= kv_idx, score, score - 1e9)
+
+    return score_mod
+
+
+def _score_mod_causal_with_offset(offset: torch.Tensor):
+    """Causal mask with a captured offset for FlexDecoding decode steps."""
+    def score_mod(score, _b, _h, q_idx, kv_idx):
+        return torch.where((q_idx + offset) >= kv_idx, score, score - 1e9)
 
     return score_mod
 
@@ -95,10 +97,11 @@ class FlexDecodingConfig:
     heads: int = 4
     max_seq_len: int = 1024
     window: int = 128
+    dtype: torch.dtype = torch.bfloat16
 
 
 class FlexDecodingModule(torch.nn.Module):
-    def __init__(self, cfg: FlexDecodingConfig):
+    def __init__(self, cfg: FlexDecodingConfig, *, compile_enabled: bool = True):
         super().__init__()
         assert cfg.dim % cfg.heads == 0
         self.cfg = cfg
@@ -109,13 +112,20 @@ class FlexDecodingModule(torch.nn.Module):
         self.v_proj = torch.nn.Linear(cfg.dim, cfg.dim, bias=False)
         self.o_proj = torch.nn.Linear(cfg.dim, cfg.dim, bias=False)
 
-        self.register_buffer("k_cache", torch.zeros(1, cfg.max_seq_len, cfg.heads, self.head_dim))
-        self.register_buffer("v_cache", torch.zeros(1, cfg.max_seq_len, cfg.heads, self.head_dim))
-        self.register_buffer("offset", torch.zeros(1, dtype=torch.long))
+        self.register_buffer(
+            "k_cache",
+            torch.zeros(1, cfg.max_seq_len, cfg.heads, self.head_dim, dtype=cfg.dtype),
+        )
+        self.register_buffer(
+            "v_cache",
+            torch.zeros(1, cfg.max_seq_len, cfg.heads, self.head_dim, dtype=cfg.dtype),
+        )
+        self.register_buffer("offset", torch.zeros((), dtype=torch.long))
 
         self.prefill_impl = None
         self.decode_impl = None
         self.flex_enabled = HAS_FLEX
+        self.compile_enabled = compile_enabled
         assert torch.cuda.is_available(), "CUDA required for FlexDecoding demo"
         major, minor = torch.cuda.get_device_capability()
         # Blackwell is sm_100 (major=10), not sm_120
@@ -130,13 +140,16 @@ class FlexDecodingModule(torch.nn.Module):
         heads = self.cfg.heads
 
         prefill_len = self.cfg.window * 2
-        q_prefill = torch.zeros(1, heads, prefill_len, head_dim, device=device)
+        max_kv_len = self.cfg.max_seq_len
+        dtype = next(self.parameters()).dtype
+        q_prefill = torch.zeros(1, heads, prefill_len, head_dim, device=device, dtype=dtype)
         kv_prefill = torch.zeros_like(q_prefill)
-        q_decode = torch.zeros(1, heads, 1, head_dim, device=device)
+        q_decode = torch.zeros(1, heads, 1, head_dim, device=device, dtype=dtype)
+        kv_decode = torch.zeros(1, heads, max_kv_len, head_dim, device=device, dtype=dtype)
         compile_kwargs = {"mode": self.compile_mode, "dynamic": None}
 
         def configure_sdpa_backend() -> None:
-            def sdpa(q, k, v):
+            def sdpa(q, k, v, offset):
                 # Inputs expected as [batch, seq, heads, head_dim]
                 qh = q.transpose(1, 2)
                 kh = k.transpose(1, 2)
@@ -146,6 +159,7 @@ class FlexDecodingModule(torch.nn.Module):
                 seq_q = attn.size(-2)
                 seq_k = attn.size(-1)
                 q_positions = torch.arange(seq_q, device=attn.device).unsqueeze(-1)
+                q_positions = q_positions + offset
                 k_positions = torch.arange(seq_k, device=attn.device).unsqueeze(0)
                 causal = (q_positions >= k_positions).to(attn.dtype)
                 attn = attn + (causal - 1.0) * 1e9  # large negative for masked entries
@@ -153,20 +167,35 @@ class FlexDecodingModule(torch.nn.Module):
                 out = torch.matmul(probs, vh)
                 return out.transpose(1, 2)
 
-            compiled_prefill = compile_callable(sdpa, **compile_kwargs)
-            compiled_decode = compile_callable(sdpa, **compile_kwargs)
+            offset_zero = torch.zeros((), device=device, dtype=torch.long)
+
+            def sdpa_prefill(q, k, v):
+                return sdpa(q, k, v, offset_zero)
+
+            def sdpa_decode(q, k, v, offset):
+                return sdpa(q, k, v, offset)
+
+            if self.compile_enabled:
+                compiled_prefill = compile_callable(sdpa_prefill, **compile_kwargs)
+                compiled_decode = compile_callable(sdpa_decode, **compile_kwargs)
+            else:
+                compiled_prefill = sdpa_prefill
+                compiled_decode = sdpa_decode
 
             q_prefill_eager = q_prefill.transpose(1, 2)
             kv_prefill_eager = kv_prefill.transpose(1, 2)
+            q_decode_eager = q_decode.transpose(1, 2)
+            kv_decode_eager = kv_decode.transpose(1, 2)
             compiled_prefill(q_prefill_eager, kv_prefill_eager, kv_prefill_eager)
-            compiled_decode(q_prefill_eager[:, :1], kv_prefill_eager, kv_prefill_eager)
+            compiled_decode(q_decode_eager, kv_decode_eager, kv_decode_eager, offset_zero)
 
             self.prefill_impl = compiled_prefill
             self.decode_impl = compiled_decode
             self.flex_enabled = False
 
         if HAS_FLEX:
-            score_mod = _score_mod_causal(self.offset)
+            score_mod_prefill = _score_mod_causal()
+            score_mod_decode = _score_mod_causal_with_offset(self.offset)
             kernel_options = {
                 "PRESCALE_QK": True,
                 "ROWS_GUARANTEED_SAFE": True,
@@ -176,19 +205,23 @@ class FlexDecodingModule(torch.nn.Module):
 
             def prefill(q, k, v):
                 return flex_attention.flex_attention(
-                    q, k, v, score_mod=score_mod, kernel_options=kernel_options
+                    q, k, v, score_mod=score_mod_prefill, kernel_options=kernel_options
                 )
 
             def decode(q, k, v):
                 return flex_attention.flex_attention(
-                    q, k, v, score_mod=score_mod, kernel_options=kernel_options
+                    q, k, v, score_mod=score_mod_decode, kernel_options=kernel_options
                 )
 
-            self.prefill_impl = compile_callable(prefill, **compile_kwargs)
-            self.decode_impl = compile_callable(decode, **compile_kwargs)
+            if self.compile_enabled:
+                self.prefill_impl = compile_callable(prefill, **compile_kwargs)
+                self.decode_impl = compile_callable(decode, **compile_kwargs)
+            else:
+                self.prefill_impl = prefill
+                self.decode_impl = decode
 
             self.prefill_impl(q_prefill, kv_prefill, kv_prefill)
-            self.decode_impl(q_decode, kv_prefill, kv_prefill)
+            self.decode_impl(q_decode, kv_decode, kv_decode)
             self.flex_enabled = True
         else:
             configure_sdpa_backend()
@@ -200,8 +233,16 @@ class FlexDecodingModule(torch.nn.Module):
     def clear_cache(self, batch: int) -> None:
         if self.k_cache.shape[0] != batch:
             device = self.k_cache.device
-            self.k_cache = torch.zeros(batch, self.cfg.max_seq_len, self.cfg.heads, self.head_dim, device=device)
-            self.v_cache = self.k_cache.clone()
+            dtype = self.k_cache.dtype
+            self.k_cache = torch.zeros(
+                batch,
+                self.cfg.max_seq_len,
+                self.cfg.heads,
+                self.head_dim,
+                device=device,
+                dtype=dtype,
+            )
+            self.v_cache = torch.zeros_like(self.k_cache)
         else:
             self.k_cache.zero_()
             self.v_cache.zero_()
@@ -224,23 +265,38 @@ class FlexDecodingModule(torch.nn.Module):
             out = self.prefill_impl(q, k, v)
         return self.o_proj(out.reshape(batch, seqlen, self.cfg.dim))
 
-    def decode(self, token: torch.Tensor, position: int) -> torch.Tensor:
+    def _set_offset(self, position: int) -> None:
+        self.offset.fill_(int(position))
+
+    def _project_token(self, token: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         batch, _, _ = token.shape
-        self.ensure_compiled()
         q = self.q_proj(token).view(batch, 1, self.cfg.heads, self.head_dim)
         k = self.k_proj(token).view(batch, 1, self.cfg.heads, self.head_dim)
         v = self.v_proj(token).view(batch, 1, self.cfg.heads, self.head_dim)
+        return q, k, v
 
-        self.k_cache[:, position:position + 1] = k
-        self.v_cache[:, position:position + 1] = v
-        past_k = self.k_cache[:, :position + 1]
-        past_v = self.v_cache[:, :position + 1]
+    def _update_cache(self, k: torch.Tensor, v: torch.Tensor, position: int) -> None:
+        self.k_cache[:, position:position + 1].copy_(k)
+        self.v_cache[:, position:position + 1].copy_(v)
 
+    def decode_attention(self, q: torch.Tensor) -> torch.Tensor:
+        batch = q.shape[0]
         if self.flex_enabled:
-            out = self.decode_impl(q.transpose(1, 2), past_k.transpose(1, 2), past_v.transpose(1, 2)).transpose(1, 2)
+            out = self.decode_impl(
+                q.transpose(1, 2),
+                self.k_cache.transpose(1, 2),
+                self.v_cache.transpose(1, 2),
+            ).transpose(1, 2)
         else:
-            out = self.decode_impl(q, past_k, past_v)
+            out = self.decode_impl(q, self.k_cache, self.v_cache, self.offset)
         return self.o_proj(out.reshape(batch, 1, self.cfg.dim))
+
+    def decode(self, token: torch.Tensor, position: int) -> torch.Tensor:
+        self.ensure_compiled()
+        q, k, v = self._project_token(token)
+        self._update_cache(k, v, position)
+        self._set_offset(position)
+        return self.decode_attention(q)
 
 
 def jagged_batch(model: FlexDecodingModule, sequences: Iterable[torch.Tensor]) -> List[torch.Tensor]:
@@ -258,8 +314,8 @@ def benchmark(model: FlexDecodingModule) -> None:
     cfg = model.cfg
     device = next(model.parameters()).device
 
-    prompt = torch.randn(1, cfg.window * 2, cfg.dim, device=device)
-    token = torch.randn(1, 1, cfg.dim, device=device)
+    prompt = torch.randn(1, cfg.window * 2, cfg.dim, device=device, dtype=cfg.dtype)
+    token = torch.randn(1, 1, cfg.dim, device=device, dtype=cfg.dtype)
 
     print("\\nBenchmarking flexdecode (prefill/decode)")
     _benchmark("prefill", lambda: model.prefill(prompt), iters=10)
@@ -289,19 +345,19 @@ def main() -> None:
         print(f"GPU: {torch.cuda.get_device_name()}")
 
     cfg = FlexDecodingConfig()
-    model = FlexDecodingModule(cfg).to(device)
+    model = FlexDecodingModule(cfg).to(device, dtype=cfg.dtype)
     model.ensure_compiled()
 
     with torch.inference_mode():
-        prompt = torch.randn(1, 32, cfg.dim, device=device)
+        prompt = torch.randn(1, 32, cfg.dim, device=device, dtype=cfg.dtype)
         print("\\nPrefill output shape", model.prefill(prompt).shape)
-        token = torch.randn(1, 1, cfg.dim, device=device)
+        token = torch.randn(1, 1, cfg.dim, device=device, dtype=cfg.dtype)
         print("Decode output shape", model.decode(token, 32).shape)
 
         sequences = [
-            torch.randn(1, 16, cfg.dim, device=device),
-            torch.randn(1, 32, cfg.dim, device=device),
-            torch.randn(1, 64, cfg.dim, device=device),
+            torch.randn(1, 16, cfg.dim, device=device, dtype=cfg.dtype),
+            torch.randn(1, 32, cfg.dim, device=device, dtype=cfg.dtype),
+            torch.randn(1, 64, cfg.dim, device=device, dtype=cfg.dtype),
         ]
     outs = jagged_batch(model, sequences)
     for idx, out in enumerate(outs):

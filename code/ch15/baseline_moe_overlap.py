@@ -44,10 +44,8 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.hidden_size = 2048
-        # Make the shared expert compute-heavy enough that communication overlap
-        # matters, while keeping the routed expert light so it doesn't dominate
-        # the end-to-end iteration time.
-        self.shared_ffn_size = 8192
+        # Keep shared compute moderate so communication overlap stays visible.
+        self.shared_ffn_size = 4096
         self.routed_ffn_size = 256
         self.num_experts = 4
         self.batch = 64
@@ -57,7 +55,7 @@ class BaselineMoeOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # This makes the overlap optimization measurable without changing semantics.
         self.comm_chunks = 1
         # Repeat the transfer to simulate multi-hop / multi-round all-to-all.
-        self.comm_round_trips = 4
+        self.comm_round_trips = 8
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(

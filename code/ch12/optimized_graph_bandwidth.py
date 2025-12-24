@@ -116,6 +116,9 @@ class OptimizedGraphBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=120,  # CUDA extension compilation can take time
+            timing_method="wall_clock",
+            full_device_sync=True,
+            ncu_replay_mode="application",
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

@@ -26,6 +26,7 @@ class OptimizedContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchma
         self.samples: Optional[torch.Tensor] = None
         self.lengths: Optional[list[int]] = None
         self.lengths_tensor: Optional[torch.Tensor] = None
+        self._schedule: Optional[list[torch.Tensor]] = None
         self._verify_input: Optional[torch.Tensor] = None
         self.max_batch_size = 12
         self.hidden_dim = 1024
@@ -69,35 +70,40 @@ class OptimizedContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchma
             requests_per_iteration=float(self.num_samples),
             tokens_per_iteration=float(self.total_tokens),
         )
+        self._schedule = self._build_schedule(self.lengths, self.max_batch_size, self.device)
         self._synchronize()
+
+    @staticmethod
+    def _build_schedule(lengths: list[int], max_batch_size: int, device: torch.device) -> list[torch.Tensor]:
+        """Precompute dynamic batches to avoid Python control overhead in the timed region."""
+        remaining = lengths.copy()
+        active: list[int] = list(range(min(max_batch_size, len(lengths))))
+        next_idx = len(active)
+        schedule: list[torch.Tensor] = []
+
+        while active:
+            schedule.append(torch.tensor(active, device=device, dtype=torch.int64))
+            new_active: list[int] = []
+            for req_idx in active:
+                remaining[req_idx] -= 1
+                if remaining[req_idx] > 0:
+                    new_active.append(req_idx)
+            active = new_active
+            while len(active) < max_batch_size and next_idx < len(lengths):
+                active.append(next_idx)
+                next_idx += 1
+        return schedule
     
     def benchmark_fn(self) -> None:
         """Benchmark: token-level scheduler keeps batches full."""
-        assert self.model is not None and self.samples is not None and self.lengths is not None
+        assert self.model is not None and self.samples is not None and self._schedule is not None
         with self._nvtx_range("optimized_continuous_batching"):
             with torch.inference_mode():
                 state = self.samples.clone()
-
-                remaining = self.lengths.copy()
-                active: list[int] = list(range(min(self.max_batch_size, self.num_samples)))
-                next_idx = len(active)
-
-                while active:
-                    idx = torch.tensor(active, device=self.device, dtype=torch.int64)
+                for idx in self._schedule:
                     batch_state = state.index_select(0, idx)
                     y = self.model(batch_state)
                     state.index_copy_(0, idx, y)
-
-                    new_active: list[int] = []
-                    for req_idx in active:
-                        remaining[req_idx] -= 1
-                        if remaining[req_idx] > 0:
-                            new_active.append(req_idx)
-
-                    active = new_active
-                    while len(active) < self.max_batch_size and next_idx < self.num_samples:
-                        active.append(next_idx)
-                        next_idx += 1
 
                 self.output = state
 

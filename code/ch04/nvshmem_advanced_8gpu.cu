@@ -1,5 +1,5 @@
 /**
- * NVSHMEM Advanced Patterns for 8x Blackwell B200 GPUs
+ * NVSHMEM Advanced Patterns for 4x Blackwell B200 GPUs
  * ======================================================
  * 
  * Production-quality NVSHMEM patterns for high-performance multi-GPU computing.
@@ -17,7 +17,7 @@
  * Requirements:
  * - NVSHMEM 3.4+
  * - CUDA 13.0+
- * - 8x Blackwell B200 GPUs (works with any GPU count)
+ * - 4x Blackwell B200 GPUs (works with any GPU count)
  * 
  * Compile:
  *   nvcc -O3 -std=c++17 -arch=sm_100 -DUSE_NVSHMEM \\
@@ -25,7 +25,7 @@
  *        nvshmem_advanced_8gpu.cu -o nvshmem_advanced
  * 
  * Run:
- *   nvshmemrun -np 8 ./nvshmem_advanced
+ *   nvshmemrun -np 4 ./nvshmem_advanced
  */
 
 #include <cuda_runtime.h>
@@ -487,4 +487,3 @@ int main() {
     
     return 0;
 }
-

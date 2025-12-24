@@ -51,7 +51,7 @@ nvshmem_8gpu_examples$(SUFFIX): nvshmem_8gpu_examples.cu
 ifeq ($(HAS_NVSHMEM),yes)
 	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
 	@echo "✓ Basic examples compiled with NVSHMEM support"
-	@echo "  Run: nvshmemrun -np 8 ./nvshmem_8gpu_examples$(SUFFIX)"
+	@echo "  Run: nvshmemrun -np 4 ./nvshmem_8gpu_examples$(SUFFIX)"
 else
 	$(NVCC) $(NVCC_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"
@@ -61,7 +61,7 @@ nvshmem_multinode_example$(SUFFIX): nvshmem_multinode_example.cu
 ifeq ($(HAS_NVSHMEM),yes)
 	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
 	@echo "✓ Multi-node example compiled with NVSHMEM support"
-	@echo "  Run: nvshmemrun -np <world> ./nvshmem_multinode_example$(SUFFIX) --gpus-per-node 8"
+	@echo "  Run: nvshmemrun -np <world> ./nvshmem_multinode_example$(SUFFIX) --gpus-per-node 4"
 else
 	$(NVCC) $(NVCC_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"
@@ -81,7 +81,7 @@ nvshmem_advanced_8gpu$(SUFFIX): nvshmem_advanced_8gpu.cu
 ifeq ($(HAS_NVSHMEM),yes)
 	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
 	@echo "✓ Advanced patterns compiled with NVSHMEM support"
-	@echo "  Run: nvshmemrun -np 8 ./nvshmem_advanced_8gpu$(SUFFIX)"
+	@echo "  Run: nvshmemrun -np 4 ./nvshmem_advanced_8gpu$(SUFFIX)"
 else
 	$(NVCC) $(NVCC_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"
@@ -91,7 +91,7 @@ nvshmem_tensor_parallel$(SUFFIX): nvshmem_tensor_parallel.cu
 ifeq ($(HAS_NVSHMEM),yes)
 	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -lcuda -o $@
 	@echo "✓ Tensor parallel kernels compiled with NVSHMEM support"
-	@echo "  Run: nvshmemrun -np 8 ./nvshmem_tensor_parallel$(SUFFIX) --test all"
+	@echo "  Run: nvshmemrun -np 4 ./nvshmem_tensor_parallel$(SUFFIX) --test all"
 else
 	$(NVCC) $(NVCC_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"

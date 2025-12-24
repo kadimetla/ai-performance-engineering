@@ -13,6 +13,7 @@ Collects modern decoder techniques-FlexAttention, FlexDecoding, speculative and 
 | Path | Description |
 | --- | --- |
 | `baseline_flexdecoding.py`, `optimized_flexdecoding.py`, `optimized_flexdecoding_graphs.py`, `v1_engine_loop.py`, `v1_engine_loop_common.py` | FlexDecoding benchmarks plus a V1 polling-loop correctness tool (not a benchmark pair). |
+| `baseline_flexattention_sliding_window.py`, `optimized_flexattention_sliding_window.py`, `flexattention_sliding_window_common.py` | Sliding-window attention benchmark pair (dense mask vs FlexAttention block mask). |
 | `baseline_tensor_cores.py`, `optimized_tensor_cores.py`, `flashmla_kernel.cu`, `warp_specialized_triton.py` | Tensor-core attention kernels plus Triton equivalents for rapid validation. |
 | `flex_attention_native.py`, `flex_attention_enhanced.py`, `flex_attention_large_model.py`, `kv_cache_integration_example.py` | FlexAttention examples ranging from toy sizes to large models with KV-cache reuse. |
 | `baseline_vllm_v1_integration.py`, `optimized_vllm_v1_integration.py`, `baseline_vllm_decode_graphs.py`, `optimized_vllm_decode_graphs.py`, `configs/`, `workload_config.py` | Serving integrations and config presets for pushing workloads through vLLM or custom harnesses. |

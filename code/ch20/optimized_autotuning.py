@@ -51,7 +51,7 @@ class OptimizedAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
-        self.batch = 512
+        self.batch = 1024
         self.hidden_dim = 4096
         tokens = self.batch * self.hidden_dim
         self._workload = WorkloadMetadata(
@@ -68,7 +68,7 @@ class OptimizedAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Compile once in setup; benchmark_fn measures steady-state execution.
         self.model = compile_model(
             model,
-            mode="max-autotune-no-cudagraphs",
+            mode="max-autotune",
             fullgraph=True,
             dynamic=False,
         )

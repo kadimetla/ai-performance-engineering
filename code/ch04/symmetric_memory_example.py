@@ -137,11 +137,11 @@ def enable_nvlink_c2c_optimizations() -> None:
         print("  - GPU-GPU: ~900 GB/s per pair")
         print("  - Optimal for: Large parameter transfers, peer communication")
     
-    if num_gpus == 8:
-        print(f"\n8x B200 Configuration:")
-        print(f"  - Total SMs: 1184")
-        print(f"  - Total Memory: 1.44 TB HBM3e")
-        print(f"  - Aggregate Bandwidth: 62.4 TB/s")
+    if num_gpus == 4:
+        print(f"\n4x B200 Configuration:")
+        print(f"  - Total SMs: 592")
+        print(f"  - Total Memory: 0.72 TB HBM3e")
+        print(f"  - Aggregate Bandwidth: 31.2 TB/s")
     
     print("=" * 80)
 
@@ -241,15 +241,15 @@ def benchmark_symmetric_memory(tensor: torch.Tensor, iterations: int = 100):
     return start.elapsed_time(end) / iterations
 
 
-def benchmark_8gpu_symmetric_memory(
+def benchmark_multigpu_symmetric_memory(
     tensor_sizes: list = [(1024,), (1024 * 256,), (1024 * 1024,)],
     iterations: int = 100
 ) -> dict:
     """
-    Benchmark symmetric memory patterns for 8x B200 GPUs.
+    Benchmark symmetric memory patterns for multi-GPU B200 configurations.
     
     Tests:
-    - All-to-all communication (8 GPUs)
+    - All-to-all communication (multi-GPU)
     - Ring patterns (common in training)
     - Broadcast from rank 0
     
@@ -260,14 +260,14 @@ def benchmark_8gpu_symmetric_memory(
     world_size = dist.get_world_size()
     device = torch.device(f"cuda:{rank}")
     
-    if world_size != 8:
+    if world_size < 2:
         if rank == 0:
-            print(f"Warning: 8-GPU benchmark requested, got {world_size} GPUs")
+            print(f"Warning: multi-GPU benchmark requested, got {world_size} GPUs")
         return {}
     
     if rank == 0:
         print("\n" + "=" * 80)
-        print("8x B200 Symmetric Memory Patterns")
+        print(f"{world_size}x B200 Symmetric Memory Patterns")
         print("=" * 80)
     
     results = {}
@@ -278,12 +278,12 @@ def benchmark_8gpu_symmetric_memory(
         
         dist.barrier()
         
-        # Test 1: Ring pattern (rank i -> rank (i+1) % 8)
+        # Test 1: Ring pattern (rank i -> rank (i+1) % world_size)
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         
-        dest_rank = (rank + 1) % 8
-        src_rank = (rank - 1) % 8
+        dest_rank = (rank + 1) % world_size
+        src_rank = (rank - 1) % world_size
         
         # Warmup
         for _ in range(10):
@@ -322,7 +322,7 @@ def benchmark_8gpu_symmetric_memory(
             
             # Estimate bandwidth
             ring_bw = (size[0] * 4) / (ring_time / 1000) / 1e9
-            bcast_bw = (size[0] * 4 * 7) / (broadcast_time / 1000) / 1e9  # 7 destinations
+            bcast_bw = (size[0] * 4 * (world_size - 1)) / (broadcast_time / 1000) / 1e9
             print(f"  Ring bandwidth:     {ring_bw:.2f} GB/s")
             print(f"  Broadcast bandwidth: {bcast_bw:.2f} GB/s")
         
@@ -422,8 +422,8 @@ def main():
             print("Run with: torchrun --nproc_per_node=2 symmetric_memory_example.py")
         return
     
-    # Check for 8-GPU configuration
-    is_8gpu = world_size == 8
+    # Check for 4-GPU configuration
+    is_4gpu = world_size == 4
     
     # Create test tensor (small size to emphasize latency over bandwidth)
     tensor_sizes = [
@@ -436,13 +436,13 @@ def main():
         print("=" * 80)
         print("PyTorch 2.10 Symmetric Memory Benchmark")
         print(f"World size: {world_size} GPUs")
-        if is_8gpu:
-            print("8x B200 configuration detected")
+        if is_4gpu:
+            print("4x B200 configuration detected")
         print("=" * 80)
     
-    # Run 8-GPU specific benchmarks if applicable
-    if is_8gpu:
-        benchmark_8gpu_symmetric_memory(tensor_sizes, iterations=100)
+    # Run multi-GPU benchmarks when >=4 GPUs are available
+    if world_size >= 4:
+        benchmark_multigpu_symmetric_memory(tensor_sizes, iterations=100)
     else:
         # Standard 2-GPU benchmark
         for size in tensor_sizes:
@@ -476,8 +476,8 @@ def main():
         print("- Symmetric memory bypasses CPU involvement for small transfers")
         print("- Prefer it when latency matters more than bandwidth")
         print("- Ideal for frequent small synchronization points in multi-GPU algorithms")
-        if is_8gpu:
-            print("- 8x B200: Optimal for ring/tree algorithms with symmetric memory")
+        if is_4gpu:
+            print("- 4x B200: Optimal for ring/tree algorithms with symmetric memory")
         print("=" * 80)
     
     # Demonstrate GB200/GB300 features (rank 0 only for simplicity)

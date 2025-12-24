@@ -1,8 +1,8 @@
 /**
- * NVSHMEM Advanced Examples for 8x Blackwell B200 GPUs
+ * NVSHMEM Advanced Examples for 4x Blackwell B200 GPUs
  * =====================================================
  * 
- * Comprehensive NVSHMEM 3.4+ examples for 8-GPU Blackwell configurations.
+ * Comprehensive NVSHMEM 3.4+ examples for 4-GPU Blackwell configurations.
  * 
  * NVSHMEM enables:
  * - Kernel-initiated communication (no CPU involvement)
@@ -23,7 +23,7 @@
  * Requirements:
  * - NVSHMEM 3.4+
  * - CUDA 13.0+
- * - 8x Blackwell B200 GPUs (or any multi-GPU system)
+ * - 4x Blackwell B200 GPUs (or any multi-GPU system)
  * 
  * Compile:
  *   nvcc -O3 -std=c++17 -arch=sm_100 nvshmem_8gpu_examples.cu \\
@@ -31,7 +31,7 @@
  *        -o nvshmem_examples
  * 
  * Run:
- *   nvshmemrun -np 8 ./nvshmem_examples
+ *   nvshmemrun -np 4 ./nvshmem_examples
  * 
  * Note: If NVSHMEM is not installed, this provides educational
  * value showing the patterns and API usage.
@@ -271,24 +271,24 @@ void demonstrate_ring_pattern(int my_pe, int n_pes) {
 void demonstrate_butterfly_pattern(int my_pe, int n_pes) {
     printf("\n=== Example 5: Butterfly/Hypercube Pattern (PE %d) ===\n", my_pe);
     
-    if (n_pes != 8) {
-        printf("Butterfly pattern optimal for power-of-2 PEs (have %d)\n", n_pes);
+    if (n_pes < 2 || (n_pes & (n_pes - 1)) != 0) {
+        printf("Butterfly pattern requires power-of-2 PEs (have %d)\n", n_pes);
         return;
     }
     
-    printf("Butterfly pattern for 8 PEs (3 stages):\n");
+    printf("Butterfly pattern for %d PEs (log2(n) stages):\n", n_pes);
     printf("\n");
     printf("Stage 1 (stride=1):  PE i ↔ PE (i^1)\n");
-    printf("  Pairs: (0,1), (2,3), (4,5), (6,7)\n");
+    printf("  Pairs: (0,1), (2,3), ...\n");
     printf("\n");
     printf("Stage 2 (stride=2):  PE i ↔ PE (i^2)\n");
-    printf("  Pairs: (0,2), (1,3), (4,6), (5,7)\n");
+    printf("  Pairs: (0,2), (1,3), ...\n");
     printf("\n");
     printf("Stage 3 (stride=4):  PE i ↔ PE (i^4)\n");
-    printf("  Pairs: (0,4), (1,5), (2,6), (3,7)\n");
+    printf("  Pairs: (0,4), (1,5), ...\n");
     printf("\n");
     printf("Benefits:\n");
-    printf("  - Log(N) steps: 3 steps for 8 PEs vs 7 for ring\n");
+    printf("  - Log(N) steps: log2(n_pes) steps vs (n_pes-1) for ring\n");
     printf("  - Parallel communication in each stage\n");
     printf("  - Better for: Small message AllReduce, low-latency collectives\n");
     printf("\n");
@@ -321,14 +321,14 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaSetDevice(device));
     
     if (my_pe == 0) {
-        printf("=== NVSHMEM Educational Examples for 8 GPUs ===\n");
+        printf("=== NVSHMEM Educational Examples for 4 GPUs ===\n");
         printf("Number of PEs: %d\n", n_pes);
         printf("Number of GPUs: %d\n", num_devices);
         
-        if (n_pes == 8) {
-            printf("✓ Optimal 8-PE configuration\n");
+        if (n_pes == 4) {
+            printf("✓ Optimal 4-PE configuration\n");
         } else {
-            printf("⚠ Running with %d PEs (examples optimized for 8)\n", n_pes);
+            printf("⚠ Running with %d PEs (examples optimized for 4)\n", n_pes);
         }
     }
     
@@ -353,7 +353,7 @@ int main(int argc, char **argv) {
     #else
     // Educational mode without NVSHMEM
     int my_pe = 0;
-    int n_pes = 8;
+    int n_pes = 4;
     
     printf("=== NVSHMEM Educational Examples (Conceptual Mode) ===\n");
     printf("NVSHMEM not compiled in. Showing API patterns...\n\n");
@@ -380,7 +380,7 @@ int main(int argc, char **argv) {
     printf("  NVSHMEM: Custom algorithms, kernel-initiated, ultra-low latency\n");
     printf("  NCCL: Standard collectives, heavily optimized, production training\n");
     printf("\n");
-    printf("8x B200 Performance Expectations:\n");
+    printf("4x B200 Performance Expectations:\n");
     printf("  - Put/Get latency: <1 μs (4KB)\n");
     printf("  - Bandwidth: 800-900 GB/s per GPU pair\n");
     printf("  - AllReduce (custom): Competitive with NCCL for specific sizes\n");
@@ -389,4 +389,3 @@ int main(int argc, char **argv) {
     
     return 0;
 }
-

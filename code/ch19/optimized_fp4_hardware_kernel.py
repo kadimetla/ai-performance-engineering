@@ -15,9 +15,9 @@ from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 from core.benchmark.verification import simple_signature
 from core.harness.benchmark_harness import BaseBenchmark
 
-_M = 512
-_N = 512
-_K = 512
+_M = 1024
+_N = 1024
+_K = 1024
 
 
 class OptimizedFP4HardwareKernelBenchmark(CudaBinaryBenchmark):
@@ -32,6 +32,7 @@ class OptimizedFP4HardwareKernelBenchmark(CudaBinaryBenchmark):
             iterations=1,
             warmup=1,
             timeout_seconds=300,
+            run_args=[str(_M), str(_N), str(_K)],
             workload_params={
                 "batch_size": 1,
                 "dtype": "nvfp4_e2m1",

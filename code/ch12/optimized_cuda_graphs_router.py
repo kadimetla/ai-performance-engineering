@@ -18,7 +18,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.harness.benchmark_harness import BaseBenchmark, WorkloadMetadata  # noqa: E402
+from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 from ch12.cuda_extensions import load_cuda_graphs_extension  # noqa: E402
 
@@ -75,6 +75,17 @@ class CUDAGraphRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
             output_tolerance=(0.1, 1.0),
+        )
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(
+            iterations=5,
+            warmup=5,
+            enable_memory_tracking=False,
+            enable_profiling=False,
+            setup_timeout_seconds=120,
+            measurement_timeout_seconds=120,
+            ncu_replay_mode="application",
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

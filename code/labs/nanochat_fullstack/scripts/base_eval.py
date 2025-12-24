@@ -4,8 +4,8 @@ Evaluate the CORE metric for a given model.
 Run on a single GPU:
 python -m labs.nanochat_fullstack.scripts.base_eval
 
-Run with torchrun on e.g. 8 GPUs:
-torchrun --nproc_per_node=8 -m labs.nanochat_fullstack.scripts.base_eval
+Run with torchrun on e.g. 4 GPUs:
+torchrun --nproc_per_node=4 -m labs.nanochat_fullstack.scripts.base_eval
 
 The script will print the CORE metric to the console.
 """

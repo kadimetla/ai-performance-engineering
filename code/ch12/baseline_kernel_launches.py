@@ -118,6 +118,7 @@ class BaselineKernelLaunchesBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return BenchmarkConfig(
             iterations=30,
             warmup=5,
+            ncu_replay_mode="application",
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

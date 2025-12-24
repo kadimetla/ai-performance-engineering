@@ -158,6 +158,7 @@ class OptimizedGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return BenchmarkConfig(
             iterations=100,
             warmup=20,
+            ncu_replay_mode="application",
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

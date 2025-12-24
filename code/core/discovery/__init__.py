@@ -130,12 +130,14 @@ def _iter_benchmark_dirs(bench_root: Path) -> Iterable[Path]:
         "dist",
         "out",
         "artifacts",
+        "dashboard",
         "benchmark_profiles",
         "benchmark_profiles_chXX",
         "profiling_results",
         "hta_output",
         "gpt-oss-20b",
         "third_party",
+        "vendor",
     }
     for current, dirnames, filenames in os.walk(bench_root):
         dirnames[:] = [

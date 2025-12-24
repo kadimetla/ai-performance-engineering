@@ -26,11 +26,19 @@ from ch18 import flexdecoding as flexdemo  # noqa: E402
 class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
     """Shared benchmarking harness for baseline/optimized FlexDecoding runs."""
 
-    def __init__(self, *, use_flex_attention: bool, require_flex: bool, decode_tokens: int = 128):
+    def __init__(
+        self,
+        *,
+        use_flex_attention: bool,
+        require_flex: bool,
+        decode_tokens: int = 128,
+        compile_enabled: bool = True,
+    ):
         super().__init__()
         self.use_flex_attention = use_flex_attention
         self.require_flex = require_flex
         self.decode_tokens = decode_tokens
+        self.compile_enabled = compile_enabled
         self.config = flexdemo.FlexDecodingConfig()
         self.model: Optional[flexdemo.FlexDecodingModule] = None
         self.prefill_tokens: Optional[torch.Tensor] = None
@@ -55,15 +63,33 @@ class FlexDecodingHarness(VerificationPayloadMixin, BaseBenchmark):
 
         previous_flag = flexdemo.HAS_FLEX
         flexdemo.HAS_FLEX = self.use_flex_attention and previous_flag
-        self.model = flexdemo.FlexDecodingModule(self.config).to(self.device).eval()
+        self.model = flexdemo.FlexDecodingModule(
+            self.config,
+            compile_enabled=self.compile_enabled,
+        ).to(
+            self.device,
+            dtype=self.config.dtype,
+        ).eval()
         self.model.ensure_compiled()
         flexdemo.HAS_FLEX = previous_flag
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
 
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        self.prefill_tokens = torch.randn(1, self.config.window * 2, self.config.dim, device=self.device)
-        self.decode_token = torch.randn(1, 1, self.config.dim, device=self.device)
+        self.prefill_tokens = torch.randn(
+            1,
+            self.config.window * 2,
+            self.config.dim,
+            device=self.device,
+            dtype=self.config.dtype,
+        )
+        self.decode_token = torch.randn(
+            1,
+            1,
+            self.config.dim,
+            device=self.device,
+            dtype=self.config.dtype,
+        )
         torch.cuda.synchronize(self.device)
 
     # --------------------------------------------------------------- benchmark_fn

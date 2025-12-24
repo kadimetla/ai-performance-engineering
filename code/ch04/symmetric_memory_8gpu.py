@@ -1,9 +1,9 @@
 """
-PyTorch 2.10 Symmetric Memory for 8 GPUs
+PyTorch 2.10 Symmetric Memory for 4 GPUs
 ========================================
 
 Demonstrates torch.distributed.nn.SymmetricMemory API for ultra-low
-latency cross-GPU access on 8x B200 configuration.
+latency cross-GPU access on 4x B200 configuration.
 
 Symmetric memory enables:
 1. Direct GPU-to-GPU memory access without CPU involvement
@@ -13,9 +13,9 @@ Symmetric memory enables:
 
 
 Hardware:
-- 8x Blackwell B200 GPUs
+- 4x Blackwell B200 GPUs
 - NVLink 5.0: 1800 GB/s bidirectional per GPU pair
-- Total: 1184 SMs, 1.44 TB HBM3e
+- Total: 592 SMs, 0.72 TB HBM3e
 
 Use Cases:
 - Frequent small synchronizations (gradients, scalars)
@@ -26,14 +26,14 @@ Use Cases:
 Requirements:
 - PyTorch 2.10+
 - CUDA 13.0+
-- 8 GPUs (graceful degradation on fewer)
+- 4 GPUs (graceful degradation on fewer)
 
 Usage:
-    # 8 GPUs
-    torchrun --nproc_per_node=8 symmetric_memory_8gpu.py
-
-    # Test with 2-4 GPUs
+    # 4 GPUs
     torchrun --nproc_per_node=4 symmetric_memory_8gpu.py
+
+    # Test with 2 GPUs
+    torchrun --nproc_per_node=2 symmetric_memory_8gpu.py
 """
 from core.utils import compile_utils as _compile_utils_patch  # noqa: F401
 import pathlib
@@ -71,6 +71,7 @@ import time
 import torch
 import torch.distributed as dist
 from typing import Optional, List
+import math
 
 
 def setup_distributed():
@@ -110,7 +111,7 @@ def ring_allreduce_symmetric(
     world_size: int,
 ) -> torch.Tensor:
     """
-    Custom ring-based AllReduce using symmetric memory for 8 GPUs.
+    Custom ring-based AllReduce using symmetric memory for multi-GPU setups.
     
     This demonstrates direct GPU-to-GPU access without NCCL.
     For production, use NCCL which is heavily optimized.
@@ -266,21 +267,22 @@ def benchmark_symmetric_memory_access(
 
 
 # ============================================================================
-# 8-GPU Specific Patterns
+# Multi-GPU Patterns
 # ============================================================================
 
-def demonstrate_8gpu_ring_pattern(rank: int, world_size: int):
+def demonstrate_ring_pattern(rank: int, world_size: int) -> None:
     """
-    Demonstrate ring communication pattern optimal for 8 GPUs.
+    Demonstrate ring communication pattern for a power-of-two GPU group.
     
-    On 8x B200 with NVSwitch, all GPUs are directly connected.
-    Ring pattern: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 0
+    On NVSwitch/NVLink, all GPUs are directly connected.
+    Ring pattern: 0 → 1 → ... → (N-1) → 0
     """
     if rank == 0:
         print("\n" + "=" * 80)
-        print("8-GPU Ring Communication Pattern")
+        print(f"{world_size}-GPU Ring Communication Pattern")
         print("=" * 80)
-        print("Pattern: GPU 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 0")
+        ring = " → ".join(str(i) for i in range(world_size)) + " → 0"
+        print(f"Pattern: GPU {ring}")
         print("Best for: Sequential data processing, pipeline parallelism")
         print("=" * 80 + "\n")
     
@@ -330,30 +332,26 @@ def demonstrate_8gpu_ring_pattern(rank: int, world_size: int):
                   f"Bandwidth: {bandwidth_gbs:.2f} GB/s")
 
 
-def demonstrate_8gpu_butterfly_pattern(rank: int, world_size: int):
+def demonstrate_butterfly_pattern(rank: int, world_size: int) -> None:
     """
-    Demonstrate butterfly (hypercube) pattern for 8 GPUs.
+    Demonstrate butterfly (hypercube) pattern for power-of-two GPU counts.
     
-    Butterfly pattern for 8 GPUs (3 stages):
-    Stage 1: Pairs (0,1), (2,3), (4,5), (6,7) - stride 1
-    Stage 2: Pairs (0,2), (1,3), (4,6), (5,7) - stride 2
-    Stage 3: Pairs (0,4), (1,5), (2,6), (3,7) - stride 4
-    
-    Total: 3 steps for 8 GPUs (log2(8))
+    Total steps: log2(world_size)
     Best for: Low-latency AllReduce on small messages
     """
+    stages = int(math.log2(world_size)) if world_size > 0 else 0
     if rank == 0:
         print("\n" + "=" * 80)
-        print("8-GPU Butterfly Communication Pattern")
+        print(f"{world_size}-GPU Butterfly Communication Pattern")
         print("=" * 80)
-        print("Stages: 3 (log2(8))")
-        print("Stage 1: stride=1, Stage 2: stride=2, Stage 3: stride=4")
+        print(f"Stages: {stages} (log2({world_size}))")
+        print("Stage stride doubles each step (1, 2, 4, ...)")
         print("Best for: Low-latency reductions on small data")
         print("=" * 80 + "\n")
     
-    if world_size != 8:
+    if world_size < 2 or (2 ** stages) != world_size:
         if rank == 0:
-            print(f"⚠ Butterfly pattern designed for 8 GPUs, have {world_size}")
+            print(f"⚠ Butterfly pattern requires power-of-two world size; have {world_size}")
         return
     
     device = torch.cuda.current_device()
@@ -364,7 +362,7 @@ def demonstrate_8gpu_butterfly_pattern(rank: int, world_size: int):
     
     # Warmup
     for _ in range(10):
-        for stage in range(3):  # 3 stages for 8 GPUs
+        for stage in range(stages):
             stride = 1 << stage
             peer = rank ^ stride
             
@@ -384,7 +382,7 @@ def demonstrate_8gpu_butterfly_pattern(rank: int, world_size: int):
     # Benchmark
     start = time.time()
     for _ in range(100):
-        for stage in range(3):
+        for stage in range(stages):
             stride = 1 << stage
             peer = rank ^ stride
             
@@ -403,8 +401,9 @@ def demonstrate_8gpu_butterfly_pattern(rank: int, world_size: int):
         latency_us = (elapsed / 100) * 1e6
         print(f"Butterfly AllReduce ({size*4/1024:.1f} KB):")
         print(f"  Total latency: {latency_us:.2f} μs")
-        print(f"  Per-stage latency: {latency_us/3:.2f} μs")
-        print(f"  Compare to Ring (7 steps): ~{latency_us*7/3:.2f} μs")
+        if stages:
+            print(f"  Per-stage latency: {latency_us/stages:.2f} μs")
+            print(f"  Compare to Ring ({world_size - 1} steps): ~{latency_us * (world_size - 1) / stages:.2f} μs")
 
 
 # ============================================================================
@@ -417,15 +416,15 @@ def main():
     
     if rank == 0:
         print("=" * 80)
-        print("PyTorch 2.10 Symmetric Memory for 8 GPUs")
+        print("PyTorch 2.10 Symmetric Memory for 4 GPUs")
         print("=" * 80)
         print(f"World size: {world_size} GPUs")
         print(f"Device: {torch.cuda.get_device_name(device)}")
         
-        if world_size == 8:
-            print("Optimal 8-GPU configuration")
+        if world_size == 4:
+            print("Optimal 4-GPU configuration")
         else:
-            print(f"⚠ Running with {world_size} GPUs (optimized for 8)")
+            print(f"⚠ Running with {world_size} GPUs (optimized for 4)")
         
         print("=" * 80 + "\n")
     
@@ -465,21 +464,23 @@ def main():
                 size_kb = size * 4 / 1024
                 print(f"Size: {size_kb:8.2f} KB | Latency: {time_ms:6.3f} ms")
     
-    # Pattern demonstrations (8 GPUs)
-    if world_size == 8:
-        demonstrate_8gpu_ring_pattern(rank, world_size)
-        demonstrate_8gpu_butterfly_pattern(rank, world_size)
+    # Pattern demonstrations (power-of-two)
+    if world_size >= 2:
+        demonstrate_ring_pattern(rank, world_size)
+        demonstrate_butterfly_pattern(rank, world_size)
     
     # Summary
     if rank == 0:
         print("\n" + "=" * 80)
         print("Summary")
         print("=" * 80)
-        print("\n8-GPU Communication Patterns:")
-        print("  1. Ring: 7 steps, good for large messages")
-        print("  2. Tree: log2(8)=3 steps, good for medium messages")
-        print("  3. Butterfly: 3 steps, best for small messages")
-        print("  4. NVLS: Specialized for 8-GPU, best overall (NCCL 2.28)")
+        print(f"\n{world_size}-GPU Communication Patterns:")
+        print(f"  1. Ring: {world_size - 1} steps, good for large messages")
+        steps = int(math.log2(world_size)) if world_size > 0 else 0
+        if world_size >= 2 and (2 ** steps) == world_size:
+            print(f"  2. Tree: log2({world_size})={steps} steps, good for medium messages")
+            print(f"  3. Butterfly: {steps} steps, best for small messages")
+        print("  4. NVLS: Specialized for dense NVLink domains (NCCL 2.28)")
         
         print("\nWhen to use Symmetric Memory:")
         print("  Frequent small synchronizations (<4KB)")
@@ -493,8 +494,8 @@ def main():
         print("  Production training (heavily optimized)")
         print("  Multi-node communication")
         
-        print("\nExpected Performance on 8x B200:")
-        print("  - AllReduce 1GB: 700-800 GB/s bus bandwidth")
+        print("\nExpected Performance on 4x B200:")
+        print("  - AllReduce 1GB: 700-800 GB/s bus bandwidth (topology-dependent)")
         print("  - Small message latency: <2 μs (symmetric memory)")
         print("  - Large message latency: <1ms (NCCL)")
         print("=" * 80)

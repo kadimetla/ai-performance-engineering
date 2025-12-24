@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
     std::cout << "GPU: " << prop.name << " (SM" << prop.major << "." << prop.minor << ")" << std::endl;
     
     // Matrix dimensions (aligned for tensor cores). Must match the baseline.
-    const int M = 512, N = 512, K = 512;
+    const int M = 1024, N = 1024, K = 1024;
     
     // FP4 packed sizes
     const size_t packed_K = K / 2;

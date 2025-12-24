@@ -50,15 +50,16 @@ class OptimizedKVCache:
         for _ in range(pool_size):
             cache_entry = []
             for _ in range(self.num_layers):
-                k = torch.zeros(
-                    self.max_seq_len,
+                # Store in SDPA layout: [batch, heads, seq, dim] to avoid permutes.
+                k = torch.empty(
                     self.batch_size,
                     self.num_heads,
+                    self.max_seq_len,
                     self.head_dim,
                     dtype=self.dtype,
                     device=self.device,
                 )
-                v = torch.zeros_like(k)
+                v = torch.empty_like(k)
                 cache_entry.append((k, v))
             self.cache_pool.append(cache_entry)
         self.free_indices = list(range(pool_size))
@@ -72,15 +73,15 @@ class OptimizedKVCache:
         else:
             cache_entry = []
             for _ in range(self.num_layers):
-                k = torch.zeros(
-                    self.max_seq_len,
+                k = torch.empty(
                     self.batch_size,
                     self.num_heads,
+                    self.max_seq_len,
                     self.head_dim,
                     dtype=self.dtype,
                     device=self.device,
                 )
-                v = torch.zeros_like(k)
+                v = torch.empty_like(k)
                 cache_entry.append((k, v))
             self.cache_pool.append(cache_entry)
             cache_idx = len(self.cache_pool) - 1
@@ -91,13 +92,13 @@ class OptimizedKVCache:
             self.allocate(request_id)
         cache_idx = self.allocated_caches[request_id]
         cache_k, cache_v = self.cache_pool[cache_idx][layer_idx]
-        cache_k[pos].copy_(k)
-        cache_v[pos].copy_(v)
+        cache_k[:, :, pos, :].copy_(k)
+        cache_v[:, :, pos, :].copy_(v)
     
     def get(self, request_id: str, layer_idx: int, start: int, end: int) -> tuple[torch.Tensor, torch.Tensor]:
         cache_idx = self.allocated_caches[request_id]
         cache_k, cache_v = self.cache_pool[cache_idx][layer_idx]
-        return cache_k[start:end], cache_v[start:end]
+        return cache_k[:, :, start:end, :], cache_v[:, :, start:end, :]
     
     def free(self, request_id: str) -> None:
         if request_id in self.allocated_caches:
@@ -134,9 +135,6 @@ class SimpleAttentionLayer(nn.Module):
         kv_cache.append(request_id, layer_idx, k[:, :, 0, :], v[:, :, 0, :], cache_pos)
 
         cached_k, cached_v = kv_cache.get(request_id, layer_idx, 0, cache_pos + 1)
-        # Cache layout: [seq, batch, heads, dim] -> SDPA expects [batch, heads, seq, dim]
-        cached_k = cached_k.permute(1, 2, 0, 3)
-        cached_v = cached_v.permute(1, 2, 0, 3)
 
         out = torch.nn.functional.scaled_dot_product_attention(q, cached_k, cached_v, dropout_p=0.0, is_causal=False)
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)

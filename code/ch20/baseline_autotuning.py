@@ -56,7 +56,7 @@ class BaselineAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         # Use a pointwise-heavy workload so kernel-fusion wins are visible above noise.
-        self.batch = 512
+        self.batch = 1024
         self.hidden_dim = 4096
         tokens = self.batch * self.hidden_dim
         self._workload = WorkloadMetadata(

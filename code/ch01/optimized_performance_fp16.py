@@ -43,6 +43,7 @@ class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark)
         self._verify_output = None
         self.parameter_count = 0
         self._prev_fp16_accum = None
+        self._prev_fp16_reduced = None
         samples = float(self.batch_size * self.num_microbatches)
         self.register_workload_metadata(samples_per_iteration=samples)
 
@@ -52,6 +53,8 @@ class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark)
         if self.device.type == "cuda":
             self._prev_fp16_accum = torch.backends.cuda.matmul.allow_fp16_accumulation
             torch.backends.cuda.matmul.allow_fp16_accumulation = True
+            self._prev_fp16_reduced = torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction
+            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
 
         self.model = torch.nn.Sequential(
             torch.nn.Linear(2048, 2048),
@@ -133,6 +136,8 @@ class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark)
         del self.model, self.microbatches, self.targets, self.optimizer
         if self._prev_fp16_accum is not None:
             torch.backends.cuda.matmul.allow_fp16_accumulation = self._prev_fp16_accum
+        if self._prev_fp16_reduced is not None:
+            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = self._prev_fp16_reduced
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 

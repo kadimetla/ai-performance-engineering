@@ -12,8 +12,8 @@ simpler and more similar to just REINFORCE:
 1 GPU:
 python -m labs.nanochat_fullstack.scripts.chat_rl
 
-8 GPUs:
-torchrun --standalone --nproc_per_node=8 -m labs.nanochat_fullstack.scripts.chat_rl -- --run=default
+4 GPUs:
+torchrun --standalone --nproc_per_node=4 -m labs.nanochat_fullstack.scripts.chat_rl -- --run=default
 """
 
 import os

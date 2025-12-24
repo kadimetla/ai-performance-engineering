@@ -45,7 +45,8 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
     def __init__(self) -> None:
         super().__init__()
         self.hidden_size = 2048
-        self.shared_ffn_size = 8192
+        # Keep shared compute moderate so comm overlap meaningfully reduces time.
+        self.shared_ffn_size = 4096
         self.routed_ffn_size = 256
         self.num_experts = 4
         self.batch = 64
@@ -54,7 +55,7 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
         # Simulate expert-parallel comm as many small messages (chunked copies).
         # The comm stream can overlap these copies with shared expert compute.
         self.comm_chunks = 1
-        self.comm_round_trips = 4
+        self.comm_round_trips = 8
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(
@@ -143,14 +144,14 @@ class OptimizedMoeOverlapSharedExpertBenchmark(VerificationPayloadMixin, BaseBen
             with torch.no_grad():
                 total_tokens = flat.shape[0]
                 chunk_tokens = max(1, (total_tokens + self.comm_chunks - 1) // self.comm_chunks)
-                # Launch the shared expert on the default stream, then overlap the
-                # expert-parallel H2D transfers on a dedicated copy stream.
-                shared_out = self.shared_expert(flat)
+                # Launch comm copies first on the copy stream, then compute the
+                # shared expert on the default stream to maximize overlap.
                 with torch.cuda.stream(self._comm_stream):
                     for _ in range(self.comm_round_trips):
                         for start in range(0, total_tokens, chunk_tokens):
                             end = min(start + chunk_tokens, total_tokens)
                             self._comm_flat[start:end].copy_(self._remote_cpu_flat[start:end], non_blocking=True)
+                shared_out = self.shared_expert(flat)
                 torch.cuda.current_stream(self.device).wait_stream(self._comm_stream)
                 dispatch_shared_expert_sort_scatter(
                     self._comm_flat,

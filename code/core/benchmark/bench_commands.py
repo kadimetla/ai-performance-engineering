@@ -10,7 +10,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import typer
@@ -83,7 +83,7 @@ from core.env import apply_env_defaults, dump_environment_and_capabilities
 from core.utils.logger import setup_logging, get_logger
 from core.benchmark.artifact_manager import ArtifactManager
 from core.profiling import profiler_config as profiler_config_mod
-from core.discovery import chapter_slug, discover_all_chapters, resolve_target_chapters
+from core.discovery import chapter_slug, discover_all_chapters, resolve_target_chapters, discover_benchmarks
 
 apply_env_defaults()
 
@@ -160,6 +160,54 @@ def _apply_suite_timeout(seconds: Optional[int]) -> None:
 
     signal.signal(signal.SIGALRM, _on_timeout)
     signal.alarm(seconds)
+
+
+def _load_expectations_file(path: Path) -> Dict[str, Any]:
+    try:
+        return json.loads(path.read_text())
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load expectations file {path}: {exc}") from exc
+
+
+def _file_uses_torchrun(path: Path) -> bool:
+    content = path.read_text(encoding="utf-8")
+    markers = ("TorchrunLaunchSpec", "get_torchrun_spec", "LaunchVia.TORCHRUN")
+    return any(marker in content for marker in markers)
+
+
+def _collect_multi_gpu_examples(chapter_dir: Path) -> Dict[str, bool]:
+    multi_gpu: Dict[str, bool] = {}
+    pairs = discover_benchmarks(chapter_dir, validate=False, warn_missing=False)
+    for baseline_path, optimized_paths, example_name in pairs:
+        try:
+            uses_torchrun = _file_uses_torchrun(baseline_path)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to read {baseline_path}: {exc}") from exc
+        for opt_path in optimized_paths:
+            try:
+                uses_torchrun = uses_torchrun or _file_uses_torchrun(opt_path)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to read {opt_path}: {exc}") from exc
+        if example_name in multi_gpu:
+            multi_gpu[example_name] = multi_gpu[example_name] or uses_torchrun
+        else:
+            multi_gpu[example_name] = uses_torchrun
+    return multi_gpu
+
+
+def _collect_expectations(
+    hardware_key: str,
+    repo_root: Path,
+) -> List[Tuple[Path, Dict[str, Any], Dict[str, bool]]]:
+    files: List[Tuple[Path, Dict[str, Any], Dict[str, bool]]] = []
+    for chapter_dir in discover_all_chapters(repo_root):
+        exp_path = chapter_dir / f"expectations_{hardware_key}.json"
+        if not exp_path.exists():
+            continue
+        data = _load_expectations_file(exp_path)
+        multi_gpu = _collect_multi_gpu_examples(chapter_dir)
+        files.append((exp_path, data, multi_gpu))
+    return files
 
 
 # Import architecture optimizations early
@@ -1289,6 +1337,161 @@ if TYPER_AVAILABLE:
             typer.echo(f"      └─ {rec['reason']}")
         
         typer.echo()
+
+    @app.command("expectations")
+    def expectations(
+        hardware_key: str = Option("b200", "--hardware-key", "-h", help="Hardware key (e.g., b200, h100)"),
+        min_improvement: float = Option(1.05, "--min-improvement", help="Minimum improvement threshold"),
+        goal: str = Option("any", "--goal", help="Filter by optimization goal: speed, memory, or any"),
+        json_output: bool = Option(False, "--json", help="Output as JSON"),
+        show_all: bool = Option(False, "--all", help="Show all entries (not just below threshold)"),
+        multi_gpu_only: bool = Option(False, "--multi-gpu-only", help="Only show multi-GPU benchmarks"),
+        single_gpu_only: bool = Option(False, "--single-gpu-only", help="Only show single-GPU benchmarks"),
+        strict: bool = Option(False, "--strict", help="Exit non-zero if missing required metrics"),
+    ):
+        """Report expectation entries that miss a target improvement threshold."""
+        goal_norm = goal.strip().lower()
+        if goal_norm not in {"any", "speed", "memory"}:
+            raise typer.BadParameter("Goal must be one of: any, speed, memory")
+        if min_improvement <= 0:
+            raise typer.BadParameter("min_improvement must be positive")
+        if multi_gpu_only and single_gpu_only:
+            raise typer.BadParameter("Choose either --multi-gpu-only or --single-gpu-only, not both")
+
+        repo_root = Path(__file__).resolve().parents[2]
+        files = _collect_expectations(hardware_key, repo_root)
+        if not files:
+            typer.echo(f"No expectations_{hardware_key}.json files found.")
+            raise typer.Exit(code=1)
+
+        entries: List[Dict[str, Any]] = []
+        missing: List[Dict[str, Any]] = []
+        total_entries = 0
+        for exp_path, data, multi_map in files:
+            examples = data.get("examples", {})
+            if not isinstance(examples, dict):
+                continue
+            for example_name, entry in examples.items():
+                if not isinstance(entry, dict):
+                    continue
+                total_entries += 1
+                metadata = entry.get("metadata", {}) or {}
+                entry_goal = (metadata.get("optimization_goal") or "speed").strip().lower()
+                if goal_norm != "any" and entry_goal != goal_norm:
+                    continue
+                metrics = entry.get("metrics", {}) or {}
+                multi_gpu = multi_map.get(example_name)
+                if multi_gpu_only and not multi_gpu:
+                    continue
+                if single_gpu_only and multi_gpu:
+                    continue
+
+                baseline_ms = metrics.get("baseline_time_ms")
+                optimized_ms = metrics.get("best_optimized_time_ms")
+                baseline_mb = metrics.get("baseline_memory_mb")
+                optimized_mb = metrics.get("best_optimized_memory_mb")
+                improvement = None
+                metric_name = None
+
+                if entry_goal == "memory":
+                    metric_name = "best_memory_savings_ratio"
+                    improvement = metrics.get(metric_name)
+                else:
+                    metric_name = "best_speedup"
+                    improvement = metrics.get(metric_name) or metrics.get("best_optimized_speedup")
+
+                if improvement is None:
+                    missing.append(
+                        {
+                            "path": str(exp_path.relative_to(repo_root)),
+                            "example": example_name,
+                            "goal": entry_goal,
+                            "metric": metric_name,
+                            "multi_gpu": multi_gpu,
+                        }
+                    )
+                    continue
+
+                try:
+                    improvement_f = float(improvement)
+                except (TypeError, ValueError):
+                    missing.append(
+                        {
+                            "path": str(exp_path.relative_to(repo_root)),
+                            "example": example_name,
+                            "goal": entry_goal,
+                            "metric": metric_name,
+                            "multi_gpu": multi_gpu,
+                        }
+                    )
+                    continue
+
+                if show_all or improvement_f < min_improvement:
+                    entries.append(
+                        {
+                            "path": str(exp_path.relative_to(repo_root)),
+                            "example": example_name,
+                            "goal": entry_goal,
+                            "improvement": improvement_f,
+                            "multi_gpu": multi_gpu,
+                            "baseline_time_ms": baseline_ms,
+                            "optimized_time_ms": optimized_ms,
+                            "baseline_memory_mb": baseline_mb,
+                            "optimized_memory_mb": optimized_mb,
+                            "is_regression": metrics.get("is_regression"),
+                            "type": entry.get("type"),
+                        }
+                    )
+
+        entries.sort(key=lambda e: e["improvement"])
+        summary = {
+            "hardware_key": hardware_key,
+            "files_scanned": len(files),
+            "entries_scanned": total_entries,
+            "entries_reported": len(entries),
+            "missing_metrics": len(missing),
+            "min_improvement": min_improvement,
+            "goal_filter": goal_norm,
+            "multi_gpu_only": multi_gpu_only,
+            "single_gpu_only": single_gpu_only,
+        }
+
+        if json_output:
+            typer.echo(json.dumps({"summary": summary, "entries": entries, "missing": missing}, indent=2))
+        else:
+            typer.echo("\n" + "=" * 60)
+            typer.echo("📌 EXPECTATION THRESHOLD REPORT")
+            typer.echo("=" * 60)
+            for key, value in summary.items():
+                typer.echo(f"{key.replace('_', ' ').title():<20} {value}")
+            if not entries:
+                typer.echo("\nNo entries matched the filters.")
+            else:
+                typer.echo("\nEntries:")
+                for entry in entries:
+                    baseline = entry["baseline_time_ms"]
+                    optimized = entry["optimized_time_ms"]
+                    baseline_mb = entry["baseline_memory_mb"]
+                    optimized_mb = entry["optimized_memory_mb"]
+                    if entry["goal"] == "memory":
+                        detail = f"memory {baseline_mb}->{optimized_mb} MB"
+                    else:
+                        detail = f"time {baseline}->{optimized} ms"
+                    typer.echo(
+                        f"  {entry['improvement']:.4f}x  {entry['goal']:<6}  "
+                        f"{entry['path']}::{entry['example']}  "
+                        f"multi_gpu={entry['multi_gpu']}  {detail}"
+                    )
+            if missing:
+                typer.echo("\nMissing metrics:")
+                for item in missing:
+                    typer.echo(
+                        f"  {item['path']}::{item['example']} "
+                        f"(goal={item['goal']}, metric={item['metric']}, multi_gpu={item['multi_gpu']})"
+                    )
+
+        if strict and missing:
+            raise typer.Exit(code=1)
 
     @app.command("whatif")
     def whatif(

@@ -105,6 +105,7 @@ class BaselineCudaGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             enable_profiling=False,
             setup_timeout_seconds=120,  # CUDA extension compilation can take time
             measurement_timeout_seconds=120,
+            ncu_replay_mode="application",
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

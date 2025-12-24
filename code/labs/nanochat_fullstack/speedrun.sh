@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # This script is the "Best ChatGPT clone that $100 can buy",
-# It is designed to run in ~3.2 hours on an 8xB200 node at $2.25/GPU/hour.
+# It is designed to run in ~3.2 hours on a 4xB200 node at $2.25/GPU/hour.
 
 # 1) Example launch (simplest):
 # bash speedrun.sh
@@ -83,7 +83,7 @@ echo "Waiting for dataset download to complete..."
 wait $DATASET_DOWNLOAD_PID
 
 # Number of processes/GPUs to use
-NPROC_PER_NODE=8
+NPROC_PER_NODE=4
 
 # pretrain the d20 model
 torchrun --standalone --nproc_per_node=$NPROC_PER_NODE -m labs.nanochat_fullstack.scripts.base_train -- --depth=20 --run=$WANDB_RUN

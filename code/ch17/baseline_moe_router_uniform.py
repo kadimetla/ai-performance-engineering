@@ -45,7 +45,7 @@ class BaselineMoERouterUniformBenchmark(VerificationPayloadMixin, BaseBenchmark)
         super().__init__()
         self.hidden_size = 1024
         # Keep expert compute modest so the (simulated) remote-transfer cost is measurable.
-        self.ffn_size = 256
+        self.ffn_size = 128
         self.num_islands = 4
         self.experts_per_island = 16
         self.num_experts = self.num_islands * self.experts_per_island
@@ -54,7 +54,7 @@ class BaselineMoERouterUniformBenchmark(VerificationPayloadMixin, BaseBenchmark)
         self.dtype = torch.bfloat16
         # Model remote EP transfers by scaling the payload size (fewer kernel launches,
         # more bytes moved) so results aren't dominated by copy launch overhead.
-        self.remote_round_trips = 128
+        self.remote_round_trips = 256
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(

@@ -45,14 +45,14 @@ class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmar
     def __init__(self) -> None:
         super().__init__()
         self.hidden_size = 1024
-        self.ffn_size = 256
+        self.ffn_size = 128
         self.num_islands = 4
         self.experts_per_island = 16
         self.num_experts = self.num_islands * self.experts_per_island
         self.batch = 256
         self.seq = 64
         self.dtype = torch.bfloat16
-        self.remote_round_trips = 128
+        self.remote_round_trips = 256
 
         tokens = self.batch * self.seq
         self._workload = WorkloadMetadata(

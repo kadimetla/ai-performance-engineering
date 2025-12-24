@@ -6,6 +6,7 @@
 ## Safety (CRITICAL)
 - DO NOT run destructive git commands in this repo (including `git restore`, `git checkout`, `git reset --hard`, `git revert`, or mass file deletions) unless I explicitly ask.
 - If you need to recover a tracked file, reconstruct it from `git show HEAD:<path>` and write it back to disk instead of using destructive git operations.
+- DO NOT delete any files, including untracked files or locally modified files, unless I explicitly ask.
 
 ## Test Realism (CRITICAL)
 - Tests MUST NOT use `precheck_only`, `dry_run`, `estimate_only`, or any other short-circuit/preview mode.
@@ -21,6 +22,7 @@
 ## Benchmarks vs Tools/Demos (CRITICAL)
 
 ### Benchmarks (comparable baseline vs optimized)
+- Always implement benchmark pairs (baseline_*/optimized_*) when possible; use demos/tools only when a comparable pair is not feasible.
 - `aisp bench run --targets ...` should only include targets that are explicitly intended to demonstrate an optimization outcome.
   - Default: **performance** (speedup) with clear speedup potential.
   - Rare: **memory** (reduced memory) when explicitly the goal.
