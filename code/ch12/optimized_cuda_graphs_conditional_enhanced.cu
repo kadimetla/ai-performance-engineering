@@ -14,7 +14,7 @@
     }                                                                        \
   } while (0)
 
-constexpr int N = 1 << 20;
+constexpr int N = 1 << 16;
 
 __global__ void expensive_kernel(float* data, int n, float scale) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -25,6 +25,12 @@ __global__ void expensive_kernel(float* data, int n, float scale) {
             val = sqrtf(val * val + scale) * 0.99f;
         }
         data[idx] = val;
+    }
+}
+
+__global__ void predicate_kernel(int* condition, float* data, int n, float threshold) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        *condition = (data[0] > threshold) ? 1 : 0;
     }
 }
 
@@ -58,6 +64,11 @@ int main() {
     
     dim3 block(256);
     dim3 grid((N + block.x - 1) / block.x);
+
+    constexpr float THRESHOLD = 0.5f;
+
+    int *d_condition = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_condition, sizeof(int)));
     
     cudaStream_t graph_stream;
     CUDA_CHECK(cudaStreamCreateWithFlags(&graph_stream, cudaStreamNonBlocking));
@@ -66,11 +77,12 @@ int main() {
     cudaGraphExec_t graph_exec_static;
     
     CUDA_CHECK(cudaStreamBeginCapture(graph_stream, cudaStreamCaptureModeGlobal));
+    predicate_kernel<<<1, 1, 0, graph_stream>>>(d_condition, d_data, N, THRESHOLD);
     expensive_kernel<<<grid, block, 0, graph_stream>>>(d_data, N, 1.01f);
     CUDA_CHECK(cudaStreamEndCapture(graph_stream, &graph_static));
     CUDA_CHECK(cudaGraphInstantiate(&graph_exec_static, graph_static, nullptr, nullptr, 0));
     
-    constexpr int ITERS = 1000;
+    constexpr int ITERS = 5000;
     
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
@@ -101,6 +113,7 @@ int main() {
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
     CUDA_CHECK(cudaStreamDestroy(graph_stream));
+    CUDA_CHECK(cudaFree(d_condition));
     CUDA_CHECK(cudaFree(d_data));
     
     return 0;

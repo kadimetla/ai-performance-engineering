@@ -99,7 +99,11 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError(f"AI optimization kernel validation failed (max error={max_error:.4f})")
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=20, warmup=5)
+        return BenchmarkConfig(
+            iterations=20,
+            warmup=5,
+            timing_method="wall_clock",
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.output is None:

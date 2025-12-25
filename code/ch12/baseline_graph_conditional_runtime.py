@@ -50,7 +50,7 @@ class BaselineGraphBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.hidden_dim = 256
         # Increase the number of tiny ops so the workload is launch-bound and
         # CUDA graph replay shows a clear steady-state speedup.
-        self.num_loops = 64
+        self.num_loops = 256
         
         self.data: Optional[torch.Tensor] = None
         self._verify_input: Optional[torch.Tensor] = None

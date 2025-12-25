@@ -14,7 +14,7 @@
     }                                                                        \
   } while (0)
 
-constexpr int N = 1 << 20;
+constexpr int N = 1 << 16;
 
 __global__ void expensive_kernel(float* data, int n, float scale) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -61,8 +61,8 @@ int main() {
     dim3 block(256);
     dim3 grid((N + block.x - 1) / block.x);
     
-    constexpr int ITERS = 1000;
-    constexpr float THRESHOLD = 1.5f;
+    constexpr int ITERS = 5000;
+    constexpr float THRESHOLD = 0.5f;
     
     int *d_condition = nullptr;
     CUDA_CHECK(cudaMalloc(&d_condition, sizeof(int)));
@@ -101,4 +101,3 @@ int main() {
     
     return 0;
 }
-

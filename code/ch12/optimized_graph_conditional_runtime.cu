@@ -35,7 +35,7 @@
     }                                                                        \
   } while (0)
 
-constexpr int N = 1 << 20;  // 1M elements
+constexpr int N = 1 << 16;  // 64K elements
 constexpr int THREADS = 256;
 
 // Expensive computation kernel
@@ -290,7 +290,7 @@ int main() {
     // Benchmark: Device-side conditional execution
     // ========================================
     constexpr int WARMUP = 10;
-    constexpr int ITERS = 100;
+    constexpr int ITERS = 5000;
     
     // Warmup
     for (int i = 0; i < WARMUP; ++i) {
@@ -371,6 +371,5 @@ int main() {
 }
 
 #endif  // CUDA_VERSION
-
 
 

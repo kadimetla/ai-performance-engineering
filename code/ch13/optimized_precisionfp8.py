@@ -27,7 +27,7 @@ from core.harness.benchmark_harness import (
 
 
 class SimpleModel(nn.Module):
-    """Two-layer MLP used for AMP + fake FP8 runs.
+    """Two-layer MLP used for torchao Float8Linear runs.
     
     Note: Must match baseline_precisionfp8.py architecture for output verification.
     """
@@ -203,4 +203,4 @@ if __name__ == "__main__":  # pragma: no cover
     )
     result = harness.benchmark(benchmark)
     timing = result.timing.mean_ms if result.timing else 0.0
-    print(f"\nOptimized Precision FP8 (AMP-based, precisionfp8 pair): {timing:.3f} ms")
+    print(f"\nOptimized Precision FP8 (torchao Float8Linear, precisionfp8 pair): {timing:.3f} ms")

@@ -5,8 +5,8 @@ include ../core/common/cuda_arch.mk
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
-# Build NVCC binaries for all CUDA sources
-CUDA_SOURCES = $(wildcard *.cu)
+# Build NVCC binaries for all CUDA sources (exclude PyTorch extension sources)
+CUDA_SOURCES = $(filter-out tcgen05_basic.cu tcgen05_pipelined.cu, $(wildcard *.cu))
 BASE_TARGETS = $(CUDA_SOURCES:.cu=)
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 VERIFY_TARGETS = $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))

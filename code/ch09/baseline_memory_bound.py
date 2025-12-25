@@ -81,7 +81,11 @@ class BaselineMemoryBoundBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=20, warmup=5)
+        return BenchmarkConfig(
+            iterations=20,
+            warmup=5,
+            timing_method="wall_clock",
+        )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

@@ -113,6 +113,7 @@ class BaselineBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return BenchmarkConfig(
             iterations=50,
             warmup=5,
+            timing_method="wall_clock",
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

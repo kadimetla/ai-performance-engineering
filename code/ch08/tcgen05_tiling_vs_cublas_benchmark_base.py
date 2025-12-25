@@ -91,4 +91,8 @@ class Tcgen05TilingVsCublasBase(VerificationPayloadMixin, BaseBenchmark):
             torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=48, warmup=8)
+        return BenchmarkConfig(
+            iterations=48,
+            warmup=8,
+            timing_method="wall_clock",
+        )

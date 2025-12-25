@@ -2137,6 +2137,16 @@ def _merge_benchmark_config(
                     and value_norm == default_norm
                 ):
                     continue
+            if field.name == "ncu_metric_set":
+                base_value = getattr(merged, field.name, None)
+                default_value = getattr(defaults_obj, field.name, None) if defaults_obj else None
+                if base_value is not None and default_value is not None:
+                    base_norm = str(base_value).lower()
+                    default_norm = str(default_value).lower()
+                    value_norm = str(value).lower()
+                    # Preserve CLI-provided metric set when benchmark config only supplies the default.
+                    if base_norm != default_norm and value_norm == default_norm:
+                        continue
 
             if field.name == "target_extra_args":
                 if value:

@@ -82,6 +82,8 @@ class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize tensors."""
         torch.manual_seed(42)
+        if not TRITON_AVAILABLE:
+            raise RuntimeError("Triton is required for optimized_triton benchmark.")
 
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self._output_buffer = torch.empty(self.N, device=self.device, dtype=torch.float32)
@@ -95,20 +97,16 @@ class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Benchmark: Triton kernel operations."""
         assert self.input is not None and self._output_buffer is not None
         with self._nvtx_range("triton"):
-            if TRITON_AVAILABLE:
-                # Optimization: Triton kernel
-                # Uses Triton for efficient custom GPU kernels
-                # Triton: Python-like syntax for GPU kernel programming
-                grid = lambda meta: (triton.cdiv(self.N, meta['BLOCK_SIZE']),)
-                triton_kernel[grid](
-                    self._output_buffer,
-                    self.input,
-                    self.N,
-                    BLOCK_SIZE=1024,
-                )
-            else:
-                # Fallback: Use optimized PyTorch operations
-                self._output_buffer.copy_(self.input * 2.0 + 1.0)
+            # Optimization: Triton kernel
+            # Uses Triton for efficient custom GPU kernels
+            # Triton: Python-like syntax for GPU kernel programming
+            grid = lambda meta: (triton.cdiv(self.N, meta['BLOCK_SIZE']),)
+            triton_kernel[grid](
+                self._output_buffer,
+                self.input,
+                self.N,
+                BLOCK_SIZE=1024,
+            )
             self.output = self._output_buffer
         self._synchronize()
         if self.output is None:
@@ -148,6 +146,7 @@ class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return BenchmarkConfig(
             iterations=100,
             warmup=10,
+            timing_method="wall_clock",
         )
     
     def get_custom_metrics(self) -> Optional[dict]:
