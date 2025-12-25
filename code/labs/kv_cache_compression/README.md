@@ -6,14 +6,13 @@ Benchmarks a KV-cache heavy attention block using Transformer Engine 2.10 (CUDA 
 ## Learning Goals
 - Compare MXFP8 vs NVFP4 block scaling for KV-cache heavy attention.
 - Verify FP4 tensor-core speedups while maintaining accuracy through FP8 calibration.
-- Exercise graceful fallbacks when FP4 kernels are unavailable.
 - Capture reproducible metrics via the benchmark harness.
 
 ## Directory Layout
 | Path | Description |
 | --- | --- |
 | `baseline_kv_cache.py` | MXFP8 baseline benchmark. |
-| `optimized_kv_cache_nvfp4.py` | NVFP4 path with FP8 calibration and automatic fallback. |
+| `optimized_kv_cache_nvfp4.py` | NVFP4 path with FP8 calibration (fails fast if unavailable). |
 | `kv_cache_common.py` | Shared shapes/utilities for both paths. |
 | `tma_prefetch_extension.py`, `tma_prefetch_ext.cu` | TMA async prefetch demo for KV cache tiles. |
 | `expectations_b200.json`, `__init__.py` | Regression thresholds and harness target exports. |
@@ -29,7 +28,7 @@ python -m cli.aisp bench run --targets labs/kv_cache_compression:kv_cache_nvfp4 
 
 ## Validation Checklist
 - Baseline MXFP8 target runs without requiring FP4 support.
-- NVFP4 target either reports FP4 tensor-core usage or cleanly falls back to MXFP8 with a log message.
+- NVFP4 target fails fast if FP4 kernels are unavailable on the current hardware/driver.
 - Harness artifacts align with `expectations_b200.json`; mismatches flag regression risk.
 
 ## Notes

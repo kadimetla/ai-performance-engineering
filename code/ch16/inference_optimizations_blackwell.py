@@ -598,16 +598,16 @@ def compare_inference_methods():
 
 
 # ============================================================================
-# 5. 8-GPU Tensor Parallel Inference
+# 5. Multi-GPU Tensor Parallel Inference
 # ============================================================================
 
-def detect_8xb200():
-    """Detect if running on 8x B200 GPUs."""
+def detect_b200_multigpu(min_gpus: int = 2) -> bool:
+    """Detect if running on a multi-GPU B200 system."""
     if not torch.cuda.is_available():
         return False
     
     num_gpus = torch.cuda.device_count()
-    if num_gpus != 8:
+    if num_gpus < min_gpus:
         return False
     
     props = torch.cuda.get_device_properties(0)
@@ -615,7 +615,6 @@ def detect_8xb200():
     
     return (
         props.major >= 10
-        and num_gpus == 8
         and memory_gb >= 180
     )
 
@@ -631,19 +630,19 @@ def detect_gb200_gb300():
     
     return is_arm and has_sm100
 
-class TensorParallel8GPU:
+class TensorParallelMultiGPU:
     """
-    8-GPU Tensor Parallel Inference for large models.
+    Multi-GPU tensor-parallel inference for large models.
     
     Features:
-    - Attention heads split across 8 GPUs
+    - Attention heads split across GPUs
     - KV cache sharded across GPUs
     - Pipeline parallel support
-    - Optimized for 1.44 TB total memory
+    - Scales model capacity with GPU count
     
-    Performance on 8x B200:
+    Performance on multi-GPU B200:
     - 100B+ parameter models
-    - 8x throughput vs single GPU
+    - Near-linear throughput scaling
     - 85-95% scaling efficiency
     """
     
@@ -677,8 +676,8 @@ class TensorParallel8GPU:
     
     def shard_kv_cache(self, kv_cache: DynamicQuantizedKVCache):
         """
-        Shard KV cache across 8 GPUs.
-        Each GPU stores heads: rank * (num_heads/8) to (rank+1) * (num_heads/8)
+        Shard KV cache across GPUs.
+        Each GPU stores a contiguous head slice.
         """
         num_heads = kv_cache.num_heads
         heads_per_gpu = num_heads // self.num_gpus
@@ -716,36 +715,49 @@ class TensorParallel8GPU:
         
         return final_output
 
-def benchmark_8gpu_tensor_parallel():
+def benchmark_multigpu_tensor_parallel():
     """
-    Benchmark 8-GPU tensor parallel inference.
+    Benchmark multi-GPU tensor parallel inference.
     """
-    if not detect_8xb200():
-        print("8-GPU tensor parallel requires 8x B200 GPUs")
+    if not torch.cuda.is_available():
+        print("Multi-GPU tensor parallel requires CUDA")
+        return
+
+    if torch.cuda.device_count() < 2:
+        print("Multi-GPU tensor parallel requires >=2 GPUs")
         return
     
     import torch.distributed as dist
     if not dist.is_initialized():
-        print("Distributed not initialized. Use: torchrun --nproc_per_node=8")
+        print("Distributed not initialized. Use: torchrun --nproc_per_node=<num_gpus>")
         return
     
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     local_rank = int(os.environ.get("LOCAL_RANK", rank))
     device = torch.device(f"cuda:{local_rank}")
+
+    props = torch.cuda.get_device_properties(0)
+    mem_per_gpu_gb = props.total_memory / (1024**3)
+    total_mem_gb = mem_per_gpu_gb * world_size
+    is_b200 = detect_b200_multigpu(min_gpus=2)
     
     if rank == 0:
         print("\n" + "=" * 80)
-        print("8x B200 Tensor Parallel Inference Benchmark")
+        print("Multi-GPU Tensor Parallel Inference Benchmark")
         print("=" * 80)
         print(f"Total GPUs: {world_size}")
-        print(f"Total memory: {world_size * 180:.0f} GB (1.44 TB)")
+        print(f"Total memory: {total_mem_gb:.0f} GB")
+        if is_b200:
+            print("Detected: B200-class GPUs")
     
     # Configuration
     batch_size = 1
     seq_len = 8192  # Long context
-    d_model = 8192  # Large model
-    num_heads = 64   # 8 heads per GPU
+    heads_per_gpu = 8
+    num_heads = heads_per_gpu * world_size
+    head_dim = 128
+    d_model = num_heads * head_dim
     
     # Create model shard for this GPU
     layer = OptimizedDecoderLayer(
@@ -760,7 +772,7 @@ def benchmark_8gpu_tensor_parallel():
         max_batch_size=batch_size,
         max_seq_len=seq_len * 2,
         num_heads=num_heads // world_size,
-        head_dim=d_model // num_heads,
+        head_dim=head_dim,
         device=device,
     )
     
@@ -796,13 +808,13 @@ def benchmark_8gpu_tensor_parallel():
         print(f"  Throughput: {tokens_per_sec:.0f} tokens/sec")
         print(f"  Per-token latency: {time_ms / seq_len:.3f} ms")
         
-        print(f"\nAggregate (8 GPUs):")
+        print(f"\nAggregate ({world_size} GPUs):")
         print(f"  Total throughput: {tokens_per_sec * world_size:.0f} tokens/sec")
-        print(f"  Memory per GPU: ~{180 / world_size:.1f} GB for model")
+        print(f"  Memory per GPU: ~{mem_per_gpu_gb:.1f} GB")
         print(f"  KV cache per GPU: ~{kv_cache.cache.numel() * kv_cache.cache.element_size() / 1e9:.2f} GB")
         
-        print("\n8x B200 Performance Tips:")
-        print("  - Use TP=8 for 100B+ parameter models")
+        print("\nMulti-GPU Performance Tips:")
+        print("  - Use TP=world_size for models that exceed single-GPU memory")
         print("  - Split attention heads evenly across GPUs")
         print("  - Monitor NVLink bandwidth with nvidia-smi dmon -s u")
         print("  - Target 85-95% scaling efficiency")
@@ -943,8 +955,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Blackwell Inference Optimizations")
-    parser.add_argument("--eight-gpu", action="store_true", dest="eight_gpu",
-                        help="Run 8-GPU tensor parallel benchmark")
+    parser.add_argument("--multi-gpu", action="store_true", dest="multi_gpu",
+                        help="Run multi-GPU tensor parallel benchmark")
     parser.add_argument("--gb200", action="store_true",
                         help="Demo GB200/GB300 CPU offloading")
     
@@ -960,11 +972,13 @@ if __name__ == "__main__":
     device_name = torch.cuda.get_device_name(0)
     print(f"GPU: {device_name}")
     
-    is_8xb200 = detect_8xb200()
+    is_b200_multigpu = detect_b200_multigpu(min_gpus=2)
     is_gb200_gb300 = detect_gb200_gb300()
     
-    if is_8xb200:
-        print("Detected: 8x B200 GPUs (1.44 TB total memory)")
+    if is_b200_multigpu:
+        num_gpus = torch.cuda.device_count()
+        mem_per_gpu_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        print(f"Detected: B200-class GPUs ({num_gpus} GPUs, {mem_per_gpu_gb * num_gpus:.0f} GB total)")
     if is_gb200_gb300:
         print("Detected: GB200/GB300 Grace-Blackwell Superchip")
     
@@ -976,8 +990,8 @@ if __name__ == "__main__":
     print()
     
     # Run requested benchmarks
-    if args.eight_gpu:
-        benchmark_8gpu_tensor_parallel()
+    if args.multi_gpu:
+        benchmark_multigpu_tensor_parallel()
     elif args.gb200:
         demo_gb200_cpu_offloading()
     else:
@@ -991,12 +1005,13 @@ if __name__ == "__main__":
         print("<10ms latency per token on B200")
         print("Production-ready pipeline")
         
-        if is_8xb200:
-            print("\n=== 8x B200 Features ===")
+        if is_b200_multigpu:
+            num_gpus = torch.cuda.device_count()
+            print("\n=== Multi-GPU Features ===")
             print("Tensor parallel for 100B+ models")
-            print("8x throughput vs single GPU")
-            print("1.44 TB total memory capacity")
-            print("Run with --eight-gpu for tensor parallel benchmark")
+            print(f"{num_gpus}x throughput vs single GPU (scaling dependent)")
+            print("Total memory capacity scales with GPU count")
+            print("Run with --multi-gpu for tensor parallel benchmark")
         
         if is_gb200_gb300:
             print("\n=== GB200/GB300 Features ===")

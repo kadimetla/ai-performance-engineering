@@ -11,7 +11,7 @@ HAS_NVSHMEM := $(shell test -f $(NVSHMEM_HOME)/libnvshmem_host.so && echo yes ||
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -rdc=true
 SUFFIX = $(TARGET_SUFFIX)
 
-NVSHMEM_TARGETS = nvshmem_8gpu_examples nvshmem_advanced_8gpu nvshmem_multinode_example \
+NVSHMEM_TARGETS = nvshmem_multigpu_examples nvshmem_advanced_multigpu nvshmem_multinode_example \
                   nvshmem_pipeline_patterns nvshmem_tensor_parallel
 ifeq ($(HAS_NVSHMEM),yes)
 NVSHMEM_TARGETS += nvshmem_ibgda_microbench
@@ -47,11 +47,11 @@ else
 	@echo "⚠ NVSHMEM not found - compiling in educational mode"
 endif
 
-nvshmem_8gpu_examples$(SUFFIX): nvshmem_8gpu_examples.cu
+nvshmem_multigpu_examples$(SUFFIX): nvshmem_multigpu_examples.cu
 ifeq ($(HAS_NVSHMEM),yes)
 	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
 	@echo "✓ Basic examples compiled with NVSHMEM support"
-	@echo "  Run: nvshmemrun -np 4 ./nvshmem_8gpu_examples$(SUFFIX)"
+	@echo "  Run: nvshmemrun -np 4 ./nvshmem_multigpu_examples$(SUFFIX)"
 else
 	$(NVCC) $(NVCC_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"
@@ -77,11 +77,11 @@ else
 	@echo "Compiled in educational mode (no NVSHMEM library)"
 endif
 
-nvshmem_advanced_8gpu$(SUFFIX): nvshmem_advanced_8gpu.cu
+nvshmem_advanced_multigpu$(SUFFIX): nvshmem_advanced_multigpu.cu
 ifeq ($(HAS_NVSHMEM),yes)
 	$(NVCC) $(NVCC_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
 	@echo "✓ Advanced patterns compiled with NVSHMEM support"
-	@echo "  Run: nvshmemrun -np 4 ./nvshmem_advanced_8gpu$(SUFFIX)"
+	@echo "  Run: nvshmemrun -np 4 ./nvshmem_advanced_multigpu$(SUFFIX)"
 else
 	$(NVCC) $(NVCC_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"

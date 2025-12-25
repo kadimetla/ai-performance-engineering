@@ -1,8 +1,7 @@
-"""Optimized KV-cache benchmark switching to NVFP4 block scaling when available."""
+"""Optimized KV-cache benchmark using NVFP4 block scaling."""
 
 from __future__ import annotations
 
-import sys
 from typing import Optional
 
 import torch
@@ -28,33 +27,17 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
             else None
         )
         self.nvfp4_active = False
-        self._nvfp4_skip_reason: Optional[str] = None
         self.output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
-        preferred_recipe = self.fp8_recipe
-        # Use NVFP4 when available; otherwise fall back to the baseline recipe.
-        if TE_AVAILABLE and self.nvfp4_recipe is not None and is_nvfp4_available():
-            preferred_recipe = self.nvfp4_recipe
-        elif self.nvfp4_recipe is not None:
-            self._nvfp4_skip_reason = (
-                f"Transformer Engine not available: {TE_IMPORT_ERROR}"
-                if not TE_AVAILABLE
-                else "NVFP4 kernels unavailable on this hardware/driver."
-            )
-            print(f"[NVFP4] Falling back to FP8 recipe: {self._nvfp4_skip_reason}", file=sys.stderr, flush=True)
-
-        try:
-            self._setup_with_recipe(preferred_recipe)
-            self.nvfp4_active = preferred_recipe is self.nvfp4_recipe
-        except Exception as exc:
-            if preferred_recipe is self.nvfp4_recipe and self._fallback_recipe is not None:
-                self._nvfp4_skip_reason = f"NVFP4 setup failed: {exc}"
-                print(f"[NVFP4] Falling back to FP8 recipe: {self._nvfp4_skip_reason}", file=sys.stderr, flush=True)
-                self._setup_with_recipe(self._fallback_recipe)
-                self.nvfp4_active = False
-            else:
-                raise
+        if not TE_AVAILABLE:
+            raise RuntimeError(f"Transformer Engine not available: {TE_IMPORT_ERROR}")
+        if self.nvfp4_recipe is None:
+            raise RuntimeError("NVFP4 recipe not available in this Transformer Engine version")
+        if not is_nvfp4_available():
+            raise RuntimeError("NVFP4 kernels unavailable on this hardware/driver.")
+        self._setup_with_recipe(self.nvfp4_recipe)
+        self.nvfp4_active = True
 
     def validate_result(self) -> Optional[str]:
         return super().validate_result()
@@ -64,9 +47,9 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
             raise RuntimeError("Benchmark not initialized")
         reset_cache(self.cache)
         offset = 0
-        recipe = self.runtime_recipe if self.nvfp4_active else self.fp8_recipe
+        recipe = self.runtime_recipe
         if recipe is None:
-            raise RuntimeError("No NVFP4/FP8 recipe available for benchmark")
+            raise RuntimeError("No NVFP4 recipe available for benchmark")
         with te_autocast(enabled=True, recipe=recipe):
             for prefill in self.prefill_inputs:
                 _ = self.model(prefill, self.cache, offset)
@@ -103,7 +86,10 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return NVFP4-specific metrics."""
-        metrics = super().get_custom_metrics() or {}
+        metrics = super().get_custom_metrics()
+        if metrics is None:
+            raise RuntimeError("Base KV-cache metrics missing for NVFP4 benchmark")
+        metrics = dict(metrics)
         metrics.update({
             "kv_cache.nvfp4_active": 1.0 if self.nvfp4_active else 0.0,
             "kv_cache.compression_ratio": 4.0 if self.nvfp4_active else 2.0,  # NVFP4=4x, FP8=2x

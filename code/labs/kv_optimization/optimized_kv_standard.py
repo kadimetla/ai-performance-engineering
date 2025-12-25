@@ -43,6 +43,8 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
         max_seq_length: int = 8192,
         use_fp8: bool = True,
         use_fp4: bool = False,
+        active_layers: int = 16,
+        num_decode_steps: int = 256,
     ):
         super().__init__()
         self.batch_size = batch_size
@@ -50,25 +52,33 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.max_seq_length = max_seq_length
+        if active_layers > num_layers:
+            raise ValueError("active_layers must be <= num_layers")
+        if num_decode_steps > max_seq_length:
+            raise ValueError("num_decode_steps must be <= max_seq_length")
         self.use_fp8 = use_fp8
         self.use_fp4 = use_fp4
+        self.active_layers = active_layers
+        self.num_decode_steps = num_decode_steps
         self._last_metrics: Dict[str, Any] = {}
         self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
-        # Determine precision
-        if use_fp4 and hasattr(torch, 'float4_e2m1fn'):
+        # Determine precision (fail fast if requested dtype is unavailable).
+        if use_fp4:
+            if not hasattr(torch, "float4_e2m1fn"):
+                raise RuntimeError("FP4 requested but torch.float4_e2m1fn is unavailable")
             self.cache_dtype = torch.float4_e2m1fn
             self.bytes_per_element = 0.5
             compression_ratio = 4
-        elif use_fp8 and hasattr(torch, 'float8_e4m3fn'):
+        elif use_fp8:
+            if not hasattr(torch, "float8_e4m3fn"):
+                raise RuntimeError("FP8 requested but torch.float8_e4m3fn is unavailable")
             self.cache_dtype = torch.float8_e4m3fn
             self.bytes_per_element = 1
             compression_ratio = 2
         else:
-            self.cache_dtype = torch.bfloat16
-            self.bytes_per_element = 2
-            compression_ratio = 1
+            raise RuntimeError("Optimized KV cache requires FP8 or FP4 compression")
 
         self.precision_label = str(self.cache_dtype).split(".")[-1]
         memory_per_token = num_layers * 2 * num_heads * head_dim * self.bytes_per_element
@@ -77,9 +87,6 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
         logger.info(f"Optimized KV Cache ({self.cache_dtype})")
         logger.info(f"  Compression: {compression_ratio}×")
         logger.info(f"  Estimated memory: {total_memory_gb:.2f} GB")
-
-    def _resolve_device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def setup(self):
         torch.manual_seed(42)
@@ -123,25 +130,25 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
         layer_idx: int,
         k: torch.Tensor,
         v: torch.Tensor,
+        pos: int,
         batch_indices: Optional[torch.Tensor] = None
     ):
         """Append K/V with compression."""
-        if batch_indices is None:
-            batch_indices = torch.arange(self.batch_size, device=self.device)
+        if batch_indices is not None:
+            raise RuntimeError("Optimized KV cache expects full-batch appends")
+        if pos >= self.max_seq_length:
+            raise RuntimeError("KV cache overflow in optimized append")
         
         # Quantize and store
         k_scale = self._compute_scale(k)
         v_scale = self._compute_scale(v)
         k_quantized = (k * k_scale).to(self.cache_dtype)
         v_quantized = (v * v_scale).to(self.cache_dtype)
-        
-        for i, batch_idx in enumerate(batch_indices):
-            pos = self.seq_lengths[batch_idx].item()
-            self.k_scales[layer_idx, pos] = k_scale
-            self.v_scales[layer_idx, pos] = v_scale
-            self.kv_cache[batch_idx, layer_idx, 0, :, pos] = k_quantized[i]
-            self.kv_cache[batch_idx, layer_idx, 1, :, pos] = v_quantized[i]
-            self.seq_lengths[batch_idx] += 1
+
+        self.k_scales[layer_idx, pos] = k_scale
+        self.v_scales[layer_idx, pos] = v_scale
+        self.kv_cache[:, layer_idx, 0, :, pos].copy_(k_quantized)
+        self.kv_cache[:, layer_idx, 1, :, pos].copy_(v_quantized)
     
     def get_kv(
         self,
@@ -166,7 +173,8 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
         """Benchmark compressed KV cache."""
         import time
 
-        num_decode_steps = 100
+        num_decode_steps = self.num_decode_steps
+        self.seq_lengths.zero_()
 
         self._synchronize()
         start = time.perf_counter()
@@ -178,16 +186,17 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
             )
             new_v = torch.randn_like(new_k)
 
-            for layer_idx in range(min(4, self.num_layers)):
-                self.append_kv(layer_idx, new_k, new_v)
+            if not torch.equal(self.seq_lengths, self.seq_lengths[0].expand_as(self.seq_lengths)):
+                raise RuntimeError("Optimized KV cache expects uniform sequence lengths")
+            pos = int(self.seq_lengths[0].item())
+            for layer_idx in range(self.active_layers):
+                self.append_kv(layer_idx, new_k, new_v, pos=pos)
+            self.seq_lengths += 1
 
         self._synchronize()
         elapsed = time.perf_counter() - start
 
-        if torch.cuda.is_available():
-            memory_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
-        else:
-            memory_gb = 0.0
+        memory_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
         tokens_per_sec = (self.batch_size * num_decode_steps) / elapsed
 
         logger.info(f"Throughput: {tokens_per_sec:.2f} tokens/sec")
@@ -255,6 +264,8 @@ def run_benchmark(
     max_seq_length: int = 8192,
     use_fp8: bool = True,
     use_fp4: bool = False,
+    active_layers: int = 16,
+    num_decode_steps: int = 256,
     profile: str = "none",
     **kwargs
 ) -> Dict[str, Any]:
@@ -266,6 +277,8 @@ def run_benchmark(
         max_seq_length=max_seq_length,
         use_fp8=use_fp8,
         use_fp4=use_fp4,
+        active_layers=active_layers,
+        num_decode_steps=num_decode_steps,
     )
 
     config = BenchmarkConfig(

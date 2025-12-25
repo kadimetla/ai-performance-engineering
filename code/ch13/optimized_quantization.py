@@ -15,24 +15,21 @@ INT8_MAX = 127.0
 
 
 class Int8Linear(nn.Module):
-    """INT8 static-activation / static-weight linear using torch._int_mm."""
+    """INT8 dynamic-activation / static-weight linear using torch._int_mm."""
 
-    def __init__(self, weight: torch.Tensor, bias: Optional[torch.Tensor], input_scale: torch.Tensor) -> None:
+    def __init__(self, weight: torch.Tensor, bias: Optional[torch.Tensor]) -> None:
         super().__init__()
         if not hasattr(torch, "_int_mm"):
             raise RuntimeError("torch._int_mm is required for INT8 quantization benchmark")
         if weight.dim() != 2:
             raise RuntimeError("Expected 2D weight for INT8 linear")
-        if input_scale is None:
-            raise RuntimeError("Static input scale must be provided for INT8 linear")
 
-        weight_scale = torch.clamp(weight.abs().max() / INT8_MAX, min=1e-8)
-        weight_q = torch.clamp((weight / weight_scale).round(), -INT8_MAX, INT8_MAX)
+        weight_scale = torch.clamp(weight.abs().amax(dim=1) / INT8_MAX, min=1e-8)
+        weight_q = torch.clamp((weight / weight_scale[:, None]).round(), -INT8_MAX, INT8_MAX)
         weight_int8_t = weight_q.to(torch.int8).t().contiguous()
 
         self.register_buffer("weight_scale", weight_scale.detach())
         self.register_buffer("weight_int8_t", weight_int8_t)
-        self.register_buffer("input_scale", input_scale.detach())
         if bias is not None:
             self.register_buffer("bias", bias.detach().clone())
         else:
@@ -45,9 +42,10 @@ class Int8Linear(nn.Module):
             raise RuntimeError("torch._int_mm requires M > 16")
         if x.size(1) % 8 != 0 or self.weight_int8_t.size(0) % 8 != 0:
             raise RuntimeError("torch._int_mm requires K and N to be multiples of 8")
-        x_q = torch.clamp((x / self.input_scale).round(), -INT8_MAX, INT8_MAX).to(torch.int8)
+        input_scale = torch.clamp(x.abs().amax() / INT8_MAX, min=1e-8)
+        x_q = torch.clamp((x / input_scale).round(), -INT8_MAX, INT8_MAX).to(torch.int8)
         out_int32 = torch._int_mm(x_q, self.weight_int8_t)
-        output = out_int32.float() * (self.input_scale * self.weight_scale)
+        output = out_int32.float() * (input_scale * self.weight_scale)
         if self.bias is not None:
             output = output + self.bias
         return output
@@ -62,12 +60,10 @@ class Int8MLP(nn.Module):
         bias1: Optional[torch.Tensor],
         weight2: torch.Tensor,
         bias2: Optional[torch.Tensor],
-        input_scale1: torch.Tensor,
-        input_scale2: torch.Tensor,
     ) -> None:
         super().__init__()
-        self.fc1 = Int8Linear(weight1, bias1, input_scale1)
-        self.fc2 = Int8Linear(weight2, bias2, input_scale2)
+        self.fc1 = Int8Linear(weight1, bias1)
+        self.fc2 = Int8Linear(weight2, bias2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc1(x)
@@ -128,18 +124,11 @@ class OptimizedQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
         self.data = self.data_fp32
 
-        with torch.no_grad():
-            hidden_fp32 = torch.relu(self.model[0](self.data_fp32))
-            input_scale1 = torch.clamp(self.data_fp32.abs().max() / INT8_MAX, min=1e-8)
-            input_scale2 = torch.clamp(hidden_fp32.abs().max() / INT8_MAX, min=1e-8)
-
         self.int8_model = Int8MLP(
             self.model[0].weight,
             self.model[0].bias,
             self.model[2].weight,
             self.model[2].bias,
-            input_scale1,
-            input_scale2,
         ).to(self.device)
         self.compiled_model = torch.compile(self.int8_model, mode="max-autotune")
         for _ in range(2):

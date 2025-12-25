@@ -54,16 +54,16 @@
       },
       "type": "python"
     },
-    "disaggregated_inference": {
-      "example": "disaggregated_inference",
+    "disaggregated_inference_multigpu": {
+      "example": "disaggregated_inference_multigpu",
       "metadata": {
         "best_memory_savings_pct": 0.0,
         "best_memory_savings_ratio": 1.0,
-        "best_optimization": "optimized_disaggregated_inference",
-        "best_optimization_file": "optimized_disaggregated_inference.py",
+        "best_optimization": "optimized_disaggregated_inference_multigpu",
+        "best_optimization_file": "optimized_disaggregated_inference_multigpu.py",
         "best_optimization_memory_mb": 274.7802734375,
         "best_optimization_speedup": 1.078556236971507,
-        "best_optimization_technique": "optimized_disaggregated_inference",
+        "best_optimization_technique": "optimized_disaggregated_inference_multigpu",
         "best_optimization_time_ms": 645.5138244628906,
         "optimization_goal": "speed"
       },

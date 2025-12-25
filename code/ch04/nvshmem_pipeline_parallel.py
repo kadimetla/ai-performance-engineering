@@ -10,7 +10,7 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 """
-Pipeline Parallelism with NVSHMEM for 8x B200
+Pipeline Parallelism with NVSHMEM for multi-GPU B200
 ==============================================
 
 Production-ready pipeline parallelism implementation using NVSHMEM/symmetric
@@ -24,7 +24,7 @@ This file implements advanced pipeline schedules optimized for Blackwell B200:
 5. Async activation transfers for compute/communication overlap
 
 Hardware Requirements:
-- 8x NVIDIA Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s)
+- >=2 NVIDIA Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s)
 - CUDA 13.0+, PyTorch 2.10+
 - torch.distributed.nn.SymmetricMemory support
 
@@ -35,13 +35,13 @@ Performance Targets:
 
 Usage:
     # 1F1B schedule
-    torchrun --nproc_per_node=8 nvshmem_pipeline_parallel.py --schedule 1f1b
+    torchrun --nproc_per_node=<num_gpus> nvshmem_pipeline_parallel.py --schedule 1f1b
 
     # Interleaved pipeline
-    torchrun --nproc_per_node=8 nvshmem_pipeline_parallel.py --schedule interleaved
+    torchrun --nproc_per_node=<num_gpus> nvshmem_pipeline_parallel.py --schedule interleaved
 
     # Virtual pipeline stages
-    torchrun --nproc_per_node=8 nvshmem_pipeline_parallel.py --schedule virtual
+    torchrun --nproc_per_node=<num_gpus> nvshmem_pipeline_parallel.py --schedule virtual
 
 Educational Notes:
 ------------------

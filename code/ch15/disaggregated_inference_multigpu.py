@@ -64,7 +64,7 @@ def get_architecture_info():
         "features": _ARCH_CFG.config.get("features", []),
     }
 
-"""disaggregated_inference.py
+"""disaggregated_inference_multigpu.py
 Chapter 15: Disaggregated Inference Architectures
 
 Simulated disaggregated prefill-decode benchmarking on Blackwell clusters."""

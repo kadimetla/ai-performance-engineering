@@ -164,7 +164,7 @@ export NCCL_ALGO=Tree,Ring,NVLS   # Use Tree, Ring, NVLS
 
 ### Hardware
 
-- 8x B200 GPUs
+- Multi-GPU NVIDIA GPUs
 - Full NVLink mesh (18 links @ 50 GB/s = 900 GB/s per GPU)
 - NVLS multicast support (24 channels)
 
@@ -209,7 +209,7 @@ fi)
 ## Related Documentation
 
 - \`docs/playbooks/nvlink_pcie_playbook.md\` - NCCL configuration guide
-- \`core/scripts/orchestrate_8xb200_load_test.sh\` - Load test orchestration
+- \`core/scripts/orchestrate_multigpu_load_test.sh\` - Load test orchestration
 - \`ch16/inference_server_load_test.py\` - Inference server implementation
 EOF
 

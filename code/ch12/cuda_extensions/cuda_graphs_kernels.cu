@@ -15,6 +15,7 @@ struct GraphCache {
     cudaStream_t stream = nullptr;
     int device = -1;
     int64_t num_elements = -1;
+    int iterations = -1;
 
     void reset() {
         if (exec != nullptr) {
@@ -97,7 +98,8 @@ void graph_replay(torch::Tensor data, int iterations) {
 
     bool needs_capture = (g_graph_cache.exec == nullptr) ||
                          (g_graph_cache.device != device_id) ||
-                         (g_graph_cache.num_elements != n);
+                         (g_graph_cache.num_elements != n) ||
+                         (g_graph_cache.iterations != iterations);
 
     if (needs_capture) {
         // Reset any previous cached graph/stream
@@ -108,9 +110,11 @@ void graph_replay(torch::Tensor data, int iterations) {
 
         try {
             CHECK_CUDA(cudaStreamBeginCapture(g_graph_cache.stream, cudaStreamCaptureModeGlobal));
-            kernel_a_kernel<<<num_blocks, threads_per_block, 0, g_graph_cache.stream>>>(data.data_ptr<float>(), n);
-            kernel_b_kernel<<<num_blocks, threads_per_block, 0, g_graph_cache.stream>>>(data.data_ptr<float>(), n);
-            kernel_c_kernel<<<num_blocks, threads_per_block, 0, g_graph_cache.stream>>>(data.data_ptr<float>(), n);
+            for (int i = 0; i < iterations; ++i) {
+                kernel_a_kernel<<<num_blocks, threads_per_block, 0, g_graph_cache.stream>>>(data.data_ptr<float>(), n);
+                kernel_b_kernel<<<num_blocks, threads_per_block, 0, g_graph_cache.stream>>>(data.data_ptr<float>(), n);
+                kernel_c_kernel<<<num_blocks, threads_per_block, 0, g_graph_cache.stream>>>(data.data_ptr<float>(), n);
+            }
             CHECK_CUDA(cudaGetLastError());
             CHECK_CUDA(cudaStreamEndCapture(g_graph_cache.stream, &graph));
 #if CUDART_VERSION >= 12000
@@ -125,6 +129,7 @@ void graph_replay(torch::Tensor data, int iterations) {
             CHECK_CUDA(cudaGraphDestroy(graph));
             g_graph_cache.device = device_id;
             g_graph_cache.num_elements = n;
+            g_graph_cache.iterations = iterations;
         } catch (...) {
             if (graph != nullptr) {
                 cudaGraphDestroy(graph);
@@ -140,9 +145,7 @@ void graph_replay(torch::Tensor data, int iterations) {
 
     {
         PROFILE_KERNEL_LAUNCH("graph_replay");
-        for (int i = 0; i < iterations; ++i) {
-            CHECK_CUDA(cudaGraphLaunch(g_graph_cache.exec, g_graph_cache.stream));
-        }
+        CHECK_CUDA(cudaGraphLaunch(g_graph_cache.exec, g_graph_cache.stream));
     }
     CHECK_CUDA(cudaStreamSynchronize(g_graph_cache.stream));
 }

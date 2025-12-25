@@ -1,8 +1,8 @@
 /**
- * NVSHMEM Advanced Examples for 4x Blackwell B200 GPUs
+ * NVSHMEM Advanced Examples for Multi-GPU Blackwell B200 Nodes
  * =====================================================
  * 
- * Comprehensive NVSHMEM 3.4+ examples for 4-GPU Blackwell configurations.
+ * Comprehensive NVSHMEM 3.4+ examples for multi-GPU Blackwell configurations.
  * 
  * NVSHMEM enables:
  * - Kernel-initiated communication (no CPU involvement)
@@ -23,15 +23,15 @@
  * Requirements:
  * - NVSHMEM 3.4+
  * - CUDA 13.0+
- * - 4x Blackwell B200 GPUs (or any multi-GPU system)
+ * - Blackwell B200 GPUs (or any multi-GPU system)
  * 
  * Compile:
- *   nvcc -O3 -std=c++17 -arch=sm_100 nvshmem_8gpu_examples.cu \\
+ *   nvcc -O3 -std=c++17 -arch=sm_100 nvshmem_multigpu_examples.cu \\
  *        -I$NVSHMEM_HOME/include -L$NVSHMEM_HOME/lib -lnvshmem \\
  *        -o nvshmem_examples
  * 
  * Run:
- *   nvshmemrun -np 4 ./nvshmem_examples
+ *   nvshmemrun -np <num_gpus> ./nvshmem_examples
  * 
  * Note: If NVSHMEM is not installed, this provides educational
  * value showing the patterns and API usage.
@@ -321,14 +321,14 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaSetDevice(device));
     
     if (my_pe == 0) {
-        printf("=== NVSHMEM Educational Examples for 4 GPUs ===\n");
+        printf("=== NVSHMEM Educational Examples for Multi-GPU ===\n");
         printf("Number of PEs: %d\n", n_pes);
         printf("Number of GPUs: %d\n", num_devices);
         
-        if (n_pes == 4) {
-            printf("✓ Optimal 4-PE configuration\n");
+        if (n_pes >= 2) {
+            printf("✓ Multi-PE configuration\n");
         } else {
-            printf("⚠ Running with %d PEs (examples optimized for 4)\n", n_pes);
+            printf("⚠ Running with %d PEs (examples optimized for multi-GPU)\n", n_pes);
         }
     }
     
@@ -353,7 +353,7 @@ int main(int argc, char **argv) {
     #else
     // Educational mode without NVSHMEM
     int my_pe = 0;
-    int n_pes = 4;
+    int n_pes = 2;
     
     printf("=== NVSHMEM Educational Examples (Conceptual Mode) ===\n");
     printf("NVSHMEM not compiled in. Showing API patterns...\n\n");
@@ -380,7 +380,7 @@ int main(int argc, char **argv) {
     printf("  NVSHMEM: Custom algorithms, kernel-initiated, ultra-low latency\n");
     printf("  NCCL: Standard collectives, heavily optimized, production training\n");
     printf("\n");
-    printf("4x B200 Performance Expectations:\n");
+    printf("Multi-GPU B200 Performance Expectations:\n");
     printf("  - Put/Get latency: <1 μs (4KB)\n");
     printf("  - Bandwidth: 800-900 GB/s per GPU pair\n");
     printf("  - AllReduce (custom): Competitive with NCCL for specific sizes\n");

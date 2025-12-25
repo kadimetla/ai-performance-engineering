@@ -86,8 +86,10 @@ class BaselineFP8StaticBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         with torch.no_grad():
             # Dynamic scaling overhead (not applied to quantization for output parity).
-            _ = self.x.abs().amax(dim=-1)
-            _ = self.static_linear.weight.abs().amax(dim=1)
+            input_amax = self.x.abs().amax(dim=-1)
+            weight_amax = self.static_linear.weight.abs().amax(dim=1)
+            _ = torch.clamp(input_amax / self.static_linear.fp8_max, min=1e-12)
+            _ = torch.clamp(weight_amax / self.static_linear.fp8_max, min=1e-12)
             self.output = self.static_linear(self.x)
         self._synchronize()
 

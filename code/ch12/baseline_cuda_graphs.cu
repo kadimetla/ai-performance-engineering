@@ -51,8 +51,8 @@ int main() {
       prop.major,
       prop.minor);
 
-  constexpr int N = 1 << 15;    // Small batch amplifies launch overhead.
-  constexpr int ITER = 20000;   // Number of graph replays for timing.
+  constexpr int N = 1 << 14;    // Smaller batch amplifies launch overhead.
+  constexpr int ITER = 20000;   // Total iterations for timing.
   const size_t bytes = N * sizeof(float);
 
   std::vector<float> host(N);
@@ -95,7 +95,7 @@ int main() {
   float total_ms = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
   std::printf(
-      "Baseline (separate launches): %.3f ms total, %.3f ms/iter\n",
+      "Baseline (separate launches): %.3f ms total, %.6f ms/iter\n",
       total_ms,
       total_ms / static_cast<float>(ITER));
 

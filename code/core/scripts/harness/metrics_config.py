@@ -219,7 +219,7 @@ CONFIG_BY_EXAMPLE: Dict[str, ProfilerOverrides] = {
             "sm__sass_data_bytes_mem_shared_op_st.sum",
         ],
     ),
-    "ch15_disaggregated_inference": _overrides_from_lists(
+    "ch15_disaggregated_inference_multigpu": _overrides_from_lists(
         ncu_metrics=[
             "sm__sass_thread_inst_executed_op_fp32_pred_on.sum",
             "sm__sass_thread_inst_executed_op_fp16_pred_on.sum",

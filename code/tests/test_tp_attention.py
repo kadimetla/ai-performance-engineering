@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from ch16.inference_serving_8xb200 import DemoCausalLM, TensorParallelAttention
+from ch16.inference_serving_multigpu import DemoCausalLM, TensorParallelAttention
 
 
 def _reference_attention(

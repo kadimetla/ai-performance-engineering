@@ -164,7 +164,7 @@ def run_distributed(rank: int, world_size: int, device: torch.device,
 
     if rank == 0 and world_size == 8:
         print("=" * 60)
-        print("8-GPU NVLink expectations:")
+        print("Multi-GPU NVLink expectations:")
         print("  AllReduce 1GB: 700-800 GB/s")
         print("  P2P: ~850 GB/s per GPU pair")
 

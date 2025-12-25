@@ -10,11 +10,11 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 """
-Production NVSHMEM Training Patterns for 8x B200
+Production NVSHMEM Training Patterns for multi-GPU B200
 ================================================
 
 Comprehensive production-ready training patterns using NVSHMEM and
-torch.distributed.nn.SymmetricMemory for latency-critical paths on 8 GPU
+torch.distributed.nn.SymmetricMemory for latency-critical paths on multi-GPU
 Blackwell clusters.
 
 This file demonstrates the most common and impactful NVSHMEM training patterns:
@@ -26,7 +26,7 @@ This file demonstrates the most common and impactful NVSHMEM training patterns:
 6. ZeRO-style sharding with NVSHMEM puts
 
 Hardware Requirements:
-- 8x NVIDIA Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s per pair)
+- >=2 NVIDIA Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s per pair)
 - CUDA 13.0+, PyTorch 2.10+, NVSHMEM 3.4+ or PyTorch SymmetricMemory
 
 Performance Targets:
@@ -36,22 +36,22 @@ Performance Targets:
 
 Usage:
     # Gradient buckets with ring AllReduce
-    torchrun --nproc_per_node=8 nvshmem_training_patterns.py --pattern gradient
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_patterns.py --pattern gradient
 
     # Hybrid FSDP + NVSHMEM parameter server
-    torchrun --nproc_per_node=8 nvshmem_training_patterns.py --pattern hybrid
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_patterns.py --pattern hybrid
 
     # Pipeline parallel with NVSHMEM handoff
-    torchrun --nproc_per_node=8 nvshmem_training_patterns.py --pattern pipeline
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_patterns.py --pattern pipeline
 
     # Tensor parallel activations
-    torchrun --nproc_per_node=8 nvshmem_training_patterns.py --pattern tensor_parallel
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_patterns.py --pattern tensor_parallel
 
     # ZeRO-style parameter sharding
-    torchrun --nproc_per_node=8 nvshmem_training_patterns.py --pattern zero
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_patterns.py --pattern zero
 
     # Run all patterns with benchmarks
-    torchrun --nproc_per_node=8 nvshmem_training_patterns.py --pattern all --benchmark
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_patterns.py --pattern all --benchmark
 
 All patterns gracefully degrade to NCCL-based fallbacks when NVSHMEM or symmetric
 memory is unavailable, providing runnable code for development on non-B200 hardware.
@@ -133,7 +133,7 @@ def nvshmem_available() -> bool:
 
 
 def init_process_group() -> Tuple[int, int, int]:
-    """Initialize NCCL process group for 8x GPU setup."""
+    """Initialize NCCL process group for multi-GPU setup."""
     setup_single_gpu_env()  # Auto-setup for single-GPU mode
     
     if not dist.is_initialized():

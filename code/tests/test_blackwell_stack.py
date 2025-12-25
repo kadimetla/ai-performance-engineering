@@ -26,17 +26,17 @@ except Exception:
     tl = None
 
 try:
-    from ch16.inference_serving_8xb200 import (
+    from ch16.inference_serving_multigpu import (
         DemoCausalLM,
         ShardedKVCacheManager,
-        InferenceServer8GPU,
+        InferenceServerMultiGPU,
         InferenceRequest,
     )
 except Exception as e:
     print(f"Warning: Could not import ch16 models: {e}")
     DemoCausalLM = None
     ShardedKVCacheManager = None
-    InferenceServer8GPU = None
+    InferenceServerMultiGPU = None
     InferenceRequest = None
 
 
@@ -390,7 +390,7 @@ def test_kv_cache_batched_attention_2gpu():
     if rank == 0:
         print(" Batched attention matches full-context forward")
         print(" Padding/masking logic validated")
-        print(" Head sharding across 2 GPUs validated")
+        print(" Head sharding across GPUs validated")
     
     # Cleanup
     for slot in slots:
@@ -400,14 +400,14 @@ def test_kv_cache_batched_attention_2gpu():
         dist.barrier()
 
 
-def test_inference_server_8gpu_distributed():
+def test_inference_server_multigpu_distributed():
     """
-    Full end-to-end test of InferenceServer8GPU with distributed execution.
+    Full end-to-end test of InferenceServerMultiGPU with distributed execution.
     Tests continuous batching, cache management, and throughput.
     """
-    print("\n=== Inference Server 8-GPU Distributed Test ===")
+    print("\n=== Inference Server Multi-GPU Distributed Test ===")
     
-    if InferenceServer8GPU is None or InferenceRequest is None or DemoCausalLM is None:
+    if InferenceServerMultiGPU is None or InferenceRequest is None or DemoCausalLM is None:
         print(" Skipping: ch16 models not available")
         return
     
@@ -423,29 +423,31 @@ def test_inference_server_8gpu_distributed():
             return
     
     world_size = dist.get_world_size()
-    if world_size != 8:
-        print(f" Skipping: Requires 8 GPUs, found {world_size}")
+    if world_size < 2:
+        print(f" Skipping: Requires >=2 GPUs, found {world_size}")
         return
     
     rank = dist.get_rank()
     
-    # Create demo model
+    # Create demo model (keep head sharding divisible by world_size)
+    num_heads = 4 * world_size
+    d_model = 64 * world_size
     model = DemoCausalLM(
         vocab_size=256,
-        d_model=128,
+        d_model=d_model,
         num_layers=4,
-        num_heads=8,
-        num_gpus=8,
+        num_heads=num_heads,
+        num_gpus=world_size,
         max_batch_size=32,
         max_seq_len=256,
     )
     
     # Create server
-    server = InferenceServer8GPU(
+    server = InferenceServerMultiGPU(
         model=model,
         num_layers=4,
-        d_model=128,
-        num_heads=8,
+        d_model=d_model,
+        num_heads=num_heads,
         max_batch_size=32,
         max_seq_len=256,
     )

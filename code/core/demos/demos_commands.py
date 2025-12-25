@@ -158,16 +158,10 @@ DEMOS: Dict[str, DemoSpec] = {
         description="Chapter 17 MoE topology-aware routing demo (non-benchmark).",
         launch_via=LaunchVia.PYTHON,
     ),
-    "labs-decode-4xgpu": DemoSpec(
-        name="labs-decode-4xgpu",
-        script_path=REPO_ROOT / "labs" / "decode_optimization" / "decode_4xgpu_demo.py",
-        description="Lab decode optimization: 4-GPU NVLink-C2C decode stress demo (torchrun required).",
-        launch_via=LaunchVia.TORCHRUN,
-    ),
-    "labs-decode-8xgpu": DemoSpec(
-        name="labs-decode-8xgpu",
-        script_path=REPO_ROOT / "labs" / "decode_optimization" / "decode_8xgpu_demo.py",
-        description="Lab decode optimization: 8-GPU NVLink-C2C decode stress demo (torchrun required).",
+    "labs-decode-multigpu": DemoSpec(
+        name="labs-decode-multigpu",
+        script_path=REPO_ROOT / "labs" / "decode_optimization" / "decode_multigpu_demo.py",
+        description="Lab decode optimization: multi-GPU NVLink-C2C decode stress demo (torchrun required).",
         launch_via=LaunchVia.TORCHRUN,
     ),
 }

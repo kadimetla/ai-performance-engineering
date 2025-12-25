@@ -34,7 +34,7 @@ class OptimizedAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.value: Optional[torch.Tensor] = None
         # Larger sizes to show tensor core optimization benefits
         self.batch_size = 16
-        self.seq_len = 512
+        self.seq_len = 1024
         self.hidden_dim = 1024
         self.num_heads = 16
         self.head_dim = self.hidden_dim // self.num_heads

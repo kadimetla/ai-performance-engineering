@@ -41,6 +41,8 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
         num_heads: int = 32,
         head_dim: int = 128,
         max_seq_length: int = 8192,
+        active_layers: int = 16,
+        num_decode_steps: int = 256,
     ):
         super().__init__()
         self.batch_size = batch_size
@@ -48,6 +50,12 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.max_seq_length = max_seq_length
+        if active_layers > num_layers:
+            raise ValueError("active_layers must be <= num_layers")
+        if num_decode_steps > max_seq_length:
+            raise ValueError("num_decode_steps must be <= max_seq_length")
+        self.active_layers = active_layers
+        self.num_decode_steps = num_decode_steps
         self._last_metrics: Dict[str, Any] = {}
         self.precision_label = "bf16"
         self.output: Optional[torch.Tensor] = None
@@ -59,10 +67,6 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
 
         logger.info(f"Baseline KV Cache (BF16)")
         logger.info(f"  Estimated memory: {total_memory_gb:.2f} GB")
-
-    def _resolve_device(self):
-        # Allow CPU fallback for environments without CUDA.
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def setup(self):
         """Initialize KV cache."""
@@ -92,17 +96,18 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
         layer_idx: int,
         k: torch.Tensor,
         v: torch.Tensor,
+        pos: int,
         batch_indices: Optional[torch.Tensor] = None
     ):
         """Append K/V to cache."""
         if batch_indices is None:
             batch_indices = torch.arange(self.batch_size, device=self.device)
+        if pos >= self.max_seq_length:
+            raise RuntimeError("KV cache overflow in baseline append")
 
         for i, batch_idx in enumerate(batch_indices):
-            pos = self.seq_lengths[batch_idx].item()
             self.kv_cache[batch_idx, layer_idx, 0, :, pos] = k[i]
             self.kv_cache[batch_idx, layer_idx, 1, :, pos] = v[i]
-            self.seq_lengths[batch_idx] += 1
 
     def get_kv(
         self,
@@ -120,7 +125,8 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
         import time
 
         # Simulate decoding
-        num_decode_steps = 100
+        num_decode_steps = self.num_decode_steps
+        self.seq_lengths.zero_()
 
         self._synchronize()
         start = time.perf_counter()
@@ -134,17 +140,18 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
             new_v = torch.randn_like(new_k)
 
             # Append to cache
-            for layer_idx in range(min(4, self.num_layers)):  # Test with 4 layers
-                self.append_kv(layer_idx, new_k, new_v)
+            if not torch.equal(self.seq_lengths, self.seq_lengths[0].expand_as(self.seq_lengths)):
+                raise RuntimeError("Baseline KV cache expects uniform sequence lengths")
+            pos = int(self.seq_lengths[0].item())
+            for layer_idx in range(self.active_layers):
+                self.append_kv(layer_idx, new_k, new_v, pos=pos)
+            self.seq_lengths += 1
 
         self._synchronize()
         elapsed = time.perf_counter() - start
 
         # Memory usage
-        if torch.cuda.is_available():
-            memory_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
-        else:
-            memory_gb = 0.0
+        memory_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
 
         tokens_per_sec = (self.batch_size * num_decode_steps) / elapsed
 
@@ -201,6 +208,8 @@ def run_benchmark(
     num_heads: int = 32,
     head_dim: int = 128,
     max_seq_length: int = 8192,
+    active_layers: int = 16,
+    num_decode_steps: int = 256,
     profile: str = "none",
     **kwargs
 ) -> Dict[str, Any]:
@@ -212,6 +221,8 @@ def run_benchmark(
         num_heads=num_heads,
         head_dim=head_dim,
         max_seq_length=max_seq_length,
+        active_layers=active_layers,
+        num_decode_steps=num_decode_steps,
     )
 
     config = BenchmarkConfig(

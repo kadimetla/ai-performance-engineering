@@ -110,12 +110,12 @@ def _ensure_triton_allocator():
 # TMA Persistent Matmul Kernel
 # ============================================================================
 
-BLOCK_M = 64
-BLOCK_N = 64
+BLOCK_M = 128
+BLOCK_N = 128
 BLOCK_K = 64
-GROUP_M = 8
-NUM_WARPS = 4
-NUM_STAGES = 4
+GROUP_M = 4
+NUM_WARPS = 8
+NUM_STAGES = 5
 
 @triton.jit
 def persistent_matmul_tma(
@@ -194,7 +194,11 @@ def run_optimized(M=1024, N=1024, K=1024):
     c = torch.empty((M, N), device="cuda", dtype=torch.float16)
 
     num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
-    grid = (num_sms,)
+    grid_m = (M + BLOCK_M - 1) // BLOCK_M
+    grid_n = (N + BLOCK_N - 1) // BLOCK_N
+    num_tiles = grid_m * grid_n
+    grid_sms = min(num_sms * 2, num_tiles)
+    grid = (grid_sms,)
 
     persistent_matmul_tma[grid](
         a, b, c,
@@ -204,7 +208,7 @@ def run_optimized(M=1024, N=1024, K=1024):
         c.stride(0), c.stride(1),
         BLOCK_M, BLOCK_N, BLOCK_K,
         GROUP_M=GROUP_M,
-        NUM_SMS=num_sms,
+        NUM_SMS=grid_sms,
         num_warps=NUM_WARPS,
         num_stages=NUM_STAGES,
     )
@@ -269,7 +273,11 @@ class PersistentMatmulTMABenchmark(VerificationPayloadMixin, BaseBenchmark):
         # installed in the active thread context every call.
         _ensure_triton_allocator()
         num_sms = torch.cuda.get_device_properties(self.device.index or 0).multi_processor_count
-        grid = (num_sms,)
+        grid_m = (self.M + BLOCK_M - 1) // BLOCK_M
+        grid_n = (self.N + BLOCK_N - 1) // BLOCK_N
+        num_tiles = grid_m * grid_n
+        grid_sms = min(num_sms * 2, num_tiles)
+        grid = (grid_sms,)
         persistent_matmul_tma[grid](
             self.a, self.b, self.c,
             self.M, self.N, self.K,
@@ -278,7 +286,7 @@ class PersistentMatmulTMABenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.c.stride(0), self.c.stride(1),
             BLOCK_M, BLOCK_N, BLOCK_K,
             GROUP_M=GROUP_M,
-            NUM_SMS=num_sms,
+            NUM_SMS=grid_sms,
             num_warps=NUM_WARPS,
             num_stages=NUM_STAGES,
         )

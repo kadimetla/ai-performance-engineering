@@ -83,21 +83,29 @@ class KVCacheAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
         self.scale = (self.head_dim**-0.5)
-        # TELayerNorm needs params_dtype too
+        # TELayerNorm needs params_dtype too.
         try:
             self.ln = layernorm_cls(hidden_dim, params_dtype=params_dtype, device=device)
-        except TypeError:
-            self.ln = layernorm_cls(hidden_dim)
-        # For TELinear, pass params_dtype and device to avoid dtype mismatch
+        except TypeError as exc:
+            raise TypeError("layernorm_cls must accept params_dtype and device") from exc
+        # For TELinear, pass params_dtype and device to avoid dtype mismatch.
         try:
-            self.qkv = linear_cls(hidden_dim, hidden_dim * 3, bias=True, 
-                                  params_dtype=params_dtype, device=device)
-            self.proj = linear_cls(hidden_dim, hidden_dim, bias=True,
-                                   params_dtype=params_dtype, device=device)
-        except TypeError:
-            # Fall back for standard nn.Linear which doesn't accept params_dtype
-            self.qkv = linear_cls(hidden_dim, hidden_dim * 3, bias=True)
-            self.proj = linear_cls(hidden_dim, hidden_dim, bias=True)
+            self.qkv = linear_cls(
+                hidden_dim,
+                hidden_dim * 3,
+                bias=True,
+                params_dtype=params_dtype,
+                device=device,
+            )
+            self.proj = linear_cls(
+                hidden_dim,
+                hidden_dim,
+                bias=True,
+                params_dtype=params_dtype,
+                device=device,
+            )
+        except TypeError as exc:
+            raise TypeError("linear_cls must accept params_dtype and device") from exc
 
     def forward(self, tokens: torch.Tensor, cache: KVCache, start_offset: int) -> torch.Tensor:
         """Compute attention for tokens and append K/V into cache."""

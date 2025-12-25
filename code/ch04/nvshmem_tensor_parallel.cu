@@ -234,7 +234,7 @@ __global__ void row_parallel_forward_nvshmem(
  * Each rank sends data to next rank and receives from previous rank.
  * After world_size-1 steps, each rank has the reduced result for its chunk.
  *
- * Performance: ~1500 GB/s bandwidth for large tensors on 8x B200.
+ * Performance: ~1500 GB/s bandwidth for large tensors on multi-GPU B200.
  */
 #ifdef USE_NVSHMEM
 __global__ void nvshmem_reduce_scatter_ring_kernel(
@@ -544,4 +544,3 @@ int main(int argc, char** argv) {
     
     return 0;
 }
-

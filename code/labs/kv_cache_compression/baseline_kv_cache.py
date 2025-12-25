@@ -41,12 +41,12 @@ class BaselineKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.device = resolve_device()
         self.tensor_dtype = torch.bfloat16
-        self.batch_size = 8
-        self.hidden_dim = 2048
-        self.num_heads = 16
-        self.prefill_seq = 2048
-        self.decode_seq = 16
-        self.decode_steps = 64
+        self.batch_size = 16
+        self.hidden_dim = 8192
+        self.num_heads = 64
+        self.prefill_seq = 4096
+        self.decode_seq = 64
+        self.decode_steps = 128
         self.prefill_inputs: List[torch.Tensor] = []
         self.decode_inputs: List[torch.Tensor] = []
         self.cache: Optional[KVCache] = None
@@ -55,7 +55,6 @@ class BaselineKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
             te_recipe.DelayedScaling(amax_history_len=16, amax_compute_algo="max") if TE_AVAILABLE else None
         )
         self.runtime_recipe = self.fp8_recipe
-        self._fallback_recipe = self.fp8_recipe
         self.output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
@@ -66,6 +65,7 @@ class BaselineKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError(f"Transformer Engine not available: {TE_IMPORT_ERROR}")
 
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         with quantized_model_init(enabled=True, recipe=recipe):
             self.model = KVCacheAttention(
                 hidden_dim=self.hidden_dim,
@@ -175,10 +175,11 @@ class BaselineKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return inference metrics."""
+        total_tokens = self.prefill_seq + self.decode_seq * self.decode_steps
         return {
-            "kv_cache.batch_size": float(getattr(self, 'batch_size', 0)),
-            "kv_cache.seq_len": float(getattr(self, 'seq_len', 0)),
-            "kv_cache.hidden_dim": float(getattr(self, 'hidden_dim', 0)),
+            "kv_cache.batch_size": float(self.batch_size),
+            "kv_cache.seq_len": float(total_tokens),
+            "kv_cache.hidden_dim": float(self.hidden_dim),
         }
 
     def get_optimization_goal(self) -> str:

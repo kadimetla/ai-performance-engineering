@@ -10,7 +10,7 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 """
-Distributed Data Structures with Symmetric Memory for 8x B200
+Distributed Data Structures with Symmetric Memory for multi-GPU B200
 ============================================================
 
 Production-ready distributed data structures using PyTorch 2.10
@@ -26,7 +26,7 @@ ultra-low latency access patterns on Blackwell B200:
 6. Lock-free ring buffer for producer-consumer patterns
 
 Hardware Requirements:
-- 8x NVIDIA Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s)
+- >=2 NVIDIA Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s)
 - CUDA 13.0+, PyTorch 2.10+
 - torch.distributed.nn.SymmetricMemory support
 
@@ -40,13 +40,13 @@ Usage:
     python symmetric_memory_data_structures.py --demo distributed_tensor
 
     # Parameter cache (LoRA adapters)
-    torchrun --nproc_per_node=8 symmetric_memory_data_structures.py --demo param_cache
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_data_structures.py --demo param_cache
 
     # Cross-GPU hash map
-    torchrun --nproc_per_node=8 symmetric_memory_data_structures.py --demo hashmap
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_data_structures.py --demo hashmap
 
     # All demos
-    torchrun --nproc_per_node=8 symmetric_memory_data_structures.py --demo all
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_data_structures.py --demo all
 
 Educational Notes:
 ------------------

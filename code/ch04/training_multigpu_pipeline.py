@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Complete 8x B200 GPU Training Pipeline with PyTorch 2.10.
+"""Complete multi-GPU B200 training pipeline with PyTorch 2.10.
 
 Chapter 4: Multi-GPU and Multi-Node Training
 
-Production-ready training pipeline optimized for 8x Blackwell B200 GPUs.
+Production-ready training pipeline optimized for multi-GPU Blackwell B200 nodes.
 Demonstrates all latest optimizations:
-- NCCL 2.28 with NVLS for 8-GPU collectives
-- Hybrid parallelism (TP=2/4, DP=4/2)
+- NCCL 2.28 with NVLS for multi-GPU collectives
+- Hybrid parallelism (TP/DP splits based on world size)
 - PyTorch 2.10 compiled autograd
 - Symmetric memory for low-latency communication
 - FP8 training (optional)
@@ -32,7 +32,7 @@ from pathlib import Path
 ======================================================
 
 Hardware Requirements:
-- 8x Blackwell B200 GPUs (1184 SMs, 1.44 TB HBM3e)
+- Multi-GPU Blackwell B200 nodes (HBM3e total scales with GPU count)
 - NVLink 5.0 (1800 GB/s per pair)
 - Optional: GB200/GB300 for Grace CPU features
 
@@ -42,11 +42,11 @@ Performance Targets:
 - Memory utilization: >80% of 1.44 TB
 
 Usage:
-    # For TP=2, DP=4 (recommended for 7-20B models)
-    torchrun --nproc_per_node=8 training_8xb200_pipeline.py --tp-size 2
+    # For TP=2 (recommended for 7-20B models)
+    torchrun --nproc_per_node=<num_gpus> training_multigpu_pipeline.py --tp-size 2
     
-    # For TP=4, DP=2 (recommended for 20-100B models)
-    torchrun --nproc_per_node=8 training_8xb200_pipeline.py --tp-size 4
+    # For TP=4 (recommended for 20-100B models)
+    torchrun --nproc_per_node=<num_gpus> training_multigpu_pipeline.py --tp-size 4
 
 
 Author: AI Performance Engineering Team
@@ -101,7 +101,7 @@ except ImportError:
 
 class TransformerBlock(nn.Module):
     """
-    Transformer block optimized for 8x B200.
+    Transformer block optimized for multi-GPU B200.
     Supports both TP and FSDP sharding.
     """
     def __init__(self, d_model: int = 4096, num_heads: int = 32, d_ff: int = 11008):
@@ -158,7 +158,7 @@ class TransformerBlock(nn.Module):
 class LlamaLikeModel(nn.Module):
     """
     7B-13B parameter model similar to Llama 2.
-    Optimized for 8x B200 training.
+    Optimized for multi-GPU B200 training.
     """
     def __init__(
         self,
@@ -204,23 +204,22 @@ class LlamaLikeModel(nn.Module):
 # Setup Functions
 # ============================================================================
 
-def setup_8xb200_distributed(tp_size: int = 2, dp_size: int = 4) -> Tuple:
+def setup_multigpu_distributed(tp_size: int = 2, dp_size: Optional[int] = None) -> Tuple:
     """
-    Setup distributed training optimized for 8x B200.
+    Setup distributed training optimized for multi-GPU B200 nodes.
     
     Args:
-        tp_size: Tensor parallel size (2 or 4)
-        dp_size: Data parallel size (4 or 2)
+        tp_size: Tensor parallel size (e.g., 1/2/4)
+        dp_size: Data parallel size (defaults to world_size // tp_size)
         
     Returns:
-        (rank, local_rank, world_size, device_mesh)
+        (rank, local_rank, world_size, device_mesh, dp_size)
     """
-    assert tp_size * dp_size == 8, f"tp_size * dp_size must equal 8, got {tp_size} * {dp_size}"
     
     # Get environment variables
     rank = int(os.environ.get("RANK", 0))
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 8))
+    world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count() or 1))
     
     # Initialize process group
     if not dist.is_initialized():
@@ -230,18 +229,35 @@ def setup_8xb200_distributed(tp_size: int = 2, dp_size: int = 4) -> Tuple:
     # Set device
     torch.cuda.set_device(local_rank)
     
-    # Configure NCCL for 8x B200
+    # Derive DP size if not provided
+    if dp_size is None:
+        if world_size % tp_size != 0:
+            raise ValueError(f"world_size ({world_size}) must be divisible by tp_size ({tp_size})")
+        dp_size = world_size // tp_size
+
+    if tp_size * dp_size != world_size:
+        raise ValueError(
+            f"tp_size * dp_size must equal world_size ({world_size}), got {tp_size} * {dp_size}"
+        )
+
+    # Configure NCCL for multi-GPU Blackwell
     if CUSTOM_CONFIGS_AVAILABLE:
-        configure_nccl_for_8xB200(num_channels=8, verbose=(rank == 0))
-        topology = detect_8xb200_topology()
-        if rank == 0 and topology.get("is_8xb200"):
-            print("8x B200 topology detected and optimized")
+        if world_size >= 8:
+            configure_nccl_for_8xB200(num_channels=8, verbose=(rank == 0))
+            topology = detect_8xb200_topology()
+            if rank == 0 and topology.get("is_8xb200"):
+                print("B200 multi-GPU topology detected and optimized")
+        else:
+            os.environ.setdefault("NCCL_ALGO", "Tree,Ring")
+            os.environ.setdefault("NCCL_NCHANNELS_PER_NET_PEER", "8")
+            os.environ.setdefault("NCCL_MIN_NCHANNELS", "4")
+            os.environ.setdefault("NCCL_BUFFSIZE", "8388608")
     
     # Setup Grace CPU affinity if available
     if CUSTOM_CONFIGS_AVAILABLE:
         grace_info = detect_grace_cpu()
         if grace_info["is_grace"]:
-            setup_grace_affinity(gpu_id=local_rank, num_workers=8)
+            setup_grace_affinity(gpu_id=local_rank, num_workers=world_size)
             if rank == 0:
                 print("Grace CPU affinity configured")
     
@@ -254,14 +270,14 @@ def setup_8xb200_distributed(tp_size: int = 2, dp_size: int = 4) -> Tuple:
     
     if rank == 0:
         print(f"\n{'='*70}")
-        print("8x B200 Training Configuration")
+        print("Multi-GPU B200 Training Configuration")
         print(f"{'='*70}")
         print(f"Tensor Parallel: {tp_size}x")
         print(f"Data Parallel: {dp_size}x")
         print(f"Total GPUs: {world_size}")
         print(f"{'='*70}\n")
     
-    return rank, local_rank, world_size, device_mesh
+    return rank, local_rank, world_size, device_mesh, dp_size
 
 
 def apply_tensor_parallelism(model: nn.Module, device_mesh) -> nn.Module:
@@ -359,11 +375,12 @@ def train(
 ):
     """Main training loop with profiling."""
     model.train()
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
     
     # Create dummy dataset
     class DummyDataset(torch.utils.data.Dataset):
         def __len__(self):
-            return num_steps * batch_size * 8  # Enough for all ranks
+            return num_steps * batch_size * world_size  # Enough for all ranks
         
         def __getitem__(self, idx):
             return {
@@ -395,7 +412,7 @@ def train(
         step_time = time.time() - step_start
         
         if rank == 0 and step % 10 == 0:
-            tokens_per_sec = (batch_size * seq_len * 8) / step_time
+            tokens_per_sec = (batch_size * seq_len * world_size) / step_time
             print(f"Step {step:4d} | Loss: {loss:.4f} | "
                   f"Tokens/sec: {tokens_per_sec/1e6:.2f}M | "
                   f"Time: {step_time*1000:.1f}ms")
@@ -412,7 +429,7 @@ def train(
         print(f"{'='*70}")
         print(f"Total time: {total_time:.2f}s")
         print(f"Steps: {num_steps}")
-        print(f"Avg tokens/sec: {(num_steps * batch_size * seq_len * 8) / total_time / 1e6:.2f}M")
+        print(f"Avg tokens/sec: {(num_steps * batch_size * seq_len * world_size) / total_time / 1e6:.2f}M")
         print(f"{'='*70}")
 
 
@@ -422,10 +439,11 @@ def train(
 
 def main():
     # Check GPU requirements early
-    warn_optimal_gpu_count(8, "training_8xb200_pipeline.py")
-    require_min_gpus(2, "training_8xb200_pipeline.py")  # Need at least 2 GPUs for meaningful TP
+    if torch.cuda.is_available():
+        warn_optimal_gpu_count(torch.cuda.device_count(), "training_multigpu_pipeline.py")
+    require_min_gpus(2, "training_multigpu_pipeline.py")  # Need at least 2 GPUs for meaningful TP
     
-    parser = argparse.ArgumentParser(description="8x B200 Training Pipeline")
+    parser = argparse.ArgumentParser(description="Multi-GPU B200 Training Pipeline")
     parser.add_argument("--tp-size", type=int, default=2, choices=[1, 2, 4, 8],
                        help="Tensor parallel size")
     parser.add_argument("--num-layers", type=int, default=32,
@@ -444,10 +462,8 @@ def main():
     args = parser.parse_args()
     
     # Setup distributed
-    dp_size = 8 // args.tp_size
-    rank, local_rank, world_size, device_mesh = setup_8xb200_distributed(
-        tp_size=args.tp_size,
-        dp_size=dp_size
+    rank, local_rank, world_size, device_mesh, dp_size = setup_multigpu_distributed(
+        tp_size=args.tp_size
     )
     
     # Create model

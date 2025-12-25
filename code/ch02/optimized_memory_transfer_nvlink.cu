@@ -696,7 +696,7 @@ int main() {
     }
     
     printf("\n=== Hardware-Specific Optimizations ===\n");
-    printf("8x B200:       ch04/training_8xb200_pipeline.py\n");
+    printf("Multi-GPU:     ch04/training_multigpu_pipeline.py\n");
     printf("GB200/GB300:   ch04/gb200_grace_numa_optimization.py\n");
     printf("NCCL Config:   ch04/nccl_blackwell_config.py\n");
     printf("Inference:     ch16/inference_optimizations_blackwell.py\n");

@@ -209,7 +209,7 @@ def setup_grace_affinity(
     on the same NUMA node as the GPU for optimal NVLink-C2C performance.
     
     Args:
-        gpu_id: GPU device ID (0-7 for 8x B200)
+        gpu_id: GPU device ID (0-(num_gpus-1))
         num_workers: Number of data loading workers
         verbose: Print configuration details
         
@@ -473,7 +473,7 @@ def print_grace_system_info() -> None:
         print("  - Optimal for CPU preprocessing + GPU compute")
         
         if info["gpus"] == 8:
-            print("\n8x B200 Configuration:")
+            print("\nB200 multi-GPU Configuration:")
             print("  - Total: 1184 SMs, 1.44 TB HBM3e")
             print("  - GPU-GPU: 1800 GB/s NVLink 5.0")
             print("  - Aggregate: 62.4 TB/s bandwidth")

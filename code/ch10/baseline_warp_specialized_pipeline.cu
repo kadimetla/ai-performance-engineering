@@ -89,7 +89,7 @@ void run_baseline(int tiles) {
     cudaMemcpy(d_B, h_B.data(), bytes, cudaMemcpyHostToDevice);
 
     dim3 block(THREADS_PER_BLOCK);
-    dim3 grid(std::min(tiles, 64));
+    dim3 grid(std::min(tiles, 128));
     size_t shared_bytes = 3 * TILE_ELEMS * sizeof(float);
 
     cudaEvent_t start, stop;
@@ -127,7 +127,7 @@ void run_baseline(int tiles) {
 } // namespace
 
 int main() {
-    int tiles = 128;
+    int tiles = 512;
     run_baseline(tiles);
     return 0;
 }

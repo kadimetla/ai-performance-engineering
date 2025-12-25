@@ -1,9 +1,9 @@
 """
-8x B200 GPU Inference Serving with Continuous Batching
-=======================================================
+Multi-GPU B200 Inference Serving with Continuous Batching
+==========================================================
 
-Production-ready inference serving for 8x B200 GPUs demonstrating:
-- Tensor parallel attention (8-way split)
+Production-ready inference serving for multi-GPU B200 nodes demonstrating:
+- Tensor parallel attention (N-way split)
 - Continuous batching across GPUs
 - Dynamic KV cache management with paged storage
 - Request routing and load balancing
@@ -19,15 +19,15 @@ Performance Optimizations:
 - Pre-allocated page reconstruction: optimized cache reads
 - Sequence bucketing: 5-10% efficiency improvement
 
-Performance Targets (8x B200):
-- Throughput: ~0.5M tokens/second aggregate (directional target; tune per model)
+Performance Targets (multi-GPU B200):
+- Throughput: scales with GPU count (directional target; tune per model)
 - Latency: <10ms per token (first token)
 - Batch size: 128-512 concurrent requests
 - Context: up to 16K tokens per request
 - Expected 60-75% latency reduction vs baseline
 
 Hardware:
-- 8x B200 GPUs (1.44 TB total memory)
+- B200 GPUs (total memory scales with GPU count)
 
 - NVLink 5 (~1.8 TB/s per GPU, bidirectional)
 - NCCL 2.28 + NVLS for optimal collectives
@@ -35,7 +35,7 @@ Hardware:
 Requirements:
 - PyTorch 2.10+
 - CUDA 13.0+
-- 8 GPUs (Blackwell recommended)
+- >=2 GPUs (Blackwell recommended)
 
 Error Recovery:
 - CacheExhaustedException: Graceful handling when page memory exhausted
@@ -291,13 +291,13 @@ class DemoTransformerLayer(nn.Module):
 # System Detection
 # ============================================================================
 
-def detect_8xb200():
-    """Detect if running on 8x B200 GPUs."""
+def detect_b200_multigpu(min_gpus: int = 2) -> bool:
+    """Detect if running on a multi-GPU B200 setup."""
     if not torch.cuda.is_available():
         return False
     
     num_gpus = torch.cuda.device_count()
-    if num_gpus != 8:
+    if num_gpus < min_gpus:
         return False
     
     props = torch.cuda.get_device_properties(0)
@@ -305,7 +305,6 @@ def detect_8xb200():
 
     return (
         props.major >= 10
-        and num_gpus == 8
         and memory_gb >= 180
     )
 
@@ -360,7 +359,7 @@ class RequestState:
         return self.is_complete or len(self.generated_tokens) >= self.request.max_new_tokens
 
 # ============================================================================
-# KV Cache Manager (8-GPU Sharded)
+# KV Cache Manager (Multi-GPU Sharded)
 # ============================================================================
 
 class ShardedKVCacheManager:
@@ -377,7 +376,7 @@ class ShardedKVCacheManager:
         head_dim: int,
         max_batch_size: int,
         max_seq_len: int,
-        num_gpus: int = 8,
+        num_gpus: int = 1,
         dtype: torch.dtype = torch.bfloat16,
         page_size: int = 128,
         enable_symmetric_memory: bool = False,
@@ -699,7 +698,7 @@ class ShardedKVCacheManager:
 
 class TensorParallelAttention(nn.Module):
     """
-    Multi-head attention with tensor parallelism across 8 GPUs.
+    Multi-head attention with tensor parallelism across multiple GPUs.
     Each GPU processes a subset of attention heads.
     """
     
@@ -707,7 +706,7 @@ class TensorParallelAttention(nn.Module):
         self,
         d_model: int,
         num_heads: int,
-        num_gpus: int = 8,
+        num_gpus: int = 1,
         *,
         max_batch_size: int,
         max_seq_len: int,
@@ -933,7 +932,7 @@ class _QueuedRequest:
 
 class ContinuousBatchScheduler:
     """
-    Continuous batching scheduler for 8-GPU inference.
+    Continuous batching scheduler for multi-GPU inference.
     
     Features:
     - Dynamic batching: add/remove requests on the fly
@@ -1111,9 +1110,9 @@ class ContinuousBatchScheduler:
 # Inference Server
 # ============================================================================
 
-class InferenceServer8GPU:
+class InferenceServerMultiGPU:
     """
-    Production inference server for 8x B200/B300 GPUs.
+    Production inference server for multi-GPU B200/B300 nodes.
     """
     
     def __init__(
@@ -1642,23 +1641,26 @@ class InferenceServer8GPU:
 
 def demo_continuous_batching():
     """
-    Demonstrate continuous batching on 8 GPUs.
+    Demonstrate continuous batching on multiple GPUs.
     """
-    print("=== 8-GPU Inference Serving Demo ===\n")
+    print("=== Multi-GPU Inference Serving Demo ===\n")
     
     # Check hardware
-    is_8xb200 = detect_8xb200()
+    is_b200_multigpu = detect_b200_multigpu()
     is_gb200_gb300 = detect_gb200_gb300()
     
-    if is_8xb200:
-        print("Detected: 8x B200 GPUs (1.44 TB total memory)")
+    if is_b200_multigpu:
+        total_memory_tb = (torch.cuda.get_device_properties(0).total_memory / (1024**4)) * torch.cuda.device_count()
+        print(f"Detected: B200 multi-GPU ({torch.cuda.device_count()} GPUs, ~{total_memory_tb:.2f} TB total memory)")
     if is_gb200_gb300:
         print("Detected: GB200/GB300 Grace-Blackwell Superchip")
     
-    if not is_8xb200:
-        print("⚠ This demo is optimized for 8x B200 GPUs")
+    if not is_b200_multigpu:
+        print("⚠ This demo is optimized for multi-GPU B200 nodes")
         print(f"  Found: {torch.cuda.device_count()} GPU(s)")
         print("  Continuing with available hardware...\n")
+
+    num_gpus = torch.cuda.device_count()
     
     # Create demo model (token embedding + MLP head)
     # In production, load your LLM checkpoint instead
@@ -1669,13 +1671,13 @@ def demo_continuous_batching():
         d_model=4096,
         num_layers=32,
         num_heads=64,
-        num_gpus=8,
+        num_gpus=num_gpus,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
     )
     
     # Create server
-    server = InferenceServer8GPU(
+    server = InferenceServerMultiGPU(
         model=model,
         num_layers=32,
         d_model=4096,
@@ -1706,36 +1708,43 @@ def demo_continuous_batching():
     server.serve_loop(duration_seconds=10.0)
     
     if server.rank == 0:
-        print("\n=== 8x B200 Performance Targets ===")
-        print("  Throughput: >8M tokens/second (aggregate)")
+        print("\n=== Multi-GPU Performance Targets ===")
+        print(f"  Throughput: >{num_gpus}M tokens/second (aggregate, directional)")
         print("  Latency: <10ms per token (P50)")
         print("  Batch size: 256-512 concurrent requests")
         print("  Scaling: 85-95% efficiency vs single GPU")
         
         print("\n=== Key Features ===")
         print("  Continuous batching (add/remove on the fly)")
-        print("  Tensor parallel attention (8-way split)")
+        print(f"  Tensor parallel attention ({num_gpus}-way split)")
         print("  Sharded KV cache across GPUs")
         print("  Priority-based scheduling")
         print("  Dynamic batch size adaptation")
         
         print("\n=== Monitoring ===")
-        print("  nvidia-smi dmon -s u -i 0,1,2,3,4,5,6,7")
+        print("  nvidia-smi dmon -s u -i 0,1,2,3  # adjust for your GPU count")
         print("  # Watch NVLink bandwidth utilization")
 
 def main():
     """Main entry point."""
-    print("8x B200 Inference Serving with Continuous Batching\n")
-    
-    # Check for 8 GPUs
-    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    
-    if num_gpus != 8:
-        print(f"⚠ This script requires 8 GPUs (found {num_gpus})")
-        print("\nUsage:")
-        print("  torchrun --nproc_per_node=8 ch16/inference_serving_8xb200.py")
+    print("Multi-GPU B200 Inference Serving with Continuous Batching\n")
+
+    if not torch.cuda.is_available():
+        print("⚠ CUDA is required for this demo")
         return
-    
+
+    num_gpus = torch.cuda.device_count()
+    if num_gpus < 2:
+        print(f"⚠ This demo requires >=2 GPUs (found {num_gpus})")
+        return
+
+    world_size_env = os.environ.get("WORLD_SIZE")
+    if world_size_env is None:
+        print("⚠ This demo must be launched with torchrun")
+        print("\nUsage:")
+        print(f"  torchrun --nproc_per_node={num_gpus} ch16/inference_serving_multigpu.py")
+        return
+
     # Run demo
     demo_continuous_batching()
 
@@ -1745,13 +1754,13 @@ if __name__ == "__main__":
 """
 Usage Examples:
 
-1. Basic 8-GPU inference serving:
-   torchrun --nproc_per_node=8 ch16/inference_serving_8xb200.py
+1. Basic multi-GPU inference serving:
+   torchrun --nproc_per_node=<num_gpus> ch16/inference_serving_multigpu.py
 
 2. Load actual model and serve:
    # Modify main() to load your LLM checkpoint
    # Example: model = torch.load("llama-70b.pt")
-   torchrun --nproc_per_node=8 ch16/inference_serving_8xb200.py
+   torchrun --nproc_per_node=<num_gpus> ch16/inference_serving_multigpu.py
 
 3. Production deployment:
    - Use with FastAPI or gRPC for request handling
@@ -1765,8 +1774,8 @@ Usage Examples:
    - Modify priority handling for your use case
    - Enable FP8 quantization for 2x throughput
 
-Expected Performance (8x B200):
-  - 8M+ tokens/second aggregate throughput
+Expected Performance (multi-GPU B200):
+  - ~1M tokens/second per GPU aggregate throughput
   - <10ms P50 latency per token
   - 85-95% GPU utilization
   - 256-512 concurrent requests
@@ -1775,7 +1784,7 @@ Expected Performance (8x B200):
 Key Optimizations:
   Tensor parallel attention (NVLink 5.0)
   Continuous batching (no idle time)
-  Sharded KV cache (1.44 TB total)
+  Sharded KV cache (total memory scales with GPU count)
   torch.compile (20-30% speedup)
   NCCL 2.28 with NVLS
   Priority scheduling

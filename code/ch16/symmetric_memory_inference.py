@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Symmetric Memory Inference Patterns for 8x B200.
+"""Symmetric Memory Inference Patterns for multi-GPU B200.
 
 Chapter 16: FP8 KV Cache and Symmetric Memory
 
@@ -22,9 +22,9 @@ All demos degrade to NCCL-based fallbacks when symmetric memory is not
 available so the file can be executed on developer machines.
 
 Usage:
-    torchrun --nproc_per_node=8 symmetric_memory_inference.py --demo kv
-    torchrun --nproc_per_node=8 symmetric_memory_inference.py --demo multi
-    torchrun --nproc_per_node=8 symmetric_memory_inference.py --demo speculative
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_inference.py --demo kv
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_inference.py --demo multi
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_inference.py --demo speculative
 """
 
 from __future__ import annotations

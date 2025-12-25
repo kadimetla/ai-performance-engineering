@@ -31,8 +31,8 @@ class OptimizedCudaGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.data = None
-        self.N = 1 << 20  # 1M elements - large enough for meaningful work
-        self.iterations = 500  # More iterations to amortize graph capture cost
+        self.N = 1 << 12  # Smaller buffers to make launch overhead dominant
+        self.iterations = 8000  # More iterations to emphasize launch overhead
         self._extension = None
         self._verify_input: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(
@@ -52,7 +52,7 @@ class OptimizedCudaGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize(self.device)
         # Warm up graph replay so capture/instantiation happens before measurement.
-        self._extension.graph_replay(self.data, 1)
+        self._extension.graph_replay(self.data, self.iterations)
         torch.cuda.synchronize()
         torch.manual_seed(42)
         if torch.cuda.is_available():

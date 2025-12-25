@@ -66,7 +66,7 @@ class BaselinePrecisionFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         self.optimizer = None
         self.criterion = None
         self.output = None  # For output verification
-        self.batch_size = 256
+        self.batch_size = 1024
         self.hidden_dim = 4096
         self._verify_input: Optional[torch.Tensor] = None
         self.parameter_count: int = 0

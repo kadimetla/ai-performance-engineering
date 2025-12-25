@@ -13,6 +13,7 @@ namespace cg = cooperative_groups;
 namespace {
 constexpr int TILE_SIZE = 64;
 constexpr int TILE_ELEMS = TILE_SIZE * TILE_SIZE;
+constexpr int PIPELINE_STAGES = 2;
 constexpr int WARPS_PER_BLOCK = 3;
 constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * 32;
 
@@ -39,68 +40,103 @@ __global__ void optimized_warp_specialized_kernel(const float* __restrict__ A_gl
     cg::thread_block cta = cg::this_thread_block();
 
     extern __shared__ float shared_mem[];
-    float* A_tile = shared_mem;
-    float* B_tile = A_tile + TILE_ELEMS;
-    float* C_tile = B_tile + TILE_ELEMS;
+    float* A_stage_base = shared_mem;
+    float* B_stage_base = A_stage_base + PIPELINE_STAGES * TILE_ELEMS;
+    float* C_stage_base = B_stage_base + PIPELINE_STAGES * TILE_ELEMS;
 
-    using ab_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, 1>;
-    using c_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, 1>;
-    __shared__ alignas(ab_state_t) unsigned char ab_state_bytes[sizeof(ab_state_t)];
-    __shared__ alignas(c_state_t) unsigned char c_state_bytes[sizeof(c_state_t)];
-    auto* ab_state = reinterpret_cast<ab_state_t*>(ab_state_bytes);
-    auto* c_state = reinterpret_cast<c_state_t*>(c_state_bytes);
+    using pipeline_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>;
+    __shared__ alignas(pipeline_state_t) unsigned char state_bytes[sizeof(pipeline_state_t)];
+    auto* state = reinterpret_cast<pipeline_state_t*>(state_bytes);
     if (threadIdx.x == 0) {
-        new (ab_state) ab_state_t();
-        new (c_state) c_state_t();
+        new (state) pipeline_state_t();
     }
     __syncthreads();
-    auto pipe_ab = cuda::make_pipeline(cta, ab_state);
-    auto pipe_c = cuda::make_pipeline(cta, c_state);
+    auto pipe = cuda::make_pipeline(cta, state);
 
     const int warp_id = threadIdx.x / warpSize;
     const int lane_id = threadIdx.x % warpSize;
     auto warp = cg::tiled_partition<32>(cta);
 
-    // Block-strided tiling so warps cooperate on the same tile.
-    for (int tile = blockIdx.x; tile < num_tiles; tile += gridDim.x) {
-        const size_t offset = static_cast<size_t>(tile) * TILE_ELEMS;
+    int stride = gridDim.x;
+    for (int stage = 0; stage < PIPELINE_STAGES; ++stage) {
+        int tile = blockIdx.x + stage * stride;
+        if (tile >= num_tiles) {
+            break;
+        }
+        size_t offset = static_cast<size_t>(tile) * TILE_ELEMS;
+        float* stage_a = A_stage_base + stage * TILE_ELEMS;
+        float* stage_b = B_stage_base + stage * TILE_ELEMS;
 
         if (warp_id == 0) {
-            pipe_ab.producer_acquire();
+            pipe.producer_acquire();
             cuda::memcpy_async(
                 warp,
-                A_tile,
+                stage_a,
                 A_global + offset,
                 cuda::aligned_size_t<16>(static_cast<size_t>(TILE_ELEMS) * sizeof(float)),
-                pipe_ab);
+                pipe);
             cuda::memcpy_async(
                 warp,
-                B_tile,
+                stage_b,
                 B_global + offset,
                 cuda::aligned_size_t<16>(static_cast<size_t>(TILE_ELEMS) * sizeof(float)),
-                pipe_ab);
-            pipe_ab.producer_commit();
+                pipe);
+            pipe.producer_commit();
         }
+    }
+    __syncthreads();
+
+    int tile_iter = 0;
+    for (int tile = blockIdx.x; tile < num_tiles; tile += stride, ++tile_iter) {
+        int stage = tile_iter % PIPELINE_STAGES;
+        float* A_tile = A_stage_base + stage * TILE_ELEMS;
+        float* B_tile = B_stage_base + stage * TILE_ELEMS;
+        float* C_tile = C_stage_base + stage * TILE_ELEMS;
+        size_t offset = static_cast<size_t>(tile) * TILE_ELEMS;
+
+        pipe.consumer_wait();
+        __syncthreads();
 
         if (warp_id == 1) {
-            // Ensure the shared C tile is free (store finished previous tile).
-            pipe_c.producer_acquire();
-
-            pipe_ab.consumer_wait();
             compute_full_tile(A_tile, B_tile, C_tile, lane_id);
-
-            pipe_ab.consumer_release();
-            // Publish computed C tile for the storer warp.
-            pipe_c.producer_commit();
         }
 
+        __syncthreads();
+
         if (warp_id == 2) {
-            pipe_c.consumer_wait();
             for (int idx = lane_id; idx < TILE_ELEMS; idx += warpSize) {
                 C_global[offset + idx] = C_tile[idx];
             }
-            pipe_c.consumer_release();
         }
+
+        __syncthreads();
+        pipe.consumer_release();
+        __syncthreads();
+
+        int next_tile = tile + PIPELINE_STAGES * stride;
+        if (next_tile < num_tiles) {
+            int next_stage = (tile_iter + PIPELINE_STAGES) % PIPELINE_STAGES;
+            float* next_a = A_stage_base + next_stage * TILE_ELEMS;
+            float* next_b = B_stage_base + next_stage * TILE_ELEMS;
+            size_t next_offset = static_cast<size_t>(next_tile) * TILE_ELEMS;
+            if (warp_id == 0) {
+                pipe.producer_acquire();
+                cuda::memcpy_async(
+                    warp,
+                    next_a,
+                    A_global + next_offset,
+                    cuda::aligned_size_t<16>(static_cast<size_t>(TILE_ELEMS) * sizeof(float)),
+                    pipe);
+                cuda::memcpy_async(
+                    warp,
+                    next_b,
+                    B_global + next_offset,
+                    cuda::aligned_size_t<16>(static_cast<size_t>(TILE_ELEMS) * sizeof(float)),
+                    pipe);
+                pipe.producer_commit();
+            }
+        }
+        __syncthreads();
     }
 }
 
@@ -121,8 +157,8 @@ void run_optimized(int tiles) {
     cudaMemcpy(d_B, h_B.data(), bytes, cudaMemcpyHostToDevice);
 
     dim3 block(THREADS_PER_BLOCK);
-    dim3 grid(std::min(tiles, 64));
-    size_t shared_bytes = 3 * TILE_ELEMS * sizeof(float);
+    dim3 grid(std::min(tiles, 128));
+    size_t shared_bytes = 3 * PIPELINE_STAGES * TILE_ELEMS * sizeof(float);
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
@@ -157,6 +193,6 @@ void run_optimized(int tiles) {
 }  // namespace
 
 int main() {
-    run_optimized(128);
+    run_optimized(512);
     return 0;
 }

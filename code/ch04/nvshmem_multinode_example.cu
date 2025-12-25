@@ -1,9 +1,9 @@
 /**
- * NVSHMEM Multi-Node Hierarchical Communication (8x B200 per node)
+ * NVSHMEM Multi-Node Hierarchical Communication (multi-GPU per node)
  * ================================================================
  *
  * Demonstrates how to compose NVSHMEM collectives across multiple nodes
- * using hierarchical patterns. Designed for clusters with 8x Blackwell
+ * using hierarchical patterns. Designed for clusters with multiple Blackwell
  * B200 GPUs per node connected via NVLink 5.0 (intra-node) and InfiniBand
  * HDR/NDR (inter-node).
  *
@@ -18,7 +18,7 @@
  *        -lnvshmem -o nvshmem_multinode_example
  *
  * Run:
- *   nvshmemrun -np 16 ./nvshmem_multinode_example --gpus-per-node 8
+ *   nvshmemrun -np 16 ./nvshmem_multinode_example --gpus-per-node <num_gpus>
  *
  * When NVSHMEM is unavailable this file still compiles and prints the
  * conceptual flow so it can be used for onboarding and documentation.

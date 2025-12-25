@@ -1,4 +1,4 @@
-"""4-GPU decode demo to stress NVLink-C2C throughput on B200 nodes.
+"""Multi-GPU decode demo to stress NVLink-C2C throughput on B200 nodes.
 
 This script is a multi-GPU demo/tool and is intentionally *not* a harness-comparable
 baseline/optimized benchmark pair.
@@ -29,8 +29,17 @@ from core.harness.benchmark_harness import (  # noqa: E402
 from labs.decode_optimization.decode_common import DecodeBenchmark, DecodeConfig  # noqa: E402
 
 
+def _resolve_world_size() -> int:
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA required for multi-GPU decode demo")
+    world_size = torch.cuda.device_count()
+    if world_size < 2:
+        raise RuntimeError("Multi-GPU decode demo requires >=2 GPUs")
+    return world_size
+
+
 class MultiGPUDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Torchrun-only entry that launches this script across 4 GPUs."""
+    """Torchrun-only entry that launches this script across available GPUs."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -43,9 +52,10 @@ class MultiGPUDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
         raise RuntimeError("SKIPPED: requires >=2 GPUs (torchrun path only)")
 
     def get_config(self) -> BenchmarkConfig:
+        world_size = _resolve_world_size()
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=4,
+            nproc_per_node=world_size,
             iterations=1,
             warmup=5,
             multi_gpu_required=True,
@@ -55,9 +65,9 @@ class MultiGPUDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def get_custom_metrics(self) -> Optional[dict]:
         """Return inference metrics."""
         return {
-            "decode_4xgpu.batch_size": float(getattr(self, 'batch_size', 0)),
-            "decode_4xgpu.seq_len": float(getattr(self, 'seq_len', 0)),
-            "decode_4xgpu.hidden_dim": float(getattr(self, 'hidden_dim', 0)),
+            "decode_multigpu.batch_size": float(getattr(self, 'batch_size', 0)),
+            "decode_multigpu.seq_len": float(getattr(self, 'seq_len', 0)),
+            "decode_multigpu.hidden_dim": float(getattr(self, 'hidden_dim', 0)),
         }
 
     def get_torchrun_spec(self, config: BenchmarkConfig | None = None) -> TorchrunLaunchSpec:
@@ -73,7 +83,7 @@ class MultiGPUDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark):
             },
             parse_rank0_only=True,
             multi_gpu_required=True,
-            name="optimized_decode_4xgpu",
+            name="optimized_decode_multigpu",
             config_arg_map={
                 "iterations": "--iters",
                 "warmup": "--warmup",
@@ -101,7 +111,7 @@ def _run_worker(iters: int, warmup: int) -> None:
         use_cuda_graphs=True,
         graph_full_iteration=True,
         use_torch_compile=True,
-        label="optimized_decode_4xgpu",
+        label="optimized_decode_multigpu",
     )
 
     bench = DecodeBenchmark(cfg)

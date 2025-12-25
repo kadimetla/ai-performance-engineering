@@ -1,4 +1,4 @@
-"""optimized_precisionfp8.py - AMP-based FP8 emulation benchmark."""
+"""optimized_precisionfp8.py - torchao FP8 training benchmark."""
 
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
-from torch.amp import autocast
-from torch.cuda.amp import GradScaler
+
+from torchao.float8.config import Float8LinearConfig, Float8LinearRecipeName
+from torchao.float8.float8_linear_utils import convert_to_float8_training
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
@@ -43,15 +44,8 @@ class SimpleModel(nn.Module):
         return x
 
 
-def fake_fp8_cast(tensor: torch.Tensor) -> torch.Tensor:
-    """Quantize activations to float8 if supported, else fall back to fp16."""
-    if hasattr(torch, "float8_e4m3fn"):
-        return tensor.to(torch.float8_e4m3fn).to(torch.float16)
-    return tensor.to(torch.float16)
-
-
 class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Optimized FP8 path using PyTorch AMP + fake FP8 activations."""
+    """Optimized FP8 path using torchao Float8Linear training kernels."""
 
     signature_equivalence_group = "ch13_precisionfp8_precision"
     signature_equivalence_ignore_fields = ("precision_flags",)
@@ -60,14 +54,16 @@ class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
+        self.inputs_fp16: Optional[torch.Tensor] = None
         self.targets: Optional[torch.Tensor] = None
+        self.targets_fp16: Optional[torch.Tensor] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.criterion: Optional[nn.Module] = None
-        self.scaler: Optional[GradScaler] = None
         self.output: Optional[torch.Tensor] = None  # For output verification
         self._verify_input: Optional[torch.Tensor] = None
+        self._verify_input_fp16: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
-        self.batch_size = 256
+        self.batch_size = 1024
         self.hidden_dim = 4096
         tokens = self.batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(
@@ -85,7 +81,9 @@ class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
             torch.cuda.manual_seed_all(42)
 
         # Harness provides seeding - creation order must match baseline
-        model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).train()
+        model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().train()
+        fp8_config = Float8LinearConfig.from_recipe_name(Float8LinearRecipeName.TENSORWISE)
+        model = convert_to_float8_training(model, config=fp8_config)
         
         # Create inputs/targets in same order as baseline for verification
         self.inputs = torch.randn(
@@ -98,18 +96,18 @@ class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
             self.batch_size,
             self.hidden_dim,
             device=self.device,
-            dtype=torch.float16,
+            dtype=torch.float32,
         )
         self._verify_input = self.inputs.detach().clone()
+        self._verify_input_fp16 = self._verify_input.to(torch.float16)
+        self.inputs_fp16 = self.inputs.to(torch.float16)
+        self.targets_fp16 = self.targets.to(torch.float16)
         
-        # Convert to FP16 for actual benchmark (this is the optimization)
-        model = model.half()
         self.model = model
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
-        self.scaler = GradScaler(enabled=False)
 
         # Warmup (will modify model weights, but output already saved)
         for _ in range(5):
@@ -122,26 +120,21 @@ class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def _train_step(self) -> None:
-        assert self.model and self.inputs is not None and self.targets is not None
-        assert self.optimizer and self.criterion and self.scaler is not None
+        assert self.model and self.inputs_fp16 is not None and self.targets_fp16 is not None
+        assert self.optimizer and self.criterion is not None
         self.optimizer.zero_grad(set_to_none=True)
-        fp8_inputs = fake_fp8_cast(self.inputs)
-        with autocast("cuda", dtype=torch.float16):
-            outputs = self.model(fp8_inputs)
-            loss = self.criterion(outputs, self.targets)
-        self.scaler.scale(loss).backward()
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        outputs = self.model(self.inputs_fp16)
+        loss = self.criterion(outputs, self.targets_fp16)
+        loss.backward()
+        self.optimizer.step()
 
     def benchmark_fn(self) -> None:
-        if self._verify_input is None:
+        if self._verify_input is None or self._verify_input_fp16 is None:
             raise RuntimeError("Verification input not initialized")
         with self._nvtx_range("optimized_precisionfp8"):
             self._train_step()
             with torch.no_grad():
-                fp8_inputs = fake_fp8_cast(self._verify_input)
-                with autocast("cuda", dtype=torch.float16):
-                    verify_out = self.model(fp8_inputs)
+                verify_out = self.model(self._verify_input_fp16)
                 self.output = verify_out.detach().float().clone()
         self._synchronize()
         if self.output is None:
@@ -165,10 +158,12 @@ class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         self.model = None
         self.inputs = None
+        self.inputs_fp16 = None
         self.targets = None
+        self.targets_fp16 = None
         self.optimizer = None
         self.criterion = None
-        self.scaler = None
+        self._verify_input_fp16 = None
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:

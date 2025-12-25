@@ -461,8 +461,8 @@ EXAMPLES: List[Example] = [
         timeout_seconds=900,
     ),
     _example(
-        name="ch15_disaggregated_inference",
-        path="ch15/disaggregated_inference.py",
+        name="ch15_disaggregated_inference_multigpu",
+        path="ch15/disaggregated_inference_multigpu.py",
         description="Disaggregated inference and pipeline parallel patterns.",
         tags=["ch15", "inference", "pipeline"],
         requires_modules=["torch", "numpy"],
@@ -499,7 +499,7 @@ EXAMPLES: List[Example] = [
     _example(
         name="ch16_inference_load_test",
         path="ch16/inference_server_load_test.py",
-        description="Synthetic load testing harness for 8x B200 server.",
+        description="Synthetic load testing harness for multi-GPU inference server.",
         tags=["ch16", "inference", "benchmark"],
         requires_modules=["torch", "numpy"],
         requires_cuda=True,

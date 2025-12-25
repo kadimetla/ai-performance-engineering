@@ -653,8 +653,8 @@ ENTRIES["ch15"] = chapter_entry(
         "Serve MoE models efficiently by pairing routing with optimized communication.",
     ],
     contents=[
-        ("`baseline_inference_monolithic.py`, `optimized_inference_monolithic.py`, `disaggregated_inference.py`", "Single-box inference loops that establish the baseline before disaggregation."),
-        ("`baseline_disaggregated_inference.py`, `optimized_disaggregated_inference.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py`", "Disaggregated pipelines modeling remote prefills, decode overlap, and NVLink pooling."),
+        ("`baseline_inference_monolithic.py`, `optimized_inference_monolithic.py`, `disaggregated_inference_multigpu.py`", "Single-box inference loops that establish the baseline before disaggregation."),
+        ("`baseline_disaggregated_inference_multigpu.py`, `optimized_disaggregated_inference_multigpu.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py`", "Disaggregated pipelines modeling remote prefills, decode overlap, and NVLink pooling."),
         ("`baseline_kv_cache_management.py`, `optimized_kv_cache_management.py`, `optimized_kv_cache_management_math.py`, `optimized_kv_cache_nvlink_pool.py`, `baseline_kv_cache_local_only.py`", "KV-cache orchestration utilities with local-only, math-only, and NVLink-pooled variants."),
         ("`baseline_continuous_batching.py`, `optimized_continuous_batching.py`", "Continuous batching scheduler demonstrating TTFT-aware queueing."),
         ("`baseline_moe_inference.py`, `optimized_moe_inference.py`", "Inference-specific MoE workloads that pair router load with communication control."),
@@ -662,12 +662,13 @@ ENTRIES["ch15"] = chapter_entry(
         ("`compare.py`, `requirements.txt`, `expectations_b200.json`, `Makefile`", "Harness entry and dependencies for inference-focused validation."),
     ],
     validation=[
-        "`python optimized_disaggregated_inference.py --profile minimal` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity.",
+        "`python -m cli.aisp bench run --targets ch15:disaggregated_inference_multigpu --profile minimal` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity.",
         "`python optimized_kv_cache_management.py --validate` confirms eviction + promotion policies keep decode latency within the budget.",
         "`python compare.py --examples continuous_batching` proves optimized scheduling increases tokens/sec vs naive queue draining.",
     ],
     notes=[
-        "`disaggregated_inference.py` can run purely in simulation mode; set `--simulate-network` when hardware isn't wired for NVLink pooling.",
+        "`disaggregated_inference_multigpu.py` can run purely in simulation mode; set `--simulate-network` when hardware isn't wired for NVLink pooling.",
+        "Set `AISP_DISAGG_WORLD_SIZE=<num_gpus>` to run the disaggregated pipeline on the desired GPU count (defaults to 4).",
         "`Makefile` wraps the MPI/UCX targets needed for the multi-node decode experiments.",
     ],
 )
@@ -686,7 +687,7 @@ ENTRIES["ch16"] = chapter_entry(
         "Simulate production loads (multi-node, MoE) while validating accuracy via perplexity checks.",
     ],
     contents=[
-        ("`inference_optimizations_blackwell.py`, `inference_profiling.py`, `inference_server_load_test.py`, `inference_serving_8xb200.py`", "Top-level orchestration scripts for profiling and load testing multi-GPU inference deployments."),
+        ("`inference_optimizations_blackwell.py`, `inference_profiling.py`, `inference_server_load_test.py`, `inference_serving_multigpu.py`", "Top-level orchestration scripts for profiling and load testing multi-GPU inference deployments."),
         ("`baseline_flash_sdp.py`, `optimized_flash_sdp.py`, `baseline_paged_attention.py`, `optimized_paged_attention.py`", "Attention kernels that compare naive implementations vs Flash/paged variants."),
         ("`baseline_piece_graphs.py`, `optimized_piece_graphs.py`, `baseline_regional_compilation.py`, `optimized_regional_compilation.py`", "Piecewise graph capture and regional compilation for stable low-latency decode."),
         ("`fp8_transformer_engine.py`, `test_fp8_quantization_real.py`, `symmetric_memory_inference.py`, `multi_gpu_validation.py`", "Serving-time FP8 and symmetric-memory validations to guarantee accuracy and NVLink efficiency."),

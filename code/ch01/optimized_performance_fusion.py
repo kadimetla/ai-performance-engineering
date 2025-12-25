@@ -63,6 +63,8 @@ class OptimizedPerformanceFusionBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.model = torch.nn.Sequential(
             torch.nn.Linear(self.hidden_dim, self.hidden_dim),
             torch.nn.ReLU(),
+            torch.nn.Linear(self.hidden_dim, self.hidden_dim),
+            torch.nn.ReLU(),
             torch.nn.Linear(self.hidden_dim, 10),
         ).to(self.device).eval()
         self.parameter_count = sum(p.numel() for p in self.model.parameters())

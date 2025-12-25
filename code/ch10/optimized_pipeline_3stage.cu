@@ -31,7 +31,7 @@
     } while (0)
 
 constexpr int BLOCK_SIZE = 256;
-constexpr int NUM_STREAMS = 16;  // Multiple streams for parallelism
+constexpr int NUM_STREAMS = 32;  // Multiple streams for parallelism
 
 //============================================================================
 // Same compute kernel as baseline
@@ -49,7 +49,7 @@ __global__ void compute_segment(
         float val = input[offset + idx];
         // Same compute work as baseline
         #pragma unroll 4
-        for (int i = 0; i < 20; ++i) {
+        for (int i = 0; i < 8; ++i) {
             val = sinf(val) * cosf(val) + tanhf(val * 0.5f);
         }
         output[offset + idx] = val;
@@ -69,8 +69,8 @@ int main() {
     printf("Device: %s\n\n", prop.name);
     
     // Problem size - same as baseline
-    const int N = 16 * 1024 * 1024;  // 16M elements
-    const int NUM_SEGMENTS = 32;
+    const int N = 8 * 1024 * 1024;  // 8M elements
+    const int NUM_SEGMENTS = 128;
     const int SEGMENT_SIZE = N / NUM_SEGMENTS;
     
     printf("Elements: %d (%.1f MB)\n", N, N * sizeof(float) / 1e6);

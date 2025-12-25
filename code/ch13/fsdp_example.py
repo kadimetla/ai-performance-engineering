@@ -97,13 +97,13 @@ class MyModel(nn.Module):
         x = self.norm(x)
         return self.output(x)
 
-def detect_8xb200():
-    """Detect if running on 8x B200 GPUs."""
+def detect_b200_multigpu(min_gpus: int = 2) -> bool:
+    """Detect if running on a multi-GPU B200 system."""
     if not torch.cuda.is_available():
         return False
     
     num_gpus = torch.cuda.device_count()
-    if num_gpus != 8:
+    if num_gpus < min_gpus:
         return False
     
     props = torch.cuda.get_device_properties(0)
@@ -113,7 +113,7 @@ def detect_8xb200():
     memory_gb = props.total_memory / (1024**3)
     
     is_blackwell = (major >= 10)
-    is_sm100_like = is_blackwell and (170 < memory_gb < 190) and num_gpus == 8
+    is_sm100_like = is_blackwell and (170 < memory_gb < 190)
     
     return is_sm100_like
 
@@ -268,48 +268,40 @@ def create_fsdp_model_pytorch29():
     
     return fsdp_model, rank, world_size
 
-def create_fsdp_model_8xb200(tp_size=2, model_size="7B"):
+def create_fsdp_model_multigpu(tp_size=2, model_size="7B"):
     """
-    Create FSDP model optimized for 8x B200 GPUs with hybrid parallelism.
-    
-    8x B200 Specifications:
-    - Total: 1184 SMs, 1.44 TB HBM3e, 62.4 TB/s aggregate bandwidth
-    - Per GPU: 148 SMs, 180 GB, 7.8 TB/s
-    - NVLink 5.0: 1800 GB/s bidirectional per GPU pair
-    
-    Recommended configurations:
-    - 7-20B params:  TP=2, DP=4 (balanced, most common)
-    - 20-50B params: TP=4, DP=2 (more model parallelism)
-    - 50-100B params: TP=8, DP=1 (maximum model parallelism)
-    
+    Create FSDP model optimized for multi-GPU B200-class systems with hybrid parallelism.
+
+    Recommended configurations (TP must divide world_size):
+    - Smaller models:  TP=2, DP=world_size/2 (balanced)
+    - Larger models:   Increase TP to reduce per-GPU memory pressure
+
     Args:
-        tp_size: Tensor parallel size (1, 2, 4, or 8)
-        model_size: Model size hint for configuration ("7B", "20B", "50B", "100B+")
+        tp_size: Tensor parallel size (must divide world_size)
+        model_size: Model size hint ("demo", "7B", "20B", "50B", "100B+")
     """
     if not FSDP_AVAILABLE:
         raise RuntimeError("FSDP is not available in this PyTorch build")
-    
+
     rank, world_size = setup_distributed()
-    
-    # Validate 8-GPU configuration
-    is_8xb200 = detect_8xb200()
+    if world_size < 2:
+        raise RuntimeError("Multi-GPU FSDP configuration requires >=2 GPUs")
+    if tp_size < 1 or world_size % tp_size != 0:
+        raise ValueError(f"tp_size must be >=1 and divide world_size ({world_size}), got {tp_size}")
+
+    is_b200_multigpu = detect_b200_multigpu(min_gpus=2)
     is_gb200_gb300 = detect_gb200_gb300()
-    
-    if world_size != 8:
-        if rank == 0:
-            print(f"WARNING: This function is optimized for 8 GPUs, but found {world_size}")
-            print("Proceeding with generic FSDP configuration")
-        return create_fsdp_model_pytorch29()
-    
+
     # Determine DP size
     dp_size = world_size // tp_size
-    
+
     if rank == 0:
         print("\n" + "=" * 80)
-        print("8x B200 Hybrid Parallel FSDP Configuration")
+        print("Multi-GPU Hybrid Parallel FSDP Configuration")
         print("=" * 80)
-        if is_8xb200:
-            print("Detected: 8x B200 GPUs (1.44 TB total memory)")
+        if is_b200_multigpu:
+            mem_per_gpu_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            print(f"Detected: B200-class GPUs ({world_size} GPUs, {mem_per_gpu_gb * world_size:.0f} GB total)")
         if is_gb200_gb300:
             print("Detected: GB200/GB300 Grace-Blackwell Superchip")
         print(f"Model size: {model_size}")
@@ -317,7 +309,7 @@ def create_fsdp_model_8xb200(tp_size=2, model_size="7B"):
         print(f"Data Parallel (DP) size: {dp_size}")
         print(f"Total GPUs: {world_size}")
         print("=" * 80)
-    
+
     # Create model (adjust size based on model_size parameter)
     if model_size == "7B":
         model = MyModel(num_layers=32, dim=4096)
@@ -327,29 +319,28 @@ def create_fsdp_model_8xb200(tp_size=2, model_size="7B"):
         model = MyModel(num_layers=60, dim=6144)
     else:  # Demo size
         model = MyModel(num_layers=4, dim=256)
-    
+
     # Mixed precision policy (BFloat16 for Blackwell)
     mixed_precision_policy = MixedPrecision(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.bfloat16,
         buffer_dtype=torch.bfloat16,
     )
-    
+
     # Auto-wrap policy
     auto_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
         transformer_layer_cls={TransformerBlock},
         min_num_params=1e8,
     )
-    
+
     # Check for PyTorch 2.10 features
     forward_prefetch_available = hasattr(FSDP, "__init__") and "forward_prefetch" in FSDP.__init__.__code__.co_varnames
-    
+
     # Select sharding strategy based on configuration
-    # HYBRID_SHARD for better 8-GPU performance
     sharding_strategy = ShardingStrategy.HYBRID_SHARD if hasattr(ShardingStrategy, "HYBRID_SHARD") else ShardingStrategy.FULL_SHARD
-    
-    # FSDP configuration optimized for 8x B200
+
+    # FSDP configuration optimized for multi-GPU
     fsdp_kwargs = {
         "auto_wrap_policy": auto_wrap_policy,
         "mixed_precision": mixed_precision_policy,
@@ -359,47 +350,47 @@ def create_fsdp_model_8xb200(tp_size=2, model_size="7B"):
         "sync_module_states": True,
         "use_orig_params": True,
     }
-    
+
     # Enable PyTorch 2.10 features
     if forward_prefetch_available:
         fsdp_kwargs["forward_prefetch"] = True
         fsdp_kwargs["limit_all_gathers"] = True
-    
+
     # For GB200/GB300, enable CPU offloading for larger models
     if is_gb200_gb300 and model_size in ["50B", "100B+"]:
         fsdp_kwargs["cpu_offload"] = CPUOffload(offload_params=False, pin_memory=True)
         if rank == 0:
             print("CPU offloading enabled for large model on GB200/GB300")
-    
+
     # Create FSDP model
     fsdp_model = FSDP(model, **fsdp_kwargs)
-    
+
     if rank == 0:
         total_params = sum(p.numel() for p in fsdp_model.parameters())
         print(f"\nModel parameters: {total_params:,} ({total_params/1e9:.2f}B)")
         print(f"Sharding strategy: {sharding_strategy}")
         print(f"Backward prefetch: Enabled")
         if forward_prefetch_available:
-            print(f"Forward prefetch: Enabled (PyTorch 2.10)")
-        print(f"Mixed precision: BF16")
-        
+            print("Forward prefetch: Enabled (PyTorch 2.10)")
+        print("Mixed precision: BF16")
+
         if torch.cuda.is_available():
             memory_per_gpu = torch.cuda.get_device_properties(0).total_memory / 1e9
             total_memory = memory_per_gpu * world_size
             allocated = torch.cuda.memory_allocated() / 1e9
-            print(f"\nMemory:")
+            print("\nMemory:")
             print(f"  Per GPU: {memory_per_gpu:.1f} GB")
             print(f"  Total: {total_memory:.1f} GB")
             print(f"  Allocated: {allocated:.2f} GB")
             print(f"  Available: {total_memory - allocated:.2f} GB")
-        
-        print("\n8x B200 Performance Tips:")
+
+        print("\nMulti-GPU Performance Tips:")
         print("  - Use torch.compile() for additional 10-20% speedup")
         print("  - Enable gradient accumulation for larger effective batch sizes")
         print("  - Monitor NVLink bandwidth with nvidia-smi dmon -s u")
         print("  - Target 85-95% scaling efficiency vs single GPU")
         print("=" * 80 + "\n")
-    
+
     return fsdp_model, rank, world_size
 
 def train_step(model, batch, optimizer, criterion):
@@ -423,7 +414,7 @@ def train_step(model, batch, optimizer, criterion):
     
     return loss.item()
 
-def main():
+def main(tp_size: int = 1, model_size: str = "demo"):
     """Main training function."""
     if not FSDP_AVAILABLE:
         print("FSDP modules not available; skipping FSDP training demo")
@@ -434,15 +425,17 @@ def main():
         return
     
     try:
-        # Check if running on 8x B200
+        # Check multi-GPU availability
         world_size = int(os.environ.get("WORLD_SIZE", "1"))
-        is_8xb200 = detect_8xb200() if torch.cuda.is_available() else False
-        
-        # Use 8x B200 optimized configuration if available
-        if world_size == 8 and is_8xb200:
-            fsdp_model, rank, world_size = create_fsdp_model_8xb200(tp_size=2, model_size="demo")
-        else:
+        if world_size < 2:
+            if tp_size > 1:
+                raise ValueError("tp_size > 1 requires multi-GPU world_size >=2")
             fsdp_model, rank, world_size = create_fsdp_model()
+        else:
+            fsdp_model, rank, world_size = create_fsdp_model_multigpu(
+                tp_size=tp_size,
+                model_size=model_size,
+            )
         
         # Create optimizer
         optimizer = torch.optim.AdamW(fsdp_model.parameters(), lr=1e-4)
@@ -487,47 +480,47 @@ def main():
         if dist.is_initialized():
             dist.destroy_process_group()
 
-def demo_8xb200_configurations():
-    """Demonstrate different 8x B200 hybrid parallelism configurations."""
+def demo_multigpu_configurations():
+    """Demonstrate multi-GPU hybrid parallelism configurations."""
     if not FSDP_AVAILABLE or not torch.cuda.is_available():
-        print("FSDP or CUDA not available for 8x B200 demo")
+        print("FSDP or CUDA not available for multi-GPU demo")
         return
     
     rank, world_size = setup_distributed()
     
-    if world_size != 8:
+    if world_size < 2:
         if rank == 0:
-            print(f"8x B200 demo requires 8 GPUs, found {world_size}")
+            print(f"Multi-GPU demo requires >=2 GPUs, found {world_size}")
         return
     
     if rank == 0:
         print("\n" + "=" * 80)
-        print("8x B200 Hybrid Parallelism Configuration Guide")
+        print("Multi-GPU Hybrid Parallelism Configuration Guide")
         print("=" * 80)
+        print(f"\nTotal GPUs: {world_size}")
         print("\nRecommended configurations based on model size:")
         print("\n1. Small models (7-20B parameters):")
-        print("   TP=2, DP=4 - Balanced approach (RECOMMENDED)")
-        print("   torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py --tp-size 2 --model-size 7B")
-        
+        print("   TP=2, DP=world_size/2 - Balanced approach (RECOMMENDED)")
+        print("   torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py --tp-size 2 --model-size 7B")
+
         print("\n2. Medium models (20-50B parameters):")
-        print("   TP=4, DP=2 - More model parallelism")
-        print("   torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py --tp-size 4 --model-size 20B")
-        
+        print("   TP=4, DP=world_size/4 - More model parallelism")
+        print("   torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py --tp-size 4 --model-size 20B")
+
         print("\n3. Large models (50-100B parameters):")
-        print("   TP=8, DP=1 - Maximum model parallelism")
-        print("   torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py --tp-size 8 --model-size 50B")
-        
+        print("   TP=world_size, DP=1 - Maximum model parallelism")
+        print("   torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py --tp-size <num_gpus> --model-size 50B")
+
         print("\n4. Very large models (100B+ parameters):")
-        print("   TP=8, DP=N (multi-node required)")
-        print("   Multi-node: TP=8 per node, DP across nodes")
-        
-        print("\nExpected Performance (8x B200):")
+        print("   TP=world_size, DP=N (multi-node required)")
+        print("   Multi-node: TP=world_size per node, DP across nodes")
+
+        print("\nExpected Performance (B200-class):")
         print("  - Scaling efficiency: 85-95% vs single GPU")
-        print("  - AllReduce bandwidth: 700-800 GB/s")
-        print("  - P2P bandwidth: 800-900 GB/s per pair")
-        print("  - Training throughput: >2M tokens/sec (7B model)")
-        
-        print("\nMemory Distribution (1.44 TB total):")
+        print("  - AllReduce bandwidth: 700-800 GB/s (NVLink)")
+        print("  - Training throughput: scales with GPU count")
+
+        print("\nMemory Distribution (total scales with GPU count):")
         print("  - Model parameters (sharded)")
         print("  - Optimizer states (sharded)")
         print("  - Gradients (reduced, not stored long-term)")
@@ -586,73 +579,73 @@ if __name__ == "__main__":
                         choices=["demo", "7B", "20B", "50B", "100B+"],
                         help="Model size for configuration")
     parser.add_argument("--show-configs", action="store_true", 
-                        help="Show 8x B200 configuration guide")
+                        help="Show multi-GPU configuration guide")
     
     args = parser.parse_args()
     
     if args.show_configs:
-        demo_8xb200_configurations()
+        demo_multigpu_configurations()
     else:
-        main()
+        main(tp_size=args.tp_size, model_size=args.model_size)
         demonstrate_memory_efficiency()
 
 """
-8x B200 Usage Examples:
+Multi-GPU Usage Examples:
 
-1. Basic 8-GPU training (auto-detects configuration):
-   torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py
+1. Basic multi-GPU training (auto-detects configuration):
+   torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py
 
-2. TP=2, DP=4 configuration (7-20B models):
-   torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py --model-size 7B
+2. TP=2 configuration (7-20B models):
+   torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py --tp-size 2 --model-size 7B
 
-3. TP=4, DP=2 configuration (20-50B models):
-   torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py --model-size 20B
+3. TP=4 configuration (20-50B models):
+   torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py --tp-size 4 --model-size 20B
 
 4. Show configuration guide:
-   torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py --show-configs
+   torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py --show-configs
 
-5. Multi-node with 8 GPUs per node:
+5. Multi-node with <num_gpus> per node:
    # Node 0:
-   torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 \
+   torchrun --nproc_per_node=<num_gpus> --nnodes=2 --node_rank=0 \
        --master_addr=node0 --master_port=12355 \
        extras/ch13/fsdp_example.py --model-size 7B
    
    # Node 1:
-   torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 \
+   torchrun --nproc_per_node=<num_gpus> --nnodes=2 --node_rank=1 \
        --master_addr=node0 --master_port=12355 \
        extras/ch13/fsdp_example.py --model-size 7B
 
 6. GB200/GB300 with CPU offloading (large models):
-   torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py --model-size 50B
+   torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py --model-size 50B
 
-Expected Performance (8x B200):
-  - 7B model:  85-95% scaling efficiency, >2M tokens/sec
-  - 20B model: 80-90% scaling efficiency, >1M tokens/sec
-  - 50B model: 75-85% scaling efficiency, >500K tokens/sec
+Expected Performance (B200-class, directional):
+  - 7B model:  85-95% scaling efficiency
+  - 20B model: 80-90% scaling efficiency
+  - 50B model: 75-85% scaling efficiency
 
-Memory Usage (per GPU, 180 GB total):
+Memory Usage (per GPU, capacity varies by model):
   - 7B model (TP=2):   ~10-15 GB (model + optimizer + activations)
   - 20B model (TP=4):  ~20-30 GB
-  - 50B model (TP=8):  ~40-60 GB
+  - 50B model (TP=world_size):  ~40-60 GB
   - Activation checkpointing can reduce memory by 30-50%
 
 Key Features:
   PyTorch 2.10 forward_prefetch for better overlap
-  HYBRID_SHARD strategy for optimal 8-GPU performance
+  HYBRID_SHARD strategy for optimal multi-GPU performance
   BFloat16 mixed precision for Blackwell
-  Automatic 8x B200 and GB200/GB300 detection
+  Automatic B200 and GB200/GB300 detection
   CPU offloading support for GB200/GB300
   Detailed memory profiling
 
 Monitoring Commands:
   # Watch NVLink bandwidth
-  nvidia-smi dmon -s u -i 0,1,2,3,4,5,6,7
+  nvidia-smi dmon -s u -i <gpu_ids>
   
   # Monitor GPU utilization
-  nvidia-smi dmon -s m,u -i 0,1,2,3,4,5,6,7
+  nvidia-smi dmon -s m,u -i <gpu_ids>
   
   # NCCL debug info
-  NCCL_DEBUG=INFO torchrun --nproc_per_node=8 extras/ch13/fsdp_example.py
+  NCCL_DEBUG=INFO torchrun --nproc_per_node=<num_gpus> extras/ch13/fsdp_example.py
 """
 
 # Architecture-specific optimizations

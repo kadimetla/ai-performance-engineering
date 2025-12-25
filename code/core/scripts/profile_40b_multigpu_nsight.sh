@@ -1,5 +1,5 @@
 #!/bin/bash
-# Profile 40B model on 4-GPU tensor parallel with Nsight Systems
+# Profile 40B model on multi-GPU tensor parallel with Nsight Systems
 # Captures kernel timeline, NVLink traffic, NCCL operations, and memory transfers
 
 set -e
@@ -19,8 +19,11 @@ MODEL_SIZE="${1:-40B}"
 DURATION="${2:-30}"  # Profile for 30 seconds
 OUTPUT_DIR="${3:-nsight_profile_$(date +%Y%m%d_%H%M%S)}"
 
+# Get GPU count early for labels
+NUM_GPUS=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+
 echo "================================================================================"
-echo "Nsight Systems Profiling: ${MODEL_SIZE} Model on 4 GPUs"
+echo "Nsight Systems Profiling: ${MODEL_SIZE} Model on ${NUM_GPUS} GPUs"
 echo "================================================================================"
 echo ""
 echo "Model size: ${MODEL_SIZE}"
@@ -41,11 +44,6 @@ if ! command -v nsys &> /dev/null; then
     exit 1
 fi
 
-# Get GPU count
-NUM_GPUS=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-echo "Detected ${NUM_GPUS} GPUs"
-echo ""
-
 # Nsight Systems configuration
 NSYS_OPTS=(
     --trace=cuda,nvtx,osrt,cudnn,cublas,openacc
@@ -58,7 +56,7 @@ NSYS_OPTS=(
     --duration=${DURATION}
     --delay=5  # Wait 5s for warmup
     --capture-range=cudaProfilerApi
-    --output="${OUTPUT_DIR}/profile_${MODEL_SIZE}_4gpu"
+    --output="${OUTPUT_DIR}/profile_${MODEL_SIZE}_${NUM_GPUS}gpu"
 )
 
 echo -e "${BLUE}Nsight Systems Configuration:${NC}"
@@ -75,7 +73,7 @@ WORKLOAD_SCRIPT="${OUTPUT_DIR}/profile_workload.py"
 
 cat > "${WORKLOAD_SCRIPT}" << 'WORKLOAD_EOF'
 """
-Workload for Nsight Systems profiling of 40B model on 4 GPUs.
+Workload for Nsight Systems profiling of 40B model on multiple GPUs.
 This script runs a representative inference workload with NVTX markers.
 """
 
@@ -207,7 +205,7 @@ echo ""
 echo -e "${BLUE}Generating profiling reports...${NC}"
 
 # Export to various formats
-PROFILE_FILE="${OUTPUT_DIR}/profile_${MODEL_SIZE}_4gpu.nsys-rep"
+PROFILE_FILE="${OUTPUT_DIR}/profile_${MODEL_SIZE}_${NUM_GPUS}gpu.nsys-rep"
 
 if [ -f "${PROFILE_FILE}" ]; then
     # Generate SQLite export for analysis
@@ -240,7 +238,7 @@ echo ""
 echo -e "${BLUE}Creating summary document...${NC}"
 
 cat > "${OUTPUT_DIR}/SUMMARY.md" << EOL
-# Nsight Systems Profile: ${MODEL_SIZE} Model on 4 GPUs
+# Nsight Systems Profile: ${MODEL_SIZE} Model on multi-GPU node
 
 **Date**: $(date)
 **Model**: ${MODEL_SIZE}
@@ -249,7 +247,7 @@ cat > "${OUTPUT_DIR}/SUMMARY.md" << EOL
 
 ## Files Generated
 
-- \`profile_${MODEL_SIZE}_4gpu.nsys-rep\`: Main Nsight Systems profile (open in Nsight UI)
+- \`profile_${MODEL_SIZE}_${NUM_GPUS}gpu.nsys-rep\`: Main Nsight Systems profile (open in Nsight UI)
 - \`profile.sqlite\`: SQLite export for programmatic analysis
 - \`summary.txt\`: Overall execution summary
 - \`cuda_api_summary.txt\`: CUDA API call statistics
@@ -264,7 +262,7 @@ cat > "${OUTPUT_DIR}/SUMMARY.md" << EOL
 
 \`\`\`bash
 # Launch Nsight Systems UI and open the profile
-nsys-ui ${OUTPUT_DIR}/profile_${MODEL_SIZE}_4gpu.nsys-rep
+nsys-ui ${OUTPUT_DIR}/profile_${MODEL_SIZE}_${NUM_GPUS}gpu.nsys-rep
 \`\`\`
 
 Or download the .nsys-rep file and open locally on a machine with Nsight Systems UI.
@@ -339,7 +337,7 @@ echo ""
 echo "Profile saved to: ${OUTPUT_DIR}/"
 echo ""
 echo "To view the profile:"
-echo "  nsys-ui ${OUTPUT_DIR}/profile_${MODEL_SIZE}_4gpu.nsys-rep"
+echo "  nsys-ui ${OUTPUT_DIR}/profile_${MODEL_SIZE}_${NUM_GPUS}gpu.nsys-rep"
 echo ""
 echo "Or view text summaries:"
 echo "  cat ${OUTPUT_DIR}/summary.txt"

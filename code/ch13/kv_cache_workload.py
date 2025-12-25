@@ -19,7 +19,7 @@ class KVCacheWorkload:
     num_layers: int = 4
     num_heads: int = 16
     head_dim: int = 64
-    sequence_lengths: Tuple[int, ...] = (512, 1024, 2048)
+    sequence_lengths: Tuple[int, ...] = (512, 1024, 2048, 2048, 2048)
     dtype: torch.dtype = torch.float16
     page_size: int = 256
     block_size: int = 128

@@ -76,7 +76,7 @@ case "${WORKLOAD}" in
         # Run distributed training
         echo "Starting distributed training..."
         torchrun --nproc_per_node="${NUM_GPUS}" \
-            "${REPO_ROOT}/ch04/training_8xb200_pipeline.py" \
+            "${REPO_ROOT}/ch04/training_multigpu_pipeline.py" \
             --epochs 1 \
             > "${OUTPUT_DIR}/workload.log" 2>&1 || WORKLOAD_SUCCESS=0
         ;;
@@ -84,7 +84,7 @@ case "${WORKLOAD}" in
     bandwidth)
         # Run pure bandwidth benchmark
         echo "Starting bandwidth benchmark..."
-        python "${REPO_ROOT}/ch04/bandwidth_benchmark_suite_8gpu.py" \
+        python "${REPO_ROOT}/ch04/bandwidth_benchmark_suite_multigpu.py" \
             --output-json "${OUTPUT_DIR}/bandwidth_results.json" \
             > "${OUTPUT_DIR}/workload.log" 2>&1 || WORKLOAD_SUCCESS=0
         ;;
@@ -234,4 +234,3 @@ else
     echo -e "${YELLOW}⚠ Workload completed with warnings${NC}"
     exit 0
 fi
-

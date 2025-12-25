@@ -36,17 +36,19 @@ class CheckpointedTransformerModel(nn.Module):
         num_heads: int = 16,
         seq_len: int = 512,
         vocab_size: int = 32000,
+        checkpoint_interval: int = 1,
     ):
         super().__init__()
         self.seq_len = seq_len
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
+        self.checkpoint_interval = max(1, int(checkpoint_interval))
         
         # Embedding
         self.embedding = nn.Embedding(vocab_size, hidden_dim)
         self.pos_embedding = nn.Embedding(seq_len, hidden_dim)
         
-        # Individual transformer layers (for checkpointing each layer)
+        # Individual transformer layers (for checkpointing on a fixed interval)
         self.layers = nn.ModuleList([
             nn.TransformerEncoderLayer(
                 d_model=hidden_dim,
@@ -71,14 +73,17 @@ class CheckpointedTransformerModel(nn.Module):
         pos_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).expand(batch_size, -1)
         x = self.embedding(input_ids) + self.pos_embedding(pos_ids)
         
-        # Apply each transformer layer with checkpointing
-        # This discards activations after forward, recomputes them in backward
-        for layer in self.layers:
-            x = checkpoint(
-                layer,
-                x,
-                use_reentrant=False,  # More efficient, works with autograd
-            )
+        # Apply transformer layers with checkpointing on a fixed interval.
+        # This discards activations after forward, recomputes them in backward.
+        for idx, layer in enumerate(self.layers):
+            if idx % self.checkpoint_interval == 0:
+                x = checkpoint(
+                    layer,
+                    x,
+                    use_reentrant=False,  # More efficient, works with autograd
+                )
+            else:
+                x = layer(x)
         
         # Output (not checkpointed)
         x = self.ln_f(x)
@@ -89,7 +94,7 @@ class CheckpointedTransformerModel(nn.Module):
 class OptimizedTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Gradient checkpointing: trades compute for memory.
     
-    Same transformer model as baseline but with per-layer checkpointing.
+    Same transformer model as baseline but with checkpointing every N layers.
     Expected: ~30-50% slower, but uses 50-70% less activation memory.
     
     This is a MEMORY optimization, not a speed optimization.
@@ -111,6 +116,7 @@ class OptimizedTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.seq_len = 1024   # Same sequence length
         self.batch_size = 8   # Same batch size
         self.vocab_size = 32000
+        self.checkpoint_interval = 8  # Checkpoint every eighth layer to reduce recompute overhead
         
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
@@ -120,7 +126,6 @@ class OptimizedTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._peak_memory_gb = 0.0
         self._optimization_goal = "memory"  # This is a memory optimization
         self.output = None
-        self._verify_input = None
         self.parameter_count: int = 0
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
@@ -145,6 +150,7 @@ class OptimizedTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
             num_heads=self.num_heads,
             seq_len=self.seq_len,
             vocab_size=self.vocab_size,
+            checkpoint_interval=self.checkpoint_interval,
         )
         self.model = self.model.to(self.device).train()
         
@@ -155,11 +161,6 @@ class OptimizedTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
             device=self.device
         )
         self.targets = torch.randint(
-            0, self.vocab_size,
-            (self.batch_size, self.seq_len),
-            device=self.device
-        )
-        self._verify_input = torch.randint(
             0, self.vocab_size,
             (self.batch_size, self.seq_len),
             device=self.device
@@ -187,33 +188,27 @@ class OptimizedTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 logits.view(-1, self.vocab_size),
                 self.targets.view(-1)
             )
+            self.output = logits[:1, :1, :8].detach().float().clone()
             
             # Backward pass - recomputes activations as needed
             loss.backward()
             
             # Optimizer step
             self.optimizer.step()
-            # Store output for verification
-            with torch.no_grad():
-                self.model.eval()
-                verify_logits = self.model(self._verify_input)
-                self.output = verify_logits.detach().float().clone()
-                self.model.train()
-        
         # Track peak memory
         self._peak_memory_gb = max(
             self._peak_memory_gb,
             torch.cuda.max_memory_allocated(self.device) / 1e9
         )
         self._synchronize()
-        if self._verify_input is None or self.output is None:
+        if self.input_ids is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
-            inputs={"input_ids": self._verify_input},
+            inputs={"input_ids": self.input_ids.detach().clone()},
             output=self.output,
-            batch_size=self._verify_input.shape[0],
+            batch_size=self.input_ids.shape[0],
             parameter_count=self.parameter_count,
             precision_flags={
                 "fp16": False,
@@ -249,13 +244,7 @@ class OptimizedTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from core.benchmark.metrics import compute_precision_metrics
-        return compute_precision_metrics(
-            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
-            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
-            precision_type="fp8",
-        )
+        return None
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""

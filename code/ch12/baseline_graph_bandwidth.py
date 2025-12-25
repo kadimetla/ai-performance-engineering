@@ -36,8 +36,8 @@ class BaselineGraphBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.dst = None
         # Use a moderately sized buffer and many launches to keep the workload
         # launch-bound (where CUDA graphs can materially reduce overhead).
-        self.N = 250_000
-        self.iterations = 2000
+        self.N = 65_536
+        self.iterations = 8000
         self._extension = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,

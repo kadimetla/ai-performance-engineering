@@ -1,12 +1,12 @@
 """
-Load testing harness for the 8x B200/B300 inference server.
+Load testing harness for the multi-GPU B200/B300 inference server.
 
 Run with torchrun:
-    torchrun --nproc_per_node=8 ch16/inference_server_load_test.py \
+    torchrun --nproc_per_node=<num_gpus> ch16/inference_server_load_test.py \
         --duration 60 --target-qps 400 --output-json results.json
 
 The harness feeds synthetic requests (random prompt lengths, configurable QPS)
-into the `InferenceServer8GPU` implementation and collects latency/throughput
+into the `InferenceServerMultiGPU` implementation and collects latency/throughput
 statistics. All ranks receive the same request stream via broadcast so the
 continuous batching state remains consistent across tensor-parallel workers.
 """
@@ -35,10 +35,10 @@ import torch
 import torch.distributed as dist
 
 from ch16.capacity_planner import LittleLawCapacityPlanner
-from ch16.inference_serving_8xb200 import (
+from ch16.inference_serving_multigpu import (
     DemoCausalLM,
     InferenceRequest,
-    InferenceServer8GPU,
+    InferenceServerMultiGPU,
     RequestState,
 )
 
@@ -74,7 +74,7 @@ def _broadcast_requests(requests: Optional[List[Dict]]) -> List[Dict]:
 
 
 def run_load_test(
-    server: InferenceServer8GPU,
+    server: InferenceServerMultiGPU,
     *,
     duration: float,
     target_qps: float,
@@ -309,7 +309,7 @@ def aggregate_results(local_result: Dict) -> Dict:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser("Load test for 8x B200 inference server")
+    parser = argparse.ArgumentParser("Load test for multi-GPU inference server")
     parser.add_argument("--duration", type=float, default=30.0, help="Total test duration in seconds.")
     parser.add_argument("--target-qps", type=float, default=200.0, help="Synthetic request rate.")
     parser.add_argument("--tick-interval", type=float, default=0.02, help="Scheduler tick interval (seconds).")
@@ -394,11 +394,17 @@ def main() -> None:
             f"World size mismatch: expected {required_world} ranks (found {world_size}). "
             "Adjust --require-world-size or launch configuration."
         )
-    if rank == 0 and required_world is None and world_size != 8:
-        print(
-            f"[info] Running benchmark with {world_size} rank(s). "
-            "Set --require-world-size to enforce a specific size if desired."
-        )
+    if rank == 0 and required_world is None:
+        if world_size < 2:
+            print(
+                f"[info] Running single-rank mode ({world_size} rank). "
+                "Use torchrun with >=2 GPUs for multi-GPU load tests."
+            )
+        else:
+            print(
+                f"[info] Running benchmark with {world_size} rank(s). "
+                "Set --require-world-size to enforce a specific size if desired."
+            )
 
     torch.manual_seed(args.seed + rank)
     if torch.cuda.is_available():
@@ -416,7 +422,7 @@ def main() -> None:
         max_seq_len=args.max_seq_len,
     )
 
-    server = InferenceServer8GPU(
+    server = InferenceServerMultiGPU(
         model=model,
         num_layers=args.num_layers,
         d_model=args.d_model,

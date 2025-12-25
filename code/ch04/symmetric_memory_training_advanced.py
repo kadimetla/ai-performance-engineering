@@ -10,7 +10,7 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 """
-Advanced Symmetric Memory Training Techniques for 8x B200
+Advanced Symmetric Memory Training Techniques for multi-GPU B200
 =========================================================
 
 Production-grade advanced training patterns leveraging PyTorch 2.10
@@ -25,7 +25,7 @@ This file demonstrates sophisticated patterns that go beyond basic gradient sync
 - ZeRO-style optimizer state sharding with symmetric access
 
 Hardware Requirements:
-- 8x NVIDIA Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s per pair)
+- >=2 NVIDIA Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s per pair)
 - CUDA 13.0+, PyTorch 2.10+
 - torch.distributed.nn.SymmetricMemory support
 
@@ -36,16 +36,16 @@ Performance Targets:
 
 Usage:
     # Async gradient server
-    torchrun --nproc_per_node=8 symmetric_memory_training_advanced.py --demo async_grad
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_training_advanced.py --demo async_grad
 
     # Lock-free accumulation
-    torchrun --nproc_per_node=8 symmetric_memory_training_advanced.py --demo lockfree
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_training_advanced.py --demo lockfree
 
     # Custom optimizer
-    torchrun --nproc_per_node=8 symmetric_memory_training_advanced.py --demo optimizer
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_training_advanced.py --demo optimizer
 
     # ZeRO-style sharding
-    torchrun --nproc_per_node=8 symmetric_memory_training_advanced.py --demo zero
+    torchrun --nproc_per_node=<num_gpus> symmetric_memory_training_advanced.py --demo zero
 
 All patterns gracefully degrade to NCCL-based fallbacks when symmetric memory
 is unavailable, allowing development on non-B200 hardware.

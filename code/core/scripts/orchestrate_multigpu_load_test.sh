@@ -1,5 +1,5 @@
 #!/bin/bash
-# Orchestration script for 4x B200 load testing
+# Orchestration script for multi-GPU B200 load testing
 # This script coordinates load testing, power monitoring, and result collection
 
 set -e
@@ -18,10 +18,10 @@ NC='\033[0m'
 # Default parameters
 DURATION="${1:-300}"  # 5 minutes default
 TARGET_QPS="${2:-100}"
-OUTPUT_DIR="${3:-load_test_4xb200_$(date +%Y%m%d_%H%M%S)}"
+OUTPUT_DIR="${3:-load_test_multigpu_$(date +%Y%m%d_%H%M%S)}"
 
 echo "================================================================================"
-echo "4x B200 Load Test Orchestration"
+echo "Multi-GPU B200 Load Test Orchestration"
 echo "================================================================================"
 echo ""
 echo "Duration: ${DURATION}s"
@@ -39,9 +39,9 @@ echo ""
 NUM_GPUS=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 echo "Detected GPUs: ${NUM_GPUS}"
 
-if [ "${NUM_GPUS}" -ne 4 ]; then
-    echo -e "${YELLOW}Warning: Expected 4 GPUs but found ${NUM_GPUS}${NC}"
-    echo "Proceeding anyway, but results may differ..."
+if [ "${NUM_GPUS}" -lt 2 ]; then
+    echo -e "${RED}ERROR: This script requires >=2 GPUs (found ${NUM_GPUS})${NC}"
+    exit 1
 fi
 
 # Check for B200
@@ -185,7 +185,7 @@ if [ -f "${POWER_OUTPUT}" ] && [ -f "${LOAD_TEST_OUTPUT}" ]; then
         python3 core/scripts/calculate_cost_per_token.py \
             --power-json "${POWER_OUTPUT}" \
             --throughput "${THROUGHPUT}" \
-            --workload-name "8xB200_LoadTest" \
+            --workload-name "MultiGPU_LoadTest" \
             --output "${COST_REPORT}" \
             --output-json "${OUTPUT_DIR}/cost_metrics.json" \
             > "${OUTPUT_DIR}/cost_calculation.log" 2>&1 || true
@@ -211,7 +211,7 @@ echo ""
 SUMMARY_REPORT="${OUTPUT_DIR}/SUMMARY.md"
 
 {
-    echo "# 8x B200 Load Test Summary"
+    echo "# Multi-GPU Load Test Summary"
     echo ""
     echo "**Date**: $(date)"
     echo "**Duration**: ${DURATION}s"
@@ -329,4 +329,3 @@ else
     echo "Check ${LOAD_TEST_LOG} for details"
     exit 1
 fi
-

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-NVSHMEM + PyTorch Integration Guide for 8x B200
+NVSHMEM + PyTorch Integration Guide for multi-GPU B200
 ================================================
 
 Demonstrates when and how to use NVSHMEM with PyTorch for low-latency
-GPU-to-GPU communication on 8x B200 configurations.
+GPU-to-GPU communication on multi-GPU B200 configurations.
 
 NVSHMEM vs NCCL/PyTorch Collectives:
 - NVSHMEM: Best for small, latency-sensitive, one-sided operations
@@ -28,7 +28,7 @@ Use NCCL/PyTorch when:
 Requirements:
 - PyTorch 2.10+ with NVSHMEM support
 - NVSHMEM 3.4+ (CUDA 13)
-- 8x B200 GPUs
+- >=2 B200 GPUs
 
 Note: As of PyTorch 2.10, NVSHMEM support is experimental.
 This module demonstrates concepts and provides PyTorch alternatives.
@@ -197,7 +197,7 @@ def print_performance_guide() -> None:
     print("  ✓ One-sided operations")
     print("  ✗ Large messages: >10 MB (slower than NCCL)")
     print("\nNCCL:")
-    print("  ✓ Throughput: 700-800 GB/s (8x B200)")
+    print("  ✓ Throughput: 700-800 GB/s (multi-GPU B200)")
     print("  ✓ Large messages: >10 MB")
     print("  ✓ Optimized collectives (AllReduce, AllGather)")
     print("  ✗ Small message latency: 10-50 μs")

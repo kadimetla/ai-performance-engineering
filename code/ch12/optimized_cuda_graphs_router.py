@@ -30,8 +30,8 @@ class CUDAGraphRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.data: Optional[torch.Tensor] = None
         self.route_flag: int = 0
-        self.N = 1 << 20  # 1M elements to match baseline
-        self.iterations = 500
+        self.N = 1 << 12  # Smaller buffers to match baseline
+        self.iterations = 8000
         self._extension = None
         self._workload = WorkloadMetadata(tokens_per_iteration=float(self.N * self.iterations))
 
@@ -43,7 +43,7 @@ class CUDAGraphRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.manual_seed_all(42)
         self.data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         # Warmup capture inside the extension
-        self._extension.graph_replay(self.data, 1)
+        self._extension.graph_replay(self.data, self.iterations)
         torch.cuda.synchronize(self.device)
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)

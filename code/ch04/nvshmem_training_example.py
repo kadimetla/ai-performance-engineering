@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Production NVSHMEM Training Patterns for 8x B200.
+"""Production NVSHMEM Training Patterns for multi-GPU B200.
 
 Demonstrates how to extend PyTorch training workloads with NVSHMEM and
-torch.distributed.nn.SymmetricMemory for latency-critical paths on 8 GPU
+torch.distributed.nn.SymmetricMemory for latency-critical paths on multi-GPU
 Blackwell clusters.
 
 Patterns:
@@ -11,13 +11,13 @@ Patterns:
 3. Pipeline parallel microbatch handoff using one-sided NVSHMEM puts
 
 Hardware assumptions:
-- 8x Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s per pair)
+- >=2 Blackwell B200 GPUs (NVLink 5.0 @ 1800 GB/s per pair)
 - CUDA 13.0+, PyTorch 2.10+, NVSHMEM 3.4+
 
 Usage (conceptual):
-    torchrun --nproc_per_node=8 nvshmem_training_example.py --demo gradient
-    torchrun --nproc_per_node=8 nvshmem_training_example.py --demo hybrid
-    torchrun --nproc_per_node=8 nvshmem_training_example.py --demo pipeline
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_example.py --demo gradient
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_example.py --demo hybrid
+    torchrun --nproc_per_node=<num_gpus> nvshmem_training_example.py --demo pipeline
 
 Each demo degrades gracefully to NCCL when NVSHMEM or symmetric memory is
 unavailable, providing runnable fallbacks for development laptops.

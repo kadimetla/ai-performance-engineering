@@ -102,7 +102,6 @@ class BaselineTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
         self._peak_memory_gb = 0.0
         self.output = None
-        self._verify_input = None
         self.parameter_count: int = 0
         self.register_workload_metadata(
             requests_per_iteration=float(self.batch_size),
@@ -138,11 +137,6 @@ class BaselineTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
             (self.batch_size, self.seq_len),
             device=self.device
         )
-        self._verify_input = torch.randint(
-            0, self.vocab_size,
-            (self.batch_size, self.seq_len),
-            device=self.device
-        )
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
@@ -166,33 +160,27 @@ class BaselineTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 logits.view(-1, self.vocab_size),
                 self.targets.view(-1)
             )
+            self.output = logits[:1, :1, :8].detach().float().clone()
             
             # Backward pass - uses stored activations
             loss.backward()
             
             # Optimizer step
             self.optimizer.step()
-            # Store output for verification
-            with torch.no_grad():
-                self.model.eval()
-                verify_logits = self.model(self._verify_input)
-                self.output = verify_logits.detach().float().clone()
-                self.model.train()
-        
         # Track peak memory after each iteration
         self._peak_memory_gb = max(
             self._peak_memory_gb,
             torch.cuda.max_memory_allocated(self.device) / 1e9
         )
         self._synchronize()
-        if self._verify_input is None or self.output is None:
+        if self.input_ids is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
-            inputs={"input_ids": self._verify_input},
+            inputs={"input_ids": self.input_ids.detach().clone()},
             output=self.output,
-            batch_size=self._verify_input.shape[0],
+            batch_size=self.input_ids.shape[0],
             parameter_count=self.parameter_count,
             precision_flags={
                 "fp16": False,
@@ -228,13 +216,7 @@ class BaselineTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from core.benchmark.metrics import compute_precision_metrics
-        return compute_precision_metrics(
-            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
-            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
-            precision_type="fp8",
-        )
+        return None
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""

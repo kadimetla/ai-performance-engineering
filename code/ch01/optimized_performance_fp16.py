@@ -60,6 +60,8 @@ class OptimizedPerformanceFP16Benchmark(VerificationPayloadMixin, BaseBenchmark)
         self.model = torch.nn.Sequential(
             torch.nn.Linear(self.hidden_dim, self.hidden_dim),
             torch.nn.ReLU(),
+            torch.nn.Linear(self.hidden_dim, self.hidden_dim),
+            torch.nn.ReLU(),
             torch.nn.Linear(self.hidden_dim, 10),
         )
 

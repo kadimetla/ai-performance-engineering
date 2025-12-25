@@ -56,8 +56,10 @@ int main() {
     return 0;
   }
 
-  constexpr int N = 1 << 15;
-  constexpr int ITER = 20000;
+  constexpr int N = 1 << 14;
+  constexpr int CAPTURE_ITERS = 1000;
+  constexpr int REPLAYS = 20;
+  constexpr int ITER = CAPTURE_ITERS * REPLAYS;
   const size_t bytes = N * sizeof(float);
 
   std::vector<float> host(N);
@@ -75,11 +77,13 @@ int main() {
   dim3 block(128);
   dim3 grid((N + block.x - 1) / block.x);
 
-  // Capture pipeline once.
+  // Capture a large iteration block once.
   cudaGraph_t graph;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  for (const StageSpec& spec : kStageSpecs) {
-    stage_kernel<<<grid, block, 0, stream>>>(device_ptr, N, spec.scale, spec.bias, spec.frequency);
+  for (int iter = 0; iter < CAPTURE_ITERS; ++iter) {
+    for (const StageSpec& spec : kStageSpecs) {
+      stage_kernel<<<grid, block, 0, stream>>>(device_ptr, N, spec.scale, spec.bias, spec.frequency);
+    }
   }
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
 
@@ -96,7 +100,7 @@ int main() {
   CUDA_CHECK(cudaEventCreate(&stop));
 
   CUDA_CHECK(cudaEventRecord(start));
-  for (int iter = 0; iter < ITER; ++iter) {
+  for (int replay = 0; replay < REPLAYS; ++replay) {
     CUDA_CHECK(cudaGraphLaunch(exec, stream));
   }
   CUDA_CHECK(cudaEventRecord(stop));
@@ -106,7 +110,7 @@ int main() {
   float total_ms = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
   std::printf(
-      "Optimized (graph replay): %.3f ms total, %.3f ms/iter\n",
+      "Optimized (graph replay): %.3f ms total, %.6f ms/iter\n",
       total_ms,
       total_ms / static_cast<float>(ITER));
 

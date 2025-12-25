@@ -1,5 +1,5 @@
 /**
- * NVSHMEM Advanced Patterns for 4x Blackwell B200 GPUs
+ * NVSHMEM Advanced Patterns for Multi-GPU Blackwell B200 Nodes
  * ======================================================
  * 
  * Production-quality NVSHMEM patterns for high-performance multi-GPU computing.
@@ -17,15 +17,15 @@
  * Requirements:
  * - NVSHMEM 3.4+
  * - CUDA 13.0+
- * - 4x Blackwell B200 GPUs (works with any GPU count)
+ * - Blackwell B200 GPUs (works with any GPU count)
  * 
  * Compile:
  *   nvcc -O3 -std=c++17 -arch=sm_100 -DUSE_NVSHMEM \\
  *        -I$NVSHMEM_HOME/include -L$NVSHMEM_HOME/lib -lnvshmem \\
- *        nvshmem_advanced_8gpu.cu -o nvshmem_advanced
+ *        nvshmem_advanced_multigpu.cu -o nvshmem_advanced
  * 
  * Run:
- *   nvshmemrun -np 4 ./nvshmem_advanced
+ *   nvshmemrun -np <num_gpus> ./nvshmem_advanced
  */
 
 #include <cuda_runtime.h>
@@ -420,7 +420,7 @@ void benchmark_recursive_halving_doubling(int my_pe, int n_pes) {
 
 int main() {
     printf("╔════════════════════════════════════════════════════════════╗\n");
-    printf("║  NVSHMEM Advanced Patterns for 8x Blackwell B200          ║\n");
+    printf("║  NVSHMEM Advanced Patterns for Multi-GPU Blackwell B200   ║\n");
     printf("║  Production-Quality Communication Algorithms               ║\n");
     printf("╚════════════════════════════════════════════════════════════╝\n\n");
     
@@ -433,7 +433,7 @@ int main() {
     if (my_pe == 0) {
         printf("Running on %d GPUs\n", n_pes);
         if (n_pes == 8) {
-            printf("✓ Optimal configuration (8x B200)\n");
+            printf("✓ Multi-GPU configuration detected\n");
         }
         printf("\n");
     }
@@ -456,7 +456,7 @@ int main() {
         printf("  • Ring AllReduce:      Best for <1MB messages\n");
         printf("  • Double-Buffered:     10-20%% faster than ring\n");
         printf("  • Recursive H/D:       Best for >1MB messages\n");
-        printf("\n8x B200 Expected Performance:\n");
+        printf("\nMulti-GPU B200 Expected Performance:\n");
         printf("  • Latency: <1 μs (4KB message)\n");
         printf("  • Bandwidth: 800-900 GB/s per GPU pair\n");
         printf("  • AllReduce (8MB): ~100 μs with ring\n");
@@ -477,7 +477,7 @@ int main() {
     printf("  3. Compile:\n");
     printf("     nvcc -O3 -std=c++17 -arch=sm_100 -DUSE_NVSHMEM \\\n");
     printf("          -I$NVSHMEM_HOME/include -L$NVSHMEM_HOME/lib -lnvshmem \\\n");
-    printf("          nvshmem_advanced_8gpu.cu -o nvshmem_advanced\n");
+    printf("          nvshmem_advanced_multigpu.cu -o nvshmem_advanced\n");
     printf("  4. Run: nvshmemrun -np 8 ./nvshmem_advanced\n\n");
     
     benchmark_ring_allreduce(0, 8);

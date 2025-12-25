@@ -41,11 +41,14 @@ class BaselineAttentionStandardBenchmark(VerificationPayloadMixin, BaseBenchmark
     
     def __init__(self):
         super().__init__()
-        self.model = None
-        self.inputs = None
+        self.q = None
+        self.k = None
+        self.v = None
         self.batch_size = 2
-        self.seq_len = 2048
+        self.seq_len = 8192
         self.hidden_dim = 1024
+        self.num_heads = 8
+        self.head_dim = self.hidden_dim // self.num_heads
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -59,23 +62,33 @@ class BaselineAttentionStandardBenchmark(VerificationPayloadMixin, BaseBenchmark
     
     def setup(self) -> None:
         torch.manual_seed(42)
-        self.model = StandardAttention(hidden_dim=self.hidden_dim).to(self.device).eval()
-        self.inputs = torch.randn(self.batch_size, self.seq_len, self.hidden_dim, device=self.device, dtype=torch.float16)
+        self.q = torch.randn(
+            self.batch_size,
+            self.num_heads,
+            self.seq_len,
+            self.head_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
+        self.k = torch.randn_like(self.q)
+        self.v = torch.randn_like(self.q)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
-        if self.model is None or self.inputs is None:
+        if self.q is None or self.k is None or self.v is None:
             raise RuntimeError("Benchmark not configured")
         with self._nvtx_range("baseline_attention_standard"):
             with torch.no_grad():
-                self.output = self.model(self.inputs)
+                scores = torch.matmul(self.q, self.k.transpose(-2, -1)) / (self.head_dim ** 0.5)
+                attn = torch.softmax(scores, dim=-1)
+                self.output = torch.matmul(attn, self.v)
         self._synchronize()
-        if self.inputs is None or self.output is None:
+        if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
-            inputs={"input": self.inputs},
+            inputs={"q": self.q, "k": self.k, "v": self.v},
             output=self.output.detach().float().clone(),
             batch_size=self.batch_size,
             precision_flags={
@@ -88,8 +101,9 @@ class BaselineAttentionStandardBenchmark(VerificationPayloadMixin, BaseBenchmark
         )
 
     def teardown(self) -> None:
-        self.model = None
-        self.inputs = None
+        self.q = None
+        self.k = None
+        self.v = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -113,8 +127,8 @@ class BaselineAttentionStandardBenchmark(VerificationPayloadMixin, BaseBenchmark
         )
 
     def validate_result(self) -> Optional[str]:
-        if self.model is None:
-            return "Model not initialized"
+        if self.q is None or self.k is None or self.v is None:
+            return "Inputs not initialized"
         return None
 
     def get_verify_output(self) -> torch.Tensor:

@@ -5,37 +5,10 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-
-
-class FlexAttention(nn.Module):
-    """FlexAttention implementation using optimized kernels."""
-    
-    def __init__(self, hidden_dim: int = 1024, num_heads: int = 8):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = hidden_dim // num_heads
-        self.qkv = nn.Linear(hidden_dim, hidden_dim * 3, dtype=torch.float16)
-        self.proj = nn.Linear(hidden_dim, hidden_dim, dtype=torch.float16)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len, hidden_dim = x.shape
-        qkv = self.qkv(x)
-        q, k, v = qkv.chunk(3, dim=-1)
-        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        out = F.scaled_dot_product_attention(
-            q, k, v,
-            dropout_p=0.0,
-            is_causal=False,
-        )
-        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
-        return self.proj(out)
 
 
 class OptimizedAttentionFlexBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -43,11 +16,14 @@ class OptimizedAttentionFlexBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def __init__(self):
         super().__init__()
-        self.model = None
-        self.inputs = None
+        self.q = None
+        self.k = None
+        self.v = None
         self.batch_size = 2
-        self.seq_len = 2048
+        self.seq_len = 8192
         self.hidden_dim = 1024
+        self.num_heads = 8
+        self.head_dim = self.hidden_dim // self.num_heads
         tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -61,28 +37,40 @@ class OptimizedAttentionFlexBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         torch.manual_seed(42)
-        
-        self.model = FlexAttention(hidden_dim=self.hidden_dim, num_heads=8).to(self.device).eval()
-        self.inputs = torch.randn(self.batch_size, self.seq_len, self.hidden_dim, device=self.device, dtype=torch.float16)
-        
-        with torch.no_grad():
-            for _ in range(5):
-                _ = self.model(self.inputs)
+        self.q = torch.randn(
+            self.batch_size,
+            self.num_heads,
+            self.seq_len,
+            self.head_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
+        self.k = torch.randn_like(self.q)
+        self.v = torch.randn_like(self.q)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
-        if self.model is None or self.inputs is None:
+        if self.q is None or self.k is None or self.v is None:
             raise RuntimeError("Benchmark not configured")
         with self._nvtx_range("attention_standard"):
             with torch.no_grad():
-                self.output = self.model(self.inputs)
+                if not hasattr(torch.nn.attention, "sdpa_kernel"):
+                    raise RuntimeError("torch.nn.attention.sdpa_kernel is required for flash attention")
+                if not torch.backends.cuda.flash_sdp_enabled():
+                    raise RuntimeError("Flash SDP backend is not available on this build")
+                with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.FLASH_ATTENTION):
+                    self.output = F.scaled_dot_product_attention(
+                        self.q, self.k, self.v,
+                        dropout_p=0.0,
+                        is_causal=False,
+                    )
         self._synchronize()
-        if self.inputs is None or self.output is None:
+        if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
-            inputs={"input": self.inputs},
+            inputs={"q": self.q, "k": self.k, "v": self.v},
             output=self.output.detach().float().clone(),
             batch_size=self.batch_size,
             precision_flags={
@@ -95,8 +83,9 @@ class OptimizedAttentionFlexBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def teardown(self) -> None:
-        self.model = None
-        self.inputs = None
+        self.q = None
+        self.k = None
+        self.v = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -120,8 +109,8 @@ class OptimizedAttentionFlexBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def validate_result(self) -> Optional[str]:
-        if self.model is None:
-            return "Model not initialized"
+        if self.q is None or self.k is None or self.v is None:
+            return "Inputs not initialized"
         return None
 
     def get_verify_output(self) -> torch.Tensor:
