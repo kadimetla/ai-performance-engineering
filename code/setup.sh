@@ -1149,30 +1149,6 @@ apt-mark hold libcudnn9-cuda-13 libcudnn9-dev-cuda-13 libcudnn9-headers-cuda-13
 echo "Updating ldconfig cache..."
 ldconfig 2>/dev/null || true
 
-# Install cuSPARSELt (CUDA 13)
-echo ""
-echo "Installing cuSPARSELt runtime and headers (CUDA 13)..."
-apt install -y libcusparselt0-cuda-13 libcusparselt0-dev-cuda-13
-CUSPARSELT_LIB_DIR="/usr/lib/$(uname -m)-linux-gnu/libcusparseLt/13"
-if [ -d "${CUSPARSELT_LIB_DIR}" ]; then
-    echo "${CUSPARSELT_LIB_DIR}" > /etc/ld.so.conf.d/cusparselt.conf
-    ldconfig 2>/dev/null || true
-else
-    echo "WARNING: cuSPARSELt library directory not found at ${CUSPARSELT_LIB_DIR}"
-fi
-
-# Install nvCOMP (CUDA 13)
-echo ""
-echo "Installing nvCOMP runtime and headers (CUDA 13)..."
-apt install -y libnvcomp5-cuda-13 libnvcomp5-dev-cuda-13
-NVCOMP_LIB_DIR="/usr/lib/$(uname -m)-linux-gnu/nvcomp/13"
-if [ -d "${NVCOMP_LIB_DIR}" ]; then
-    echo "${NVCOMP_LIB_DIR}" > /etc/ld.so.conf.d/nvcomp.conf
-    ldconfig 2>/dev/null || true
-else
-    echo "WARNING: nvCOMP library directory not found at ${NVCOMP_LIB_DIR}"
-fi
-
 # Install NVSHMEM 3.4.5 for CUDA 13 (enables SymmetricMemory fast paths)
 echo ""
 echo "Installing NVSHMEM 3.4.5 runtime and headers (CUDA 13)..."
@@ -1788,19 +1764,9 @@ if [ -f "$REQUIREMENTS_FILE" ]; then
     echo "✓ accelerate and torchtitan installed (PyTorch CUDA verified)"
 fi
 
-# GPU compression/runtime + TRT-LLM dependencies
+# TRT-LLM dependencies
 echo ""
-echo "Installing GPU compression/runtime and TRT-LLM dependencies..."
-pip_install --no-input --no-deps "zstandard==0.23.0" || {
-    echo "Warning: zstandard install failed"
-}
-
-echo "Installing CuPy (CUDA 13) for nvCOMP pipelines..."
-pip_uninstall -y cupy-cuda12x cupy-cuda13x cupy >/dev/null 2>&1 || true
-pip_install --no-cache-dir --upgrade --no-deps "cupy-cuda13x==13.6.0" || {
-    echo "Warning: CuPy install failed"
-}
-
+echo "Installing TRT-LLM dependencies..."
 echo "Installing TensorRT-LLM Python packages..."
 pip_install --no-cache-dir --upgrade --no-deps \
     "tensorrt-llm==1.1.0" \
@@ -1818,8 +1784,8 @@ pip_install --no-cache-dir --upgrade --no-deps \
 }
 
 # Verify PyTorch CUDA wasn't overridden by TRT-LLM deps
-if ! verify_and_restore_pytorch_cuda "nvCOMP/CuPy/TRT-LLM installation"; then
-    echo "ERROR: PyTorch CUDA missing after nvCOMP/CuPy/TRT-LLM installs!"
+if ! verify_and_restore_pytorch_cuda "TRT-LLM installation"; then
+    echo "ERROR: PyTorch CUDA missing after TRT-LLM installs!"
     exit 1
 fi
 

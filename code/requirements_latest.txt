@@ -77,8 +77,6 @@ flashinfer==0.5.2
 ordered-set==4.1.0
 
 # GPU compression & pipeline helpers
-cupy-cuda13x==13.6.0
-zstandard==0.23.0
 
 # Profiling & diagnostics
 py-spy==0.4.1

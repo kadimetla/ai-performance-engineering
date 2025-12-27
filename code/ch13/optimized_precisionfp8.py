@@ -63,8 +63,8 @@ class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         self._verify_input: Optional[torch.Tensor] = None
         self._verify_input_fp16: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
-        self.batch_size = 1024
-        self.hidden_dim = 4096
+        self.batch_size = 2048
+        self.hidden_dim = 8192
         tokens = self.batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,

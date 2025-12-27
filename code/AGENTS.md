@@ -17,6 +17,7 @@
 - Fix as many variables as possible (persistence mode, power limits, thermal state) and keep them stable across baseline/optimized runs.
 - Use the repo’s clock-locking mechanism (`lock_gpu_clocks` in the harness); do not manually invoke `nvidia-smi` to lock clocks.
 - NEVER disable Nsight tools (ncu/nsys); profiling runs must use both and they must succeed.
+- When Nsight Compute application replay is unstable (dynamic kernels), use `aisp bench run --ncu-replay-mode kernel` to override the minimal preset for that run.
 
 ## Test Realism (CRITICAL)
 - Tests MUST NOT use `precheck_only`, `dry_run`, `estimate_only`, or any other short-circuit/preview mode.

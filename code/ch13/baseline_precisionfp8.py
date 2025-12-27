@@ -66,8 +66,8 @@ class BaselinePrecisionFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         self.optimizer = None
         self.criterion = None
         self.output = None  # For output verification
-        self.batch_size = 1024
-        self.hidden_dim = 4096
+        self.batch_size = 2048
+        self.hidden_dim = 8192
         self._verify_input: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
         tokens = self.batch_size * self.hidden_dim
@@ -98,25 +98,30 @@ class BaselinePrecisionFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         self.criterion = nn.MSELoss()
         
         # Warmup (will modify model weights, but output already saved)
-        for _ in range(3):
-            self.optimizer.zero_grad()
-            _ = self.model(self.inputs)
+        for _ in range(5):
+            self._train_step()
         self._synchronize()
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
             tokens_per_iteration=self._workload.tokens_per_iteration,
         )
+
+    def _train_step(self) -> None:
+        assert self.model is not None
+        assert self.inputs is not None and self.targets is not None
+        assert self.optimizer is not None and self.criterion is not None
+        self.optimizer.zero_grad(set_to_none=True)
+        outputs = self.model(self.inputs)
+        loss = self.criterion(outputs, self.targets)
+        loss.backward()
+        self.optimizer.step()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - FP32 precision."""
         if any(v is None for v in (self.model, self.inputs, self.targets, self.optimizer, self.criterion, self._verify_input)):
             raise RuntimeError("Benchmark not configured")
         with self._nvtx_range("baseline_precisionfp8"):
-            self.optimizer.zero_grad()
-            outputs = self.model(self.inputs)  # FP32 computation
-            loss = self.criterion(outputs, self.targets)
-            loss.backward()
-            self.optimizer.step()
+            self._train_step()
             with torch.no_grad():
                 verify_out = self.model(self._verify_input)
                 self.output = verify_out.detach().float().clone()

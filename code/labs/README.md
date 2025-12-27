@@ -27,7 +27,6 @@ Labs are end-to-end optimization stories that combine multiple chapter technique
 | `labs/persistent_decode/` | Persistent decode + TMA prefill | ch10, ch11 |
 | `labs/real_world_models/` | Real-world model optimization playbook | ch20 |
 | `labs/speculative_decode/` | Speculative decoding | ch15, ch18 |
-| `labs/structured_sparsity/` | 2:4 structured sparsity SwiGLU FFN lab | ch09, ch12 |
 | `labs/trtllm_phi_3_5_moe/` | TensorRT-LLM Phi-3.5-MoE comparison | ch16, ch18 |
 | `labs/train_distributed/` | Distributed training workflows | ch03, ch04 |
 | `labs/uma_memory/` | UMA / unified memory diagnostics | ch02, ch07 |

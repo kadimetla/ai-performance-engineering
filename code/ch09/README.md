@@ -18,10 +18,6 @@ Explores how to move workloads along the roofline: raise arithmetic intensity wi
 | `baseline_cutlass_gemm.cu`, `baseline_cutlass_gemm.py`, `optimized_cutlass_gemm.cu`, `optimized_cutlass_gemm.py`, `warp_specialized_cuda.cu` | CUTLASS-driven matmuls and warp-specialized kernels showcasing tcgen05 lowering and occupancy tuning. |
 | `baseline_fused_l2norm.cu`, `baseline_fused_l2norm.py`, `optimized_fused_l2norm.cu`, `optimized_fused_l2norm.py`, `fusedL2Norm/` | Fusion examples that merge L2 norm + scaling while staying numerically stable. |
 | `baseline_triton.py`, `optimized_triton.py`, `warp_specialized_triton.py` | Triton counterparts for quick prototyping and verifying compiler-generated PTX on Blackwell. |
-| `baseline_structured_sparsity.py`, `optimized_structured_sparsity.py` | 2:4 structured sparsity GEMM pair (large square) using cuSPARSELt compression + algo search. |
-| `baseline_structured_sparsity_ffn.py`, `optimized_structured_sparsity_ffn.py` | 2:4 structured sparsity SwiGLU FFN block (GEMM+SwiGLU+GEMM) tuned for 8×8192 tokens with hidden=6144, ffn=24576. |
-| `baseline_structured_sparsity_batch.py`, `optimized_structured_sparsity_batch.py` | 2:4 structured sparsity GEMM pair (batch-heavy) using cuSPARSELt compression + algo search. |
-| `baseline_structured_sparsity_max.py`, `optimized_structured_sparsity_max.py` | Max-size 2:4 structured sparsity GEMM pair with pinned cuSPARSELt algorithm (B200-tuned). |
 | `baseline_warp_specialization_producer_consumer.py`, `optimized_warp_specialization_producer_consumer.py`, `two_stage_pipeline.cu` | Warp cooperation samples emphasizing producer/consumer pipelines and inline PTX hooks. |
 | `compare.py`, `requirements.txt`, `expectations_b200.json` | Harness hooks plus regression thresholds for every example. |
 

@@ -147,6 +147,7 @@ class BenchmarkDefaults:
     profiling_output_dir: Optional[str] = None
     ncu_metric_set: str = "minimal"  # 'auto', 'deep_dive', 'roofline', 'minimal'
     ncu_replay_mode: str = "kernel"  # 'kernel' or 'application'
+    ncu_replay_mode_override: bool = False  # Honor ncu_replay_mode when profiling preset is minimal
     
     @classmethod
     def from_env(cls) -> BenchmarkDefaults:
@@ -212,6 +213,7 @@ class BenchmarkDefaults:
             "ncu_metric_set": self.ncu_metric_set,
             "pm_sampling_interval": self.pm_sampling_interval,
             "ncu_replay_mode": self.ncu_replay_mode,
+            "ncu_replay_mode_override": self.ncu_replay_mode_override,
         }
 
 

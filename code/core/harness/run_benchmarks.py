@@ -2094,6 +2094,7 @@ def _compute_locked_fields(
     base_config: BenchmarkConfig,
     cli_iterations_provided: bool,
     cli_warmup_provided: bool,
+    cli_ncu_replay_mode_provided: bool,
     enable_profiling: bool,
 ) -> Set[str]:
     """Compute run-level config fields that benchmarks may not override."""
@@ -2102,6 +2103,9 @@ def _compute_locked_fields(
         locked_fields.add("iterations")
     if cli_warmup_provided:
         locked_fields.add("warmup")
+    if cli_ncu_replay_mode_provided:
+        locked_fields.add("ncu_replay_mode")
+        locked_fields.add("ncu_replay_mode_override")
 
     runner_locked_when_true: Set[str] = {"enable_memory_tracking", "detect_setup_precomputation"}
     if enable_profiling:
@@ -2236,6 +2240,7 @@ def _test_chapter_impl(
     accept_regressions: bool = False,
     update_expectations: bool = False,
     ncu_metric_set: str = "auto",
+    ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
     graph_capture_ratio_threshold: Optional[float] = None,
     graph_capture_memory_threshold_mb: Optional[float] = None,
@@ -2475,6 +2480,9 @@ def _test_chapter_impl(
         env_passthrough=env_passthrough or None,
         target_extra_args=target_extra_args or {},
     )
+    if ncu_replay_mode is not None:
+        config_kwargs["ncu_replay_mode"] = ncu_replay_mode
+        config_kwargs["ncu_replay_mode_override"] = True
     if pm_sampling_interval is not None:
         config_kwargs["pm_sampling_interval"] = pm_sampling_interval
     elif _defaults_obj is not None:
@@ -2497,6 +2505,7 @@ def _test_chapter_impl(
         base_config=base_config,
         cli_iterations_provided=cli_iterations_provided,
         cli_warmup_provided=cli_warmup_provided,
+        cli_ncu_replay_mode_provided=ncu_replay_mode is not None,
         enable_profiling=enable_profiling,
     )
 
@@ -5615,6 +5624,7 @@ def test_chapter(
     accept_regressions: bool = False,
     update_expectations: bool = False,
     ncu_metric_set: str = "auto",
+    ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
     graph_capture_ratio_threshold: Optional[float] = None,
     graph_capture_memory_threshold_mb: Optional[float] = None,
@@ -5658,6 +5668,7 @@ def test_chapter(
         accept_regressions=accept_regressions,
         update_expectations=update_expectations,
         ncu_metric_set=ncu_metric_set,
+        ncu_replay_mode=ncu_replay_mode,
         pm_sampling_interval=pm_sampling_interval,
         launch_via=launch_via,
         nproc_per_node=nproc_per_node,

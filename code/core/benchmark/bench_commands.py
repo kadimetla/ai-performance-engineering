@@ -123,6 +123,22 @@ def _validate_ncu_metric_set(metric_set: str) -> str:
     return normalized
 
 
+def _validate_ncu_replay_mode(mode: str | None) -> Optional[str]:
+    if mode is None:
+        return None
+    normalized = mode.strip().lower()
+    valid = {"kernel", "application"}
+    if normalized not in valid:
+        message = (
+            f"Invalid Nsight Compute replay mode '{mode}'. "
+            "Choose from 'kernel' or 'application'."
+        )
+        if TYPER_AVAILABLE and typer is not None:
+            raise typer.BadParameter(message)
+        raise ValueError(message)
+    return normalized
+
+
 def _validate_profile_type(profile: str | None) -> str:
     if profile is None:
         return "none"
@@ -284,6 +300,7 @@ def _execute_benchmarks(
     accept_regressions: bool = False,
     update_expectations: bool = False,
     ncu_metric_set: str = "auto",
+    ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
     launch_via: str = "python",
     nproc_per_node: Optional[int] = None,
@@ -391,6 +408,7 @@ def _execute_benchmarks(
             accept_regressions=accept_regressions,
             update_expectations=update_expectations,
             ncu_metric_set=ncu_metric_set,
+            ncu_replay_mode=ncu_replay_mode,
             pm_sampling_interval=pm_sampling_interval,
             launch_via=launch_via,
             nproc_per_node=nproc_per_node,
@@ -473,6 +491,12 @@ if TYPER_AVAILABLE:
         log_level: str = Option("INFO", "--log-level", help="Log level: DEBUG, INFO, WARNING, ERROR"),
         log_file: Optional[str] = Option(None, "--log-file", help="Path to log file (default: artifacts/<run_id>/logs/benchmark.log)"),
         ncu_metric_set: str = Option("minimal", "--ncu-metric-set", help="Nsight Compute metric preset: auto, minimal, deep_dive, or roofline. If auto, the profile type governs metric selection.", callback=_validate_ncu_metric_set),
+        ncu_replay_mode: Optional[str] = Option(
+            None,
+            "--ncu-replay-mode",
+            help="Nsight Compute replay mode: kernel or application. When set, overrides the minimal preset replay mode.",
+            callback=_validate_ncu_replay_mode,
+        ),
         pm_sampling_interval: Optional[int] = Option(
             None,
             "--pm-sampling-interval",
@@ -568,6 +592,7 @@ if TYPER_AVAILABLE:
             accept_regressions=accept_regressions,
             update_expectations=update_expectations,
             ncu_metric_set=ncu_metric_set,
+            ncu_replay_mode=ncu_replay_mode,
             only_cuda=only_cuda,
             only_python=only_python,
             launch_via=launch_via,

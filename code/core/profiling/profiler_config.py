@@ -400,6 +400,7 @@ class ProfilerConfig:
     nsys_stats: bool = True
     nsys_backtrace: str = "none"
     ncu_replay_mode: str = "kernel"  # "kernel" or "application"
+    honor_replay_mode_in_minimal: bool = False
     pm_sampling_interval: Optional[int] = None
     
     def get_nsys_command(
@@ -539,8 +540,9 @@ class ProfilerConfig:
         ]
 
         if preset == "minimal":
+            replay_mode = self.ncu_replay_mode if self.honor_replay_mode_in_minimal else "application"
             cmd.extend([
-                "--replay-mode", "application",
+                "--replay-mode", replay_mode,
             ])
             if self.pm_sampling_interval:
                 cmd.extend(["--pm-sampling-interval", str(self.pm_sampling_interval)])
@@ -736,6 +738,7 @@ def build_profiler_config_from_benchmark(
         metric_set = str(metric_set)
     sampling_interval = getattr(config, "pm_sampling_interval", None)
     replay_mode = getattr(config, "ncu_replay_mode", None)
+    replay_mode_override = bool(getattr(config, "ncu_replay_mode_override", False))
     explicit_includes = getattr(config, "nsys_nvtx_include", None)
     # Fail-fast policy: do not auto-infer NVTX include filters from source code.
     # If the caller wants NVTX filtering, they must explicitly pass
@@ -747,4 +750,5 @@ def build_profiler_config_from_benchmark(
         nvtx_includes=nvtx_includes or None,
         pm_sampling_interval=sampling_interval,
         ncu_replay_mode=str(replay_mode) if replay_mode else "kernel",
+        honor_replay_mode_in_minimal=replay_mode_override,
     )

@@ -543,6 +543,7 @@ class BenchmarkConfig:
     ncu_metric_set: str = field(default_factory=lambda: _get_default_value("ncu_metric_set", "auto"))
     pm_sampling_interval: Optional[int] = field(default_factory=lambda: _get_default_value("pm_sampling_interval", None))
     ncu_replay_mode: str = field(default_factory=lambda: _get_default_value("ncu_replay_mode", "kernel"))
+    ncu_replay_mode_override: bool = field(default_factory=lambda: _get_default_value("ncu_replay_mode_override", False))
 
     # Triton-style best practices (based on triton/testing.py)
     # See: https://github.com/triton-lang/triton/blob/main/python/triton/testing.py
