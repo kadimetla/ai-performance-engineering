@@ -5,18 +5,18 @@
       "metadata": {
         "best_optimization": "powersgd",
         "best_optimization_file": "optimized_ddp_compression_multigpu_powersgd.py",
-        "best_optimization_speedup": 0.9665417699186951,
+        "best_optimization_speedup": 0.9934873181444043,
         "best_optimization_technique": "powersgd",
-        "best_optimization_time_ms": 180.39599895477295,
+        "best_optimization_time_ms": 180.44771432876587,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 174.36026811599731,
-        "baseline_time_ms": 174.36026811599731,
-        "best_optimized_p75_ms": 180.39599895477295,
-        "best_optimized_speedup": 0.9665417699186951,
-        "best_optimized_time_ms": 180.39599895477295,
-        "best_speedup": 0.9665417699186951,
+        "baseline_p75_ms": 179.2725157737732,
+        "baseline_time_ms": 179.2725157737732,
+        "best_optimized_p75_ms": 180.44771432876587,
+        "best_optimized_speedup": 0.9934873181444043,
+        "best_optimized_time_ms": 180.44771432876587,
+        "best_speedup": 0.9934873181444043,
         "is_regression": true
       },
       "provenance": {
@@ -24,7 +24,7 @@
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-29T19:32:58.942560",
+        "timestamp": "2025-12-29T21:09:37.149995",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -34,18 +34,18 @@
       "metadata": {
         "best_optimization": "optimized_ddp_compression_multigpu_int8",
         "best_optimization_file": "optimized_ddp_compression_multigpu_int8.py",
-        "best_optimization_speedup": 0.7503352611737285,
+        "best_optimization_speedup": 0.5738896214781717,
         "best_optimization_technique": "optimized_ddp_compression_multigpu_int8",
-        "best_optimization_time_ms": 240.37872076034546,
+        "best_optimization_time_ms": 300.5226731300354,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 180.36463022232056,
-        "baseline_time_ms": 180.36463022232056,
-        "best_optimized_p75_ms": 240.37872076034546,
-        "best_optimized_speedup": 0.7503352611737285,
-        "best_optimized_time_ms": 240.37872076034546,
-        "best_speedup": 0.7503352611737285,
+        "baseline_p75_ms": 172.46684312820435,
+        "baseline_time_ms": 172.46684312820435,
+        "best_optimized_p75_ms": 300.5226731300354,
+        "best_optimized_speedup": 0.5738896214781717,
+        "best_optimized_time_ms": 300.5226731300354,
+        "best_speedup": 0.5738896214781717,
         "is_regression": true
       },
       "provenance": {
@@ -53,7 +53,7 @@
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-29T19:34:19.315300",
+        "timestamp": "2025-12-29T21:11:07.500885",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -63,26 +63,26 @@
       "metadata": {
         "best_optimization": "optimized_ddp_compression_multigpu_powersgd",
         "best_optimization_file": "optimized_ddp_compression_multigpu_powersgd.py",
-        "best_optimization_speedup": 0.9491601197778222,
+        "best_optimization_speedup": 1.2543819359311605,
         "best_optimization_technique": "optimized_ddp_compression_multigpu_powersgd",
-        "best_optimization_time_ms": 180.40839672088623,
+        "best_optimization_time_ms": 177.3096799850464,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 171.23645544052124,
-        "baseline_time_ms": 171.23645544052124,
-        "best_optimized_p75_ms": 180.40839672088623,
-        "best_optimized_speedup": 0.9491601197778222,
-        "best_optimized_time_ms": 180.40839672088623,
-        "best_speedup": 0.9491601197778222,
-        "is_regression": true
+        "baseline_p75_ms": 222.41405963897705,
+        "baseline_time_ms": 222.41405963897705,
+        "best_optimized_p75_ms": 177.3096799850464,
+        "best_optimized_speedup": 1.2543819359311605,
+        "best_optimized_time_ms": 177.3096799850464,
+        "best_speedup": 1.2543819359311605,
+        "is_regression": false
       },
       "provenance": {
         "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-29T19:33:35.950930",
+        "timestamp": "2025-12-29T21:10:18.885975",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -92,18 +92,18 @@
       "metadata": {
         "best_optimization": "optimized_pipeline_1f1b",
         "best_optimization_file": "optimized_pipeline_1f1b.py",
-        "best_optimization_speedup": 0.8955014547642773,
+        "best_optimization_speedup": 0.9001572951588046,
         "best_optimization_technique": "optimized_pipeline_1f1b",
-        "best_optimization_time_ms": 49.227893352508545,
+        "best_optimization_time_ms": 49.0690541267395,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 44.0836501121521,
-        "baseline_time_ms": 44.0836501121521,
-        "best_optimized_p75_ms": 49.227893352508545,
-        "best_optimized_speedup": 0.8955014547642773,
-        "best_optimized_time_ms": 49.227893352508545,
-        "best_speedup": 0.8955014547642773,
+        "baseline_p75_ms": 44.16986703872681,
+        "baseline_time_ms": 44.16986703872681,
+        "best_optimized_p75_ms": 49.0690541267395,
+        "best_optimized_speedup": 0.9001572951588046,
+        "best_optimized_time_ms": 49.0690541267395,
+        "best_speedup": 0.9001572951588046,
         "is_regression": true
       },
       "provenance": {
@@ -111,7 +111,7 @@
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-29T19:47:54.710784",
+        "timestamp": "2025-12-29T21:24:07.096197",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -121,18 +121,18 @@
       "metadata": {
         "best_optimization": "optimized_pipeline_dualpipe",
         "best_optimization_file": "optimized_pipeline_dualpipe.py",
-        "best_optimization_speedup": 1.220586501751819,
+        "best_optimization_speedup": 1.2194661880476694,
         "best_optimization_technique": "optimized_pipeline_dualpipe",
-        "best_optimization_time_ms": 54.24447536468506,
+        "best_optimization_time_ms": 55.12866258621216,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 66.21007442474365,
-        "baseline_time_ms": 66.21007442474365,
-        "best_optimized_p75_ms": 54.24447536468506,
-        "best_optimized_speedup": 1.220586501751819,
-        "best_optimized_time_ms": 54.24447536468506,
-        "best_speedup": 1.220586501751819,
+        "baseline_p75_ms": 67.22754001617432,
+        "baseline_time_ms": 67.22754001617432,
+        "best_optimized_p75_ms": 55.12866258621216,
+        "best_optimized_speedup": 1.2194661880476694,
+        "best_optimized_time_ms": 55.12866258621216,
+        "best_speedup": 1.2194661880476694,
         "is_regression": false
       },
       "provenance": {
@@ -140,7 +140,7 @@
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-29T19:48:08.087170",
+        "timestamp": "2025-12-29T21:24:20.552703",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -150,18 +150,18 @@
       "metadata": {
         "best_optimization": "optimized_pipeline_dualpipev",
         "best_optimization_file": "optimized_pipeline_dualpipev.py",
-        "best_optimization_speedup": 1.2223253748084417,
+        "best_optimization_speedup": 1.2206885313410938,
         "best_optimization_technique": "optimized_pipeline_dualpipev",
-        "best_optimization_time_ms": 53.39918375015259,
+        "best_optimization_time_ms": 54.23673629760742,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 65.27117729187012,
-        "baseline_time_ms": 65.27117729187012,
-        "best_optimized_p75_ms": 53.39918375015259,
-        "best_optimized_speedup": 1.2223253748084417,
-        "best_optimized_time_ms": 53.39918375015259,
-        "best_speedup": 1.2223253748084417,
+        "baseline_p75_ms": 66.2061619758606,
+        "baseline_time_ms": 66.2061619758606,
+        "best_optimized_p75_ms": 54.23673629760742,
+        "best_optimized_speedup": 1.2206885313410938,
+        "best_optimized_time_ms": 54.23673629760742,
+        "best_speedup": 1.2206885313410938,
         "is_regression": false
       },
       "provenance": {
@@ -169,7 +169,7 @@
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-29T19:48:21.268482",
+        "timestamp": "2025-12-29T21:24:34.368596",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -179,18 +179,47 @@
       "metadata": {
         "best_optimization": "optimized_pipeline_gpipe",
         "best_optimization_file": "optimized_pipeline_gpipe.py",
-        "best_optimization_speedup": 0.9819395490931615,
+        "best_optimization_speedup": 1.0017439767032015,
         "best_optimization_technique": "optimized_pipeline_gpipe",
-        "best_optimization_time_ms": 45.20387887954712,
+        "best_optimization_time_ms": 44.15177345275879,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 44.387476444244385,
-        "baseline_time_ms": 44.387476444244385,
-        "best_optimized_p75_ms": 45.20387887954712,
-        "best_optimized_speedup": 0.9819395490931615,
-        "best_optimized_time_ms": 45.20387887954712,
-        "best_speedup": 0.9819395490931615,
+        "baseline_p75_ms": 44.22877311706543,
+        "baseline_time_ms": 44.22877311706543,
+        "best_optimized_p75_ms": 44.15177345275879,
+        "best_optimized_speedup": 1.0017439767032015,
+        "best_optimized_time_ms": 44.15177345275879,
+        "best_speedup": 1.0017439767032015,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "2x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T21:24:44.483806",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    },
+    "symmem_training": {
+      "example": "symmem_training",
+      "metadata": {
+        "best_optimization": "optimized_symmem_training",
+        "best_optimization_file": "optimized_symmem_training.py",
+        "best_optimization_speedup": 0.9804897516041576,
+        "best_optimization_technique": "optimized_symmem_training",
+        "best_optimization_time_ms": 55.255582332611084,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_p75_ms": 54.17753219604492,
+        "baseline_time_ms": 54.17753219604492,
+        "best_optimized_p75_ms": 55.255582332611084,
+        "best_optimized_speedup": 0.9804897516041576,
+        "best_optimized_time_ms": 55.255582332611084,
+        "best_speedup": 0.9804897516041576,
         "is_regression": true
       },
       "provenance": {
@@ -198,7 +227,7 @@
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-29T19:48:31.552980",
+        "timestamp": "2025-12-29T21:24:57.008502",
         "warmup_iterations": 5
       },
       "type": "python"
@@ -208,18 +237,18 @@
       "metadata": {
         "best_optimization": "optimized_zero1",
         "best_optimization_file": "optimized_zero1.py",
-        "best_optimization_speedup": 1.3025041812920632,
+        "best_optimization_speedup": 1.3009975228322321,
         "best_optimization_technique": "optimized_zero1",
-        "best_optimization_time_ms": 89.26529884338379,
+        "best_optimization_time_ms": 90.12709140777588,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 116.26842498779297,
-        "baseline_time_ms": 116.26842498779297,
-        "best_optimized_p75_ms": 89.26529884338379,
-        "best_optimized_speedup": 1.3025041812920632,
-        "best_optimized_time_ms": 89.26529884338379,
-        "best_speedup": 1.3025041812920632,
+        "baseline_p75_ms": 117.25512266159058,
+        "baseline_time_ms": 117.25512266159058,
+        "best_optimized_p75_ms": 90.12709140777588,
+        "best_optimized_speedup": 1.3009975228322321,
+        "best_optimized_time_ms": 90.12709140777588,
+        "best_speedup": 1.3009975228322321,
         "is_regression": false
       },
       "provenance": {
@@ -227,7 +256,7 @@
         "hardware_key": "2x_b200",
         "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-29T19:49:10.991819",
+        "timestamp": "2025-12-29T21:25:19.070310",
         "warmup_iterations": 5
       },
       "type": "python"

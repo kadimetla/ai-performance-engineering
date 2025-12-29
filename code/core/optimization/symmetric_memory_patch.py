@@ -84,6 +84,16 @@ class SymmetricMemoryHandle:
             except Exception as exc:
                 raise RuntimeError("NVSHMEM backend is not available for symmetric memory") from exc
 
+        try:
+            if (
+                hasattr(_symm_mem, "is_symm_mem_enabled_for_group")
+                and hasattr(_symm_mem, "enable_symm_mem_for_group")
+                and not _symm_mem.is_symm_mem_enabled_for_group(group)
+            ):
+                _symm_mem.enable_symm_mem_for_group(group)
+        except Exception as exc:
+            raise RuntimeError("Failed to enable symmetric memory for process group") from exc
+
         self._group = group
         self._rank = dist.get_rank(group=group)
         self._world_size = dist.get_world_size(group=group)
