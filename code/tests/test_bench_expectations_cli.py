@@ -23,9 +23,9 @@ def test_bench_expectations_json_output():
             "cli.aisp",
             "bench",
             "expectations",
-            "--hardware-key",
+            "--hardware",
             "b200",
-            "--min-improvement",
+            "--min-speedup",
             "1.0",
             "--goal",
             "speed",
@@ -39,6 +39,6 @@ def test_bench_expectations_json_output():
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     summary = payload.get("summary", {})
-    assert summary.get("hardware_key") == "b200"
+    assert summary.get("hardware") == "b200"
     assert isinstance(payload.get("entries"), list)
     assert isinstance(payload.get("missing"), list)

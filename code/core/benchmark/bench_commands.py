@@ -1414,8 +1414,8 @@ if TYPER_AVAILABLE:
 
     @app.command("expectations")
     def expectations(
-        hardware_key: str = Option("b200", "--hardware-key", "-h", help="Hardware key (e.g., b200, h100)"),
-        min_improvement: float = Option(1.05, "--min-improvement", help="Minimum improvement threshold"),
+        hardware: str = Option("b200", "--hardware", "-H", help="Hardware key (e.g., b200, h100)"),
+        min_speedup: float = Option(1.05, "--min-speedup", help="Minimum improvement threshold"),
         goal: str = Option("any", "--goal", help="Filter by optimization goal: speed, memory, or any"),
         json_output: bool = Option(False, "--json", help="Output as JSON"),
         show_all: bool = Option(False, "--all", help="Show all entries (not just below threshold)"),
@@ -1427,15 +1427,15 @@ if TYPER_AVAILABLE:
         goal_norm = goal.strip().lower()
         if goal_norm not in {"any", "speed", "memory"}:
             raise typer.BadParameter("Goal must be one of: any, speed, memory")
-        if min_improvement <= 0:
-            raise typer.BadParameter("min_improvement must be positive")
+        if min_speedup <= 0:
+            raise typer.BadParameter("min_speedup must be positive")
         if multi_gpu_only and single_gpu_only:
             raise typer.BadParameter("Choose either --multi-gpu-only or --single-gpu-only, not both")
 
         repo_root = Path(__file__).resolve().parents[2]
-        files = _collect_expectations(hardware_key, repo_root)
+        files = _collect_expectations(hardware, repo_root)
         if not files:
-            typer.echo(f"No expectations_{hardware_key}.json files found.")
+            typer.echo(f"No expectations_{hardware}.json files found.")
             raise typer.Exit(code=1)
 
         entries: List[Dict[str, Any]] = []
@@ -1505,7 +1505,7 @@ if TYPER_AVAILABLE:
                     )
                     continue
 
-                if show_all or improvement_f < min_improvement:
+                if show_all or improvement_f < min_speedup:
                     entries.append(
                         {
                             "path": str(exp_path.relative_to(repo_root)),
@@ -1524,12 +1524,12 @@ if TYPER_AVAILABLE:
 
         entries.sort(key=lambda e: e["improvement"])
         summary = {
-            "hardware_key": hardware_key,
+            "hardware": hardware,
             "files_scanned": len(files),
             "entries_scanned": total_entries,
             "entries_reported": len(entries),
             "missing_metrics": len(missing),
-            "min_improvement": min_improvement,
+            "min_speedup": min_speedup,
             "goal_filter": goal_norm,
             "multi_gpu_only": multi_gpu_only,
             "single_gpu_only": single_gpu_only,
@@ -1761,7 +1761,7 @@ if TYPER_AVAILABLE:
 
     @app.command("report")
     def report(
-        data_file: Optional[Path] = Option(None, "--data-file", "-d", help="Path to benchmark_test_results.json"),
+        data_file: Optional[str] = Option(None, "--data-file", "-d", help="Path or URL to benchmark_test_results.json"),
         output: Path = Option(Path("report.pdf"), "--output", "-o", help="Output file (.pdf or .html)"),
         format: str = Option("pdf", "--format", "-f", help="pdf or html"),
         title: str = Option("GPU Performance Report", "--title", help="Report title"),
@@ -1774,7 +1774,7 @@ if TYPER_AVAILABLE:
             typer.echo(f"Report generation unavailable: {exc}", err=True)
             raise typer.Exit(code=1)
 
-        input_path = str(data_file) if data_file else "benchmark_test_results.json"
+        input_path = data_file or "benchmark_test_results.json"
         cfg = ReportConfig(title=title, author=author)
         path = generate_report(input_path, str(output), format=format, config=cfg)
         typer.echo(f"✅ Report generated: {path}")

@@ -2264,7 +2264,25 @@ class BenchmarkHarness:
         
         # Create manifest at start
         start_time = datetime.now()
-        config_dict = self.config.__dict__.copy()
+
+        def _serialize_manifest_value(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {str(k): _serialize_manifest_value(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple, set)):
+                return [_serialize_manifest_value(v) for v in value]
+            if isinstance(value, Enum):
+                return value.value
+            if isinstance(value, Path):
+                return str(value)
+            if isinstance(value, torch.device):
+                return str(value)
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                return value
+            raise TypeError(
+                f"Unsupported BenchmarkConfig value type for manifest serialization: {type(value)}"
+            )
+
+        config_dict = {k: _serialize_manifest_value(v) for k, v in self.config.__dict__.items()}
         manifest = RunManifest.create(config=config_dict, start_time=start_time)
         
         # Add seed information to manifest
@@ -2425,6 +2443,7 @@ class BenchmarkHarness:
         times_ms: List[float] = []
         inference_timing_data: Optional[Dict[str, List[float]]] = None
         seed_metadata = copy.deepcopy(getattr(self, "_seed_info", None))
+        child_custom_metrics: Optional[Dict[str, float]] = None
         stage_watchdog: Dict[str, Dict[str, Any]] = {
             "setup": {"status": "pending"},
             "warmup": {"status": "pending"},
@@ -2644,6 +2663,7 @@ class BenchmarkHarness:
                                 ncu_metrics = benchmark_result.profiler_metrics.ncu.to_dict()
                             if benchmark_result.profiler_metrics.proton:
                                 proton_metrics = benchmark_result.profiler_metrics.proton.to_dict()
+                        child_custom_metrics = dict(benchmark_result.custom_metrics or {})
                         
                         # Extract verify_output/tolerance/signature from subprocess and store on benchmark
                         verify_output_data = result_dict.get("verify_output")
@@ -2833,9 +2853,12 @@ class BenchmarkHarness:
         
         # Compute statistics
         result = self._compute_stats(times_ms, config)
-        custom_metrics = self._resolve_custom_metrics(benchmark)
-        if custom_metrics:
-            result.custom_metrics = custom_metrics
+        if child_custom_metrics is not None:
+            result.custom_metrics = child_custom_metrics
+        else:
+            custom_metrics = self._resolve_custom_metrics(benchmark)
+            if custom_metrics:
+                result.custom_metrics = custom_metrics
         self._attach_throughput_metrics(result, benchmark)
         
         # Add inference timing if available

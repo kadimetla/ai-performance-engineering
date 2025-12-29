@@ -17,6 +17,7 @@
 - Do not add or keep deprecated entrypoints, shims, compatibility wrappers, or transitional aliases.
 - Deprecations are not allowed to persist anywhere: remove them immediately from code, docs, READMEs, and tests.
 - When removing a deprecation, replace all references with the latest entrypoint(s) or APIs in the same change.
+- Do not leave deprecation notices, TODOs, or compatibility flags behind; purge and replace in one pass.
 
 ## Benchmark Stability (CRITICAL)
 - ALWAYS lock GPU clocks before any benchmark/profiling run; focus on relative performance rather than absolute numbers.

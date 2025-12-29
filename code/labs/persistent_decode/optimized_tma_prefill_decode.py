@@ -490,7 +490,6 @@ class OptimizedTmaPrefillDecodeBenchmark(VerificationPayloadMixin, BaseBenchmark
         return BenchmarkConfig(
             iterations=8,
             warmup=10,
-            use_subprocess=False,
             measurement_timeout_seconds=120,
         )
 

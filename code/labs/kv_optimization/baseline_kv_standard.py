@@ -229,7 +229,6 @@ def run_benchmark(
         iterations=1,
         warmup=5,
         profile_mode=profile,
-        use_subprocess=False,  # keep metrics available to caller
     )
     harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
 

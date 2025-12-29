@@ -134,7 +134,6 @@ class NvlinkOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=5,
             timeout_seconds=180,
             measurement_timeout_seconds=180,
-            use_subprocess=False,
         )
 
     def get_custom_metrics(self) -> Optional[dict]:

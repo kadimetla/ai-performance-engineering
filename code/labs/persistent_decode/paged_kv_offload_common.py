@@ -368,7 +368,6 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
             timeout_seconds=300,
             measurement_timeout_seconds=300,
             deterministic=False,
-            use_subprocess=False,
         )
 
     def validate_result(self) -> Optional[str]:

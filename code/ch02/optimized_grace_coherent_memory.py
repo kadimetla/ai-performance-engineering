@@ -24,7 +24,6 @@ from core.harness.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkConfig,
     BenchmarkMode,
-    ExecutionMode,
     WorkloadMetadata,
 )
 from core.benchmark.verification_mixin import VerificationPayloadMixin
@@ -360,8 +359,6 @@ def run_benchmark(
             iterations=1,
             warmup=5,
             profile_mode=profile,
-            use_subprocess=False,
-            execution_mode=ExecutionMode.THREAD,
         ),
     )
     result = harness.benchmark(benchmark, name="optimized_grace_coherent_memory")

@@ -989,22 +989,25 @@ class VerifyRunner:
             visible_count = len(tokens)
         else:
             visible_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        single_gpu = bool(getattr(cfg, "single_gpu", False))
+        use_subprocess = bool(getattr(cfg, "use_subprocess", False))
+        effective_visible = 1 if single_gpu and use_subprocess else visible_count
 
         if required_world_size is not None:
             if required_world_size <= 0:
                 raise RuntimeError(f"required_world_size must be positive, got {required_world_size}")
-            if visible_count and visible_count != required_world_size:
+            if effective_visible and effective_visible != required_world_size:
                 raise RuntimeError(
                     f"World size mismatch: requires exactly {required_world_size} visible GPU(s), "
-                    f"found {visible_count}."
+                    f"found {effective_visible}."
                 )
         elif multi_gpu_required:
-            if not torch.cuda.is_available() or visible_count < 2:
+            if not torch.cuda.is_available() or effective_visible < 2:
                 raise RuntimeError("SKIPPED: requires >=2 GPUs")
         else:
-            if visible_count and visible_count != 1:
+            if effective_visible and effective_visible != 1:
                 raise RuntimeError(
-                    f"World size mismatch: requires exactly 1 visible GPU, found {visible_count}."
+                    f"World size mismatch: requires exactly 1 visible GPU, found {effective_visible}."
                 )
 
         skip_input = False

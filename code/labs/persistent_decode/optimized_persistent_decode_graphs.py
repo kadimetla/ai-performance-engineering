@@ -220,7 +220,6 @@ class OptimizedPersistentDecodeGraphsBenchmark(VerificationPayloadMixin, BaseBen
             enable_profiling=False,
             enable_ncu=False,
             enable_nsys=False,
-            use_subprocess=False,
             measurement_timeout_seconds=90,
         )
 

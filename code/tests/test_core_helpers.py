@@ -252,3 +252,12 @@ def test_profile_insights_ncu_pair_key_selects_csv(tmp_path: Path):
     assert metrics["sm__throughput"]["baseline"] == "50"
     assert metrics["sm__throughput"]["optimized"] == "70"
     assert "baseline_sources" not in comparison
+
+
+def test_profile_insights_normalizes_repeated_names():
+    name = (
+        "optimized_precisionfp8_pad_inner_matmul_optimized_"
+        "optimized_precisionfp8_pad_inner_matmul.nsys-rep"
+    )
+    normalized = profile_insights._normalize_profile_name(name)
+    assert normalized == "precisionfp8_pad_inner_matmul"

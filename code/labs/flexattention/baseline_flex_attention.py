@@ -104,7 +104,6 @@ class BaselineFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return BenchmarkConfig(
             iterations=10,
             warmup=10,  # Required for FlexAttention JIT compilation
-            use_subprocess=False,
             measurement_timeout_seconds=60,
         )
 

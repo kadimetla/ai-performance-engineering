@@ -130,7 +130,15 @@ def _iter_benchmark_dirs(bench_root: Path) -> Iterable[Path]:
         "dist",
         "out",
         "artifacts",
+        "book",
         "dashboard",
+        "docs",
+        "eval_datasets",
+        "examples",
+        "mcp",
+        "monitoring",
+        "scripts",
+        "tools",
         "benchmark_profiles",
         "benchmark_profiles_chXX",
         "profiling_results",
@@ -149,6 +157,7 @@ def _iter_benchmark_dirs(bench_root: Path) -> Iterable[Path]:
             and not d.startswith(".")
             and not d.startswith("artifacts")
             and not d.startswith("benchmark_profiles")
+            and not d.startswith("pymp-")
         ]
         if any(
             fname.startswith("baseline_") and (fname.endswith(".py") or fname.endswith(".cu"))

@@ -12,15 +12,15 @@ ARCHITECTURE:
     ┌──────────────────────────────────────────────────────────────────────┐
     │  CLI Command Groups       →  Engine Domains                          │
     │──────────────────────────────────────────────────────────────────────│
-    │  aisp info [status|gpu|deps|features|network|topo]  → gpu, system    │
-    │  aisp hw [memory|pcie|tc|...]                       → benchmark      │
+    │  aisp gpu [info|topology|power|bandwidth|features]  → gpu            │
+    │  aisp system [status|software|deps|capabilities|env|network] → system │
     │  aisp profile [nsys|ncu|compare|flame|hta]          → profile        │
     │  aisp optimize [recommend|roi|techniques]           → optimize       │
-    │  aisp distributed [plan|nccl|...]                   → distributed    │
+    │  aisp distributed [plan|nccl|topology|slurm]        → distributed    │
     │  aisp inference [vllm|quantize|...]                 → inference      │
     │  aisp ai [ask|explain|troubleshoot]                 → ai             │
-    │  aisp report [export|history|roi]                   → export         │
-    │  aisp bench [run|targets|compare]                   → benchmark      │
+    │  aisp benchmark [memory|pcie|tc|speed|diagnostics]  → benchmark      │
+    │  aisp bench [run|targets|compare|report|export]     → benchmark      │
     └──────────────────────────────────────────────────────────────────────┘
 
 DOMAIN MODEL (10 domains in core/engine.py):
@@ -37,8 +37,8 @@ DOMAIN MODEL (10 domains in core/engine.py):
 
 QUICK START:
     aisp                    # Launch interactive TUI
-    aisp info status        # System status overview
-    aisp info gpu           # GPU information
+    aisp system status      # System status overview
+    aisp gpu info           # GPU information
     aisp ai ask "Why slow?" # Ask AI about performance
     aisp bench run -t ch07  # Run benchmarks
     
@@ -126,18 +126,6 @@ class TargetChoice(str, Enum):
     throughput = "throughput"
     latency = "latency"
     balanced = "balanced"
-
-
-class ReportFormat(str, Enum):
-    markdown = "markdown"
-    json = "json"
-
-
-class ExportFormat(str, Enum):
-    json = "json"
-    csv = "csv"
-    detailed_csv = "detailed_csv"
-    html = "html"
 
 
 class SpeedTestChoice(str, Enum):
@@ -233,8 +221,8 @@ if typer:
     # Domain 7: Inference - vLLM, quantization, deployment
     inference_app = typer.Typer(help="Inference: vLLM config, quantization, deployment")
     
-    # Domain 8: Benchmark - Run benchmarks, targets, history
-    benchmark_app = typer.Typer(help="Benchmarks: run, targets, history, speed tests")
+    # Domain 8: Benchmark - Microbench diagnostics
+    benchmark_app = typer.Typer(help="Benchmarks: microbench diagnostics, speed tests")
     
     # Domain 9: AI - Ask questions, explain concepts
     ai_app = typer.Typer(help="AI: ask questions, explain concepts, suggest tools")
@@ -242,20 +230,6 @@ if typer:
     # Domain 10: Export - CSV, PDF, HTML reports
     export_app = typer.Typer(help="Export: CSV, PDF, HTML reports")
     
-    # ==========================================================================
-    # LEGACY ALIASES (for backwards compatibility during transition)
-    # ==========================================================================
-    info_app = gpu_app  # Alias: aisp info → aisp gpu
-    hw_app = benchmark_app  # Alias: aisp hw → aisp benchmark  
-    report_app = export_app  # Alias: aisp report → aisp export
-    
-    # Additional legacy groups (will be phased out)
-    monitoring_app = typer.Typer(help="[Legacy] Monitoring and diagnostics")
-    training_app = typer.Typer(help="[Legacy] Training helpers")
-    hf_app = typer.Typer(help="[Legacy] HuggingFace model search")
-    cluster_app = typer.Typer(help="[Legacy] Cluster scripts - use 'distributed' instead")
-
-
 # =============================================================================
 # Root callback
 # =============================================================================
@@ -333,33 +307,100 @@ if typer:
         typer.echo(json.dumps(result, indent=2))
         raise typer.Exit(0)
 
-    @gpu_app.command("status", help="[Alias] Comprehensive system status")
-    def gpu_status(ctx: typer.Context) -> None:
-        from cli.commands import system as system_cmds
-        _run(system_cmds.system_status, ctx)
-
     @gpu_app.command("features", help="Hardware features (TMA, tensor cores, FP8)")
     def gpu_features(ctx: typer.Context) -> None:
         """Display detailed hardware capabilities and features."""
         from core.harness.hardware_capabilities import detect_capabilities
-        
+
         cap = detect_capabilities()
         if cap is None:
             typer.echo("❌ CUDA not available on this system.")
             raise typer.Exit(code=1)
-        
+
+        # Header
         typer.echo(f"\n🖥️  GPU: {cap.device_name}")
-        typer.echo(f"   Architecture: {cap.name} (SM {cap.sm_version})")
+        typer.echo(f"   Architecture: {cap.name} ({cap.sm_version})")
         typer.echo(f"   Compute Capability: {cap.compute_capability}")
-        typer.echo(f"   Memory: {cap.total_memory_gb:.1f} GB")
-        typer.echo(f"   SMs: {cap.num_sms}")
+        typer.echo(f"   Memory: {cap.total_memory_gb:.1f} GB", nl=False)
+        if cap.memory_bandwidth_tbps:
+            typer.echo(f" @ {cap.memory_bandwidth_tbps:.2f} TB/s")
+        else:
+            typer.echo()
+        typer.echo(f"   SMs: {cap.num_sms}, Warp Size: {cap.warp_size}")
         typer.echo()
-        
-        typer.echo("Features:")
-        typer.echo(f"  • Tensor Cores: {cap.tensor_cores or 'None'}")
-        typer.echo(f"  • TMA: {'✓' if cap.tma_supported else '✗'}")
-        typer.echo(f"  • FP8: {'✓' if 'FP8' in cap.features or cap.architecture.lower() in ['hopper', 'blackwell'] else '✗'}")
-        typer.echo(f"  • NVLink C2C: {'✓' if cap.nvlink_c2c else '✗'}")
+
+        # Features table
+        typer.echo("┌─────────────────────┬────────────────────────────────────┐")
+        typer.echo("│ Feature             │ Status                             │")
+        typer.echo("├─────────────────────┼────────────────────────────────────┤")
+
+        # Tensor Cores
+        tc_status = cap.tensor_cores if cap.tensor_cores else "None"
+        typer.echo(f"│ Tensor Cores        │ {tc_status:<34} │")
+
+        # TMA
+        if cap.tma_supported:
+            tma_status = f"✓ (1D:{cap.tma_limits.max_1d_elements}, 2D:{cap.tma_limits.max_2d_width}×{cap.tma_limits.max_2d_height})"
+            if not cap.tma_compiler_supported:
+                tma_status += " [compiler N/A]"
+        else:
+            tma_status = "✗"
+        typer.echo(f"│ TMA                 │ {tma_status:<34} │")
+
+        # TMEM (Tensor Memory for MMA accumulators - SM100+ Blackwell)
+        tmem_status = "✓" if cap.architecture.lower() in ["blackwell", "blackwell_ultra"] else "✗"
+        typer.echo(f"│ TMEM (MMA accum)    │ {tmem_status:<34} │")
+
+        # DSMEM (Distributed Shared Memory - cluster feature)
+        if cap.cluster.supports_clusters:
+            dsmem_status = f"✓ (max cluster: {cap.cluster.max_cluster_size})"
+            if cap.cluster.has_dsmem:
+                dsmem_status = f"✓ (cluster: {cap.cluster.max_cluster_size})"
+        else:
+            dsmem_status = "✗"
+        typer.echo(f"│ DSMEM (clusters)    │ {dsmem_status:<34} │")
+
+        # NVLink
+        nvlink_status = "✓" if cap.nvlink_c2c else "✗"
+        typer.echo(f"│ NVLink C2C          │ {nvlink_status:<34} │")
+
+        # Grace Coherence
+        grace_status = "✓" if cap.grace_coherence else "✗"
+        typer.echo(f"│ Grace Coherence     │ {grace_status:<34} │")
+
+        # Features from list
+        fp8 = "✓" if "FP8" in cap.features or cap.architecture.lower() in ["hopper", "blackwell"] else "✗"
+        typer.echo(f"│ FP8                 │ {fp8:<34} │")
+
+        hbm3e = "✓ HBM3e" if "HBM3e" in cap.features else "✗"
+        typer.echo(f"│ HBM3e Memory        │ {hbm3e:<34} │")
+
+        # ILP-related info
+        typer.echo("├─────────────────────┼────────────────────────────────────┤")
+        typer.echo(f"│ Max Threads/Block   │ {cap.max_threads_per_block:<34} │")
+        typer.echo(f"│ Max Threads/SM      │ {cap.max_threads_per_sm:<34} │")
+        smem_kb = cap.max_shared_mem_per_block / 1024
+        typer.echo(f"│ Shared Mem/Block    │ {smem_kb:.0f} KB{'':<28} │")
+        if cap.l2_cache_kb:
+            typer.echo(f"│ L2 Cache            │ {cap.l2_cache_kb:.0f} KB{'':<28} │")
+
+        typer.echo("└─────────────────────┴────────────────────────────────────┘")
+
+        # Driver/Runtime info
+        if cap.driver_version or cap.cuda_runtime_version:
+            typer.echo()
+            if cap.driver_version:
+                typer.echo(f"   Driver: {cap.driver_version}")
+            if cap.cuda_runtime_version:
+                typer.echo(f"   CUDA Runtime: {cap.cuda_runtime_version}")
+
+        # Notes
+        if cap.notes:
+            typer.echo("\n📝 Notes:")
+            for note in cap.notes:
+                typer.echo(f"   • {note}")
+
+        typer.echo()
         raise typer.Exit(0)
 
 # =============================================================================
@@ -367,6 +408,11 @@ if typer:
 # =============================================================================
 
 if typer:
+
+    @system_app.command("status", help="System status overview")
+    def system_status_cmd(ctx: typer.Context) -> None:
+        from cli.commands import system as system_cmds
+        _run(system_cmds.system_status, ctx)
 
     @system_app.command("software", help="Software versions: PyTorch, CUDA, Python")
     def system_software_cmd(ctx: typer.Context) -> None:
@@ -405,6 +451,58 @@ if typer:
     def system_env_cmd(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.show_env, ctx)
+
+    @system_app.command("network", help="Network and InfiniBand status")
+    def system_network_cmd(ctx: typer.Context) -> None:
+        """Display network interfaces, InfiniBand status, and GPUDirect RDMA info."""
+        import shutil
+
+        typer.echo("\n🌐 Network Status\n")
+
+        # InfiniBand status
+        ibstat_cmd = shutil.which("ibstat")
+        if ibstat_cmd:
+            typer.echo("InfiniBand Devices:")
+            try:
+                result = subprocess.run([ibstat_cmd], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0 and result.stdout.strip():
+                    # Parse ibstat output for key info
+                    lines = result.stdout.strip().split('\n')
+                    for line in lines:
+                        if any(x in line for x in ['CA ', 'Port ', 'State:', 'Rate:', 'Link layer:']):
+                            typer.echo(f"  {line.strip()}")
+                else:
+                    typer.echo("  No InfiniBand devices found")
+            except Exception as e:
+                typer.echo(f"  Error querying ibstat: {e}")
+        else:
+            typer.echo("InfiniBand: ibstat not found (IB tools not installed)")
+
+        typer.echo()
+
+        # Check for GPUDirect RDMA
+        typer.echo("GPUDirect RDMA:")
+        try:
+            # Check for nv_peer_mem or nvidia_peermem module
+            result = subprocess.run(["lsmod"], capture_output=True, text=True, timeout=5)
+            if "nv_peer_mem" in result.stdout or "nvidia_peermem" in result.stdout:
+                typer.echo("  ✓ Peer memory module loaded (GPUDirect RDMA available)")
+            else:
+                typer.echo("  ✗ Peer memory module not loaded")
+        except Exception:
+            typer.echo("  Unable to check peer memory status")
+
+        typer.echo()
+
+        # NCCL network info
+        typer.echo("NCCL Network Environment:")
+        nccl_vars = ["NCCL_IB_DISABLE", "NCCL_NET_GDR_LEVEL", "NCCL_P2P_LEVEL",
+                     "NCCL_IB_GID_INDEX", "NCCL_SOCKET_IFNAME"]
+        for var in nccl_vars:
+            val = os.environ.get(var, "(not set)")
+            typer.echo(f"  {var}: {val}")
+
+        typer.echo()
 
 # =============================================================================
 # Domain 4: Analyze - Bottlenecks, pareto, scaling, what-if
@@ -453,170 +551,6 @@ if typer:
         result = get_engine().analyze.stacking()
         typer.echo(json.dumps(result, indent=2))
         raise typer.Exit(0)
-
-# =============================================================================
-# Legacy: info (aliased to gpu)
-# =============================================================================
-
-if typer:
-
-    @info_app.command("topo", help="Show GPU/NVLink/PCIe topology (nvidia-smi topo -m)")
-    def info_topo(ctx: typer.Context) -> None:
-        from cli.commands import system as system_cmds
-        _run(system_cmds.topo, ctx)
-
-    @info_app.command("check", help="Pre-flight checks before optimization")
-    def info_check(ctx: typer.Context) -> None:
-        from cli.commands import system as system_cmds
-        _run(system_cmds.preflight, ctx)
-
-    @info_app.command("features", help="Hardware features (TMA, TMEM/MMA, DSMEM, tensor cores, FP8, NVLink)")
-    def info_features(ctx: typer.Context) -> None:
-        """Display detailed hardware capabilities and features."""
-        from core.harness.hardware_capabilities import detect_capabilities, format_capability_report
-        
-        cap = detect_capabilities()
-        if cap is None:
-            typer.echo("❌ CUDA not available on this system.")
-            raise typer.Exit(code=1)
-        
-        # Header
-        typer.echo(f"\n🖥️  GPU: {cap.device_name}")
-        typer.echo(f"   Architecture: {cap.name} ({cap.sm_version})")
-        typer.echo(f"   Compute Capability: {cap.compute_capability}")
-        typer.echo(f"   Memory: {cap.total_memory_gb:.1f} GB", nl=False)
-        if cap.memory_bandwidth_tbps:
-            typer.echo(f" @ {cap.memory_bandwidth_tbps:.2f} TB/s")
-        else:
-            typer.echo()
-        typer.echo(f"   SMs: {cap.num_sms}, Warp Size: {cap.warp_size}")
-        typer.echo()
-        
-        # Features table
-        typer.echo("┌─────────────────────┬────────────────────────────────────┐")
-        typer.echo("│ Feature             │ Status                             │")
-        typer.echo("├─────────────────────┼────────────────────────────────────┤")
-        
-        # Tensor Cores
-        tc_status = cap.tensor_cores if cap.tensor_cores else "None"
-        typer.echo(f"│ Tensor Cores        │ {tc_status:<34} │")
-        
-        # TMA
-        if cap.tma_supported:
-            tma_status = f"✓ (1D:{cap.tma_limits.max_1d_elements}, 2D:{cap.tma_limits.max_2d_width}×{cap.tma_limits.max_2d_height})"
-            if not cap.tma_compiler_supported:
-                tma_status += " [compiler N/A]"
-        else:
-            tma_status = "✗"
-        typer.echo(f"│ TMA                 │ {tma_status:<34} │")
-        
-        # TMEM (Tensor Memory for MMA accumulators - SM100+ Blackwell)
-        tmem_status = "✓" if cap.architecture.lower() in ["blackwell", "blackwell_ultra"] else "✗"
-        typer.echo(f"│ TMEM (MMA accum)    │ {tmem_status:<34} │")
-        
-        # DSMEM (Distributed Shared Memory - cluster feature)
-        if cap.cluster.supports_clusters:
-            dsmem_status = f"✓ (max cluster: {cap.cluster.max_cluster_size})"
-            if cap.cluster.has_dsmem:
-                dsmem_status = f"✓ (cluster: {cap.cluster.max_cluster_size})"
-        else:
-            dsmem_status = "✗"
-        typer.echo(f"│ DSMEM (clusters)    │ {dsmem_status:<34} │")
-        
-        # NVLink
-        nvlink_status = "✓" if cap.nvlink_c2c else "✗"
-        typer.echo(f"│ NVLink C2C          │ {nvlink_status:<34} │")
-        
-        # Grace Coherence
-        grace_status = "✓" if cap.grace_coherence else "✗"
-        typer.echo(f"│ Grace Coherence     │ {grace_status:<34} │")
-        
-        # Features from list
-        fp8 = "✓" if "FP8" in cap.features or cap.architecture.lower() in ["hopper", "blackwell"] else "✗"
-        typer.echo(f"│ FP8                 │ {fp8:<34} │")
-        
-        hbm3e = "✓ HBM3e" if "HBM3e" in cap.features else "✗"
-        typer.echo(f"│ HBM3e Memory        │ {hbm3e:<34} │")
-        
-        # ILP-related info
-        typer.echo("├─────────────────────┼────────────────────────────────────┤")
-        typer.echo(f"│ Max Threads/Block   │ {cap.max_threads_per_block:<34} │")
-        typer.echo(f"│ Max Threads/SM      │ {cap.max_threads_per_sm:<34} │")
-        smem_kb = cap.max_shared_mem_per_block / 1024
-        typer.echo(f"│ Shared Mem/Block    │ {smem_kb:.0f} KB{'':<28} │")
-        if cap.l2_cache_kb:
-            typer.echo(f"│ L2 Cache            │ {cap.l2_cache_kb:.0f} KB{'':<28} │")
-        
-        typer.echo("└─────────────────────┴────────────────────────────────────┘")
-        
-        # Driver/Runtime info
-        if cap.driver_version or cap.cuda_runtime_version:
-            typer.echo()
-            if cap.driver_version:
-                typer.echo(f"   Driver: {cap.driver_version}")
-            if cap.cuda_runtime_version:
-                typer.echo(f"   CUDA Runtime: {cap.cuda_runtime_version}")
-        
-        # Notes
-        if cap.notes:
-            typer.echo("\n📝 Notes:")
-            for note in cap.notes:
-                typer.echo(f"   • {note}")
-        
-        typer.echo()
-
-    @info_app.command("network", help="Network and InfiniBand status")
-    def info_network(ctx: typer.Context) -> None:
-        """Display network interfaces, InfiniBand status, and GPUDirect RDMA info."""
-        import shutil
-        
-        typer.echo("\n🌐 Network Status\n")
-        
-        # InfiniBand status
-        ibstat_cmd = shutil.which("ibstat")
-        if ibstat_cmd:
-            typer.echo("InfiniBand Devices:")
-            try:
-                result = subprocess.run([ibstat_cmd], capture_output=True, text=True, timeout=5)
-                if result.returncode == 0 and result.stdout.strip():
-                    # Parse ibstat output for key info
-                    lines = result.stdout.strip().split('\n')
-                    for line in lines:
-                        if any(x in line for x in ['CA ', 'Port ', 'State:', 'Rate:', 'Link layer:']):
-                            typer.echo(f"  {line.strip()}")
-                else:
-                    typer.echo("  No InfiniBand devices found")
-            except Exception as e:
-                typer.echo(f"  Error querying ibstat: {e}")
-        else:
-            typer.echo("InfiniBand: ibstat not found (IB tools not installed)")
-        
-        typer.echo()
-        
-        # Check for GPUDirect RDMA
-        typer.echo("GPUDirect RDMA:")
-        try:
-            # Check for nv_peer_mem or nvidia_peermem module
-            result = subprocess.run(["lsmod"], capture_output=True, text=True, timeout=5)
-            if "nv_peer_mem" in result.stdout or "nvidia_peermem" in result.stdout:
-                typer.echo("  ✓ Peer memory module loaded (GPUDirect RDMA available)")
-            else:
-                typer.echo("  ✗ Peer memory module not loaded")
-        except Exception:
-            typer.echo("  Unable to check peer memory status")
-        
-        typer.echo()
-        
-        # NCCL network info
-        typer.echo("NCCL Network Environment:")
-        nccl_vars = ["NCCL_IB_DISABLE", "NCCL_NET_GDR_LEVEL", "NCCL_P2P_LEVEL", 
-                     "NCCL_IB_GID_INDEX", "NCCL_SOCKET_IFNAME"]
-        for var in nccl_vars:
-            val = os.environ.get(var, "(not set)")
-            typer.echo(f"  {var}: {val}")
-        
-        typer.echo()
-
 
 # =============================================================================
 # Category: ai
@@ -1230,6 +1164,32 @@ if typer and distributed_app is not None:
             save_plan.write_text(plan.to_json())
             typer.echo(f"\n💾 Saved plan to {save_plan}")
 
+    @distributed_app.command("slurm", help="Generate SLURM job script")
+    def distributed_slurm(
+        ctx: typer.Context,
+        model: str = typer.Option("7b", "--model", help="Model name or size"),
+        nodes: int = typer.Option(1, "--nodes", help="Number of nodes"),
+        gpus: int = typer.Option(8, "--gpus", help="GPUs per node"),
+        framework: str = typer.Option("pytorch", "--framework", help="Framework name"),
+        output: Optional[Path] = typer.Option(None, "--output", "-o", help="Optional output file"),
+    ) -> None:
+        from core.engine import get_engine
+
+        result = get_engine().distributed.slurm(model=model, nodes=nodes, gpus=gpus, framework=framework)
+        if not isinstance(result, dict) or not result.get("success"):
+            message = result.get("error") if isinstance(result, dict) else "Unknown failure"
+            typer.echo(f"Failed to generate SLURM script: {message}", err=True)
+            raise typer.Exit(code=1)
+        script = result.get("slurm_script")
+        if not script:
+            typer.echo("SLURM script was empty.", err=True)
+            raise typer.Exit(code=1)
+        if output:
+            output.write_text(script)
+            typer.echo(f"✅ Wrote SLURM script to {output}")
+        else:
+            typer.echo(script)
+
 
 # =============================================================================
 # Category: inference
@@ -1282,179 +1242,12 @@ if typer and inference_app is not None:
 
 
 # =============================================================================
-# Category: training
-# =============================================================================
-
-if typer and training_app is not None:
-
-    @training_app.command("rl", help="RL/RLHF optimization")
-    def training_rl(ctx: typer.Context) -> None:
-        from cli.commands import training
-        _run(training.rl, ctx)
-
-    @training_app.command("checkpoint", help="Checkpointing strategy")
-    def training_checkpoint(ctx: typer.Context) -> None:
-        from cli.commands import training
-        _run(training.checkpointing, ctx)
-
-    @training_app.command("gradient", help="Gradient optimization")
-    def training_gradient(ctx: typer.Context) -> None:
-        from cli.commands import training
-        _run(training.gradient, ctx)
-
-
-# =============================================================================
-# Category: monitor
-# =============================================================================
-
-if typer and monitoring_app is not None:
-
-    @monitoring_app.command("live", help="Real-time GPU monitoring")
-    def monitor_live(ctx: typer.Context) -> None:
-        from cli.commands import monitoring
-        _run(monitoring.live_monitor, ctx)
-
-    @monitoring_app.command("regression", help="Detect performance regressions")
-    def monitor_regression(ctx: typer.Context) -> None:
-        from cli.commands import monitoring
-        _run(monitoring.regression, ctx)
-
-    @monitoring_app.command("metrics", help="Collect and display metrics")
-    def monitor_metrics(ctx: typer.Context) -> None:
-        from cli.commands import monitoring
-        _run(monitoring.metrics, ctx)
-
-
-# =============================================================================
-# Category: report
-# =============================================================================
-
-if typer and report_app is not None:
-
-    @report_app.command("generate", help="Generate performance report")
-    def report_generate(
-        ctx: typer.Context,
-        output: Optional[Path] = typer.Option(None, "--output", help="Output file for generated report"),
-        fmt: ReportFormat = typer.Option(
-            ReportFormat.markdown,
-            "--format",
-            help="Report format",
-            show_choices=True,
-        ),
-    ) -> None:
-        from cli.commands import reports
-        _run(reports.generate_report, ctx, output=str(output) if output else None, format=fmt)
-
-    @report_app.command("history", help="View optimization history")
-    def report_history(ctx: typer.Context) -> None:
-        from cli.commands import reports
-        _run(reports.show_history, ctx)
-
-    @report_app.command("roi", help="Calculate ROI of optimizations")
-    def report_roi(ctx: typer.Context) -> None:
-        from cli.commands import reports
-        _run(reports.calculate_roi, ctx)
-
-    @report_app.command("export", help="Export results to various formats")
-    def report_export(
-        ctx: typer.Context,
-        fmt: ExportFormat = typer.Option(
-            ExportFormat.json,
-            "--format",
-            help="Export format",
-            show_choices=True,
-        ),
-        output: Optional[Path] = typer.Option(None, "--output", help="Output file"),
-    ) -> None:
-        from cli.commands import reports
-        _run(reports.export, ctx, format=fmt, output=str(output) if output else None)
-
-
-# =============================================================================
-# Category: hf (HuggingFace)
-# =============================================================================
-
-if typer and hf_app is not None:
-
-    @hf_app.command("search", help="Search HuggingFace models")
-    def hf_search(
-        ctx: typer.Context,
-        query: Optional[str] = typer.Argument(None, help="Search query"),
-        task: Optional[str] = typer.Option(None, "--task", help="Filter by task"),
-        limit: int = typer.Option(10, "--limit", help="Max results"),
-    ) -> None:
-        from cli.commands import huggingface
-        _run(huggingface.search, ctx, query=query, task=task, limit=limit)
-
-    @hf_app.command("trending", help="Trending models")
-    def hf_trending(
-        ctx: typer.Context,
-        task: str = typer.Option("text-generation", "--task", help="Task type"),
-        limit: int = typer.Option(15, "--limit", help="Max results"),
-    ) -> None:
-        from cli.commands import huggingface
-        _run(huggingface.trending, ctx, task=task, limit=limit)
-
-    @hf_app.command("model", help="Model information")
-    def hf_model(
-        ctx: typer.Context,
-        model: Optional[str] = typer.Argument(None, help="Model ID"),
-    ) -> None:
-        from cli.commands import huggingface
-        _run(huggingface.model_info, ctx, model=model)
-
-    @hf_app.command("config", help="Generate optimal config")
-    def hf_config(
-        ctx: typer.Context,
-        model: Optional[str] = typer.Argument(None, help="Model ID"),
-        gpus: int = typer.Option(1, "--gpus", help="Number of GPUs"),
-    ) -> None:
-        from cli.commands import huggingface
-        _run(huggingface.model_config, ctx, model=model, gpus=gpus)
-
-    @hf_app.command("download", help="Download a HuggingFace model")
-    def hf_download(
-        ctx: typer.Context,
-        model: str = typer.Argument(..., help="Model ID (e.g., 'meta-llama/Llama-3.1-8B')"),
-        revision: Optional[str] = typer.Option(None, "--revision", "-r", help="Branch, tag, or commit"),
-        cache_dir: Optional[Path] = typer.Option(None, "--cache-dir", help="Custom cache directory"),
-        token: Optional[str] = typer.Option(None, "--token", help="HuggingFace token for gated models"),
-        include: Optional[List[str]] = typer.Option(None, "--include", help="Patterns to include (e.g., '*.safetensors')"),
-        exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Patterns to exclude"),
-    ) -> None:
-        """Download a model from HuggingFace Hub."""
-        try:
-            from huggingface_hub import snapshot_download
-        except ImportError:
-            typer.echo("❌ huggingface_hub not installed. Run: pip install huggingface_hub")
-            raise typer.Exit(code=1)
-        
-        typer.echo(f"📥 Downloading: {model}")
-        if revision:
-            typer.echo(f"   Revision: {revision}")
-        
-        try:
-            path = snapshot_download(
-                model,
-                revision=revision,
-                cache_dir=str(cache_dir) if cache_dir else None,
-                token=token or os.environ.get("HF_TOKEN"),
-                allow_patterns=include,
-                ignore_patterns=exclude,
-            )
-            typer.echo(f"✅ Downloaded to: {path}")
-        except Exception as e:
-            typer.echo(f"❌ Download failed: {e}", err=True)
-            raise typer.Exit(code=1)
-
-
-# =============================================================================
-# Category: hw (hardware benchmarks - was hwbench + test)
+# Category: benchmark (hardware microbench)
 # =============================================================================
 
 if typer:
 
-    @hw_app.command("memory", help="GPU VRAM bandwidth test")
+    @benchmark_app.command("memory", help="GPU VRAM bandwidth test")
     def hw_memory(
         ctx: typer.Context,
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Buffer size (MB)"),
@@ -1463,7 +1256,7 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.mem_hierarchy, ctx, size_mb=size_mb, stride=stride)
 
-    @hw_app.command("cache", help="Memory hierarchy stride test (cache behavior)")
+    @benchmark_app.command("cache", help="Memory hierarchy stride test (cache behavior)")
     def hw_cache(
         ctx: typer.Context,
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Buffer size (MB)"),
@@ -1472,7 +1265,7 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.mem_hierarchy, ctx, size_mb=size_mb, stride=stride)
 
-    @hw_app.command("roofline", help="Stride sweep ASCII roofline for memory")
+    @benchmark_app.command("roofline", help="Stride sweep ASCII roofline for memory")
     def hw_roofline(
         ctx: typer.Context,
         size_mb: int = typer.Option(32, "--size-mb", help="Buffer size (MB)"),
@@ -1481,7 +1274,7 @@ if typer:
         from cli.commands import tests as test_cmds
         _run(test_cmds.mem_roofline, ctx, size_mb=size_mb, strides=strides)
 
-    @hw_app.command("pcie", help="PCIe H2D/D2H bandwidth")
+    @benchmark_app.command("pcie", help="PCIe H2D/D2H bandwidth")
     def hw_pcie(
         ctx: typer.Context,
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
@@ -1490,7 +1283,7 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.pcie, ctx, size_mb=size_mb, iters=iters)
 
-    @hw_app.command("tc", help="Tensor core throughput (TFLOPS)")
+    @benchmark_app.command("tc", help="Tensor core throughput (TFLOPS)")
     def hw_tc(
         ctx: typer.Context,
         size: int = typer.Option(4096, "--size", help="Matrix size"),
@@ -1499,7 +1292,7 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.tensor_core, ctx, size=size, precision=precision)
 
-    @hw_app.command("sfu", help="SFU (Special Function Units) benchmark")
+    @benchmark_app.command("sfu", help="SFU (Special Function Units) benchmark")
     def hw_sfu(
         ctx: typer.Context,
         elements: int = typer.Option(64 * 1024 * 1024, "--elements", help="Number of elements"),
@@ -1507,7 +1300,7 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.sfu, ctx, elements=elements)
 
-    @hw_app.command("disk", help="Disk I/O benchmark (sequential)")
+    @benchmark_app.command("disk", help="Disk I/O benchmark (sequential)")
     def hw_disk(
         ctx: typer.Context,
         file_size_mb: int = typer.Option(256, "--size-mb", "-s", help="File size (MB)"),
@@ -1523,7 +1316,7 @@ if typer:
             tmp_dir=str(tmp_dir) if tmp_dir else None,
         )
 
-    @hw_app.command("tcp", help="TCP loopback throughput")
+    @benchmark_app.command("tcp", help="TCP loopback throughput")
     def hw_tcp(
         ctx: typer.Context,
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
@@ -1532,7 +1325,7 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.loopback, ctx, size_mb=size_mb, port=port)
 
-    @hw_app.command("ib", help="InfiniBand bandwidth test")
+    @benchmark_app.command("ib", help="InfiniBand bandwidth test")
     def hw_ib(
         ctx: typer.Context,
         size_mb: int = typer.Option(64, "--size-mb", "-s", help="Transfer size (MB)"),
@@ -1556,7 +1349,7 @@ if typer:
             typer.echo("\nAlternative: Use NCCL tests")
             typer.echo("  all_reduce_perf -b 8M -e 256M -g 8")
 
-    @hw_app.command("nccl", help="NCCL collective bandwidth (all_reduce, etc.)")
+    @benchmark_app.command("nccl", help="NCCL collective bandwidth (all_reduce, etc.)")
     def hw_nccl(
         ctx: typer.Context,
         collective: str = typer.Option("all_reduce", "--collective", "-c", help="Collective type"),
@@ -1594,7 +1387,7 @@ if typer:
             typer.echo(f"\nManual command:")
             typer.echo(f"  {bin_name} -b {min_bytes} -e {max_bytes} -g {gpus}")
 
-    @hw_app.command("p2p", help="GPU-to-GPU P2P/NVLink bandwidth")
+    @benchmark_app.command("p2p", help="GPU-to-GPU P2P/NVLink bandwidth")
     def hw_p2p(
         ctx: typer.Context,
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
@@ -1662,7 +1455,7 @@ if typer:
         
         typer.echo()
 
-    @hw_app.command("speed", help="Run speed tests (GEMM, memory, attention)")
+    @benchmark_app.command("speed", help="Run speed tests (GEMM, memory, attention)")
     def hw_speed(
         ctx: typer.Context,
         type: SpeedTestChoice = typer.Option(
@@ -1687,88 +1480,10 @@ if typer:
             mem_stride=mem_stride,
         )
 
-    @hw_app.command("diagnostics", help="System diagnostics")
+    @benchmark_app.command("diagnostics", help="System diagnostics")
     def hw_diagnostics(ctx: typer.Context) -> None:
         from cli.commands import tests as test_cmds
         _run(test_cmds.diagnostics, ctx)
-
-
-# =============================================================================
-# Category: cluster
-# =============================================================================
-
-if typer and cluster_app is not None:
-
-    @cluster_app.command("slurm", help="Generate SLURM script")
-    def cluster_slurm(
-        ctx: typer.Context,
-        nodes: int = typer.Option(1, "--nodes", help="Number of nodes"),
-        gpus: int = typer.Option(8, "--gpus", help="GPUs per node"),
-        model: str = typer.Option("llama-70b", "--model", help="Model name"),
-        time: str = typer.Option("24:00:00", "--time", help="Time limit"),
-        partition: str = typer.Option("gpu", "--partition", help="SLURM partition"),
-        output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file"),
-    ) -> None:
-        from cli.commands import cluster
-        _run(
-            cluster.slurm_generate,
-            ctx,
-            nodes=nodes,
-            gpus=gpus,
-            model=model,
-            time=time,
-            partition=partition,
-            output=str(output) if output else None,
-        )
-
-    @cluster_app.command("cost", help="Cloud cost calculator")
-    def cluster_cost(
-        ctx: typer.Context,
-        model_size: float = typer.Option(70.0, "--model-size", help="Model size (B)"),
-        tokens: float = typer.Option(1e12, "--tokens", help="Training tokens"),
-        batch_size: int = typer.Option(1024, "--batch-size", help="Batch size"),
-    ) -> None:
-        from cli.commands import cluster
-        _run(cluster.cloud_cost, ctx, model_size=model_size, tokens=tokens, batch_size=batch_size)
-
-    @cluster_app.command("scaling", help="Predict scaling efficiency")
-    def cluster_scaling(
-        ctx: typer.Context,
-        gpus: int = typer.Option(8, "--gpus", help="Target GPUs"),
-        model_size: float = typer.Option(70.0, "--model-size", help="Model size (B)"),
-        batch_size: int = typer.Option(32, "--batch-size", help="Batch size"),
-    ) -> None:
-        from cli.commands import cluster
-        _run(cluster.scaling_predict, ctx, gpus=gpus, model_size=model_size, batch_size=batch_size)
-
-    @cluster_app.command("diagnose", help="Cluster diagnostics")
-    def cluster_diagnose(ctx: typer.Context) -> None:
-        from cli.commands import cluster
-        _run(cluster.cluster_diagnose, ctx)
-
-    @cluster_app.command("power", help="Power analysis")
-    def cluster_power(ctx: typer.Context) -> None:
-        from cli.commands import cluster
-        _run(cluster.power_analysis, ctx)
-
-
-# =============================================================================
-# Monitoring runners (extended)
-# =============================================================================
-
-if typer:
-
-    @monitoring_app.command("cluster", help="Cluster monitor (agent/master) runner.")
-    def monitoring_cluster(
-        args: List[str] = typer.Argument(None, help="Arguments forwarded to monitoring.cluster_monitor"),
-    ) -> None:
-        _run_module("monitoring.cluster_monitor", args or [])
-
-    @monitoring_app.command("prometheus", help="Start Prometheus exporter for GPU metrics.")
-    def monitoring_prometheus(
-        args: List[str] = typer.Argument(None, help="Arguments forwarded to monitoring.prometheus_exporter"),
-    ) -> None:
-        _run_module("monitoring.prometheus_exporter", args or [])
 
 
 # =============================================================================
@@ -1897,7 +1612,7 @@ if typer:
 
 
 # =============================================================================
-# Attach sub-apps (10 domains + legacy aliases)
+# Attach sub-apps (10 domains)
 # =============================================================================
 
 if typer:
@@ -1909,20 +1624,9 @@ if typer:
     app.add_typer(optimize_app, name="optimize", help="Optimize: recommend, ROI, techniques")
     app.add_typer(distributed_app, name="distributed", help="Distributed: plan, NCCL, FSDP")
     app.add_typer(inference_app, name="inference", help="Inference: vLLM, quantization")
-    app.add_typer(benchmark_app, name="benchmark", help="Benchmark: run, targets, history")
+    app.add_typer(benchmark_app, name="benchmark", help="Benchmark: microbench diagnostics, speed tests")
     app.add_typer(ai_app, name="ai", help="AI: ask, explain, suggest")
     app.add_typer(export_app, name="export", help="Export: CSV, PDF, HTML")
-    
-    # Legacy aliases (for backward compat, same underlying apps)
-    app.add_typer(gpu_app, name="info", help="[Alias for 'gpu']", hidden=True)
-    app.add_typer(benchmark_app, name="hw", help="[Alias for 'benchmark']", hidden=True)
-    app.add_typer(export_app, name="report", help="[Alias for 'export']", hidden=True)
-    
-    # Legacy apps (will be phased out)
-    app.add_typer(monitoring_app, name="monitor", hidden=True)
-    app.add_typer(training_app, name="training", hidden=True)
-    app.add_typer(hf_app, name="hf", hidden=True)
-    app.add_typer(cluster_app, name="cluster", hidden=True)
 
 
 # =============================================================================

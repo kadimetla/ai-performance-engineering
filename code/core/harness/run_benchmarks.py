@@ -2520,6 +2520,22 @@ def _test_chapter_impl(
         enable_profiling=enable_profiling,
     )
 
+    def _resolve_required_world_size(benchmark_obj: Any, cfg: BenchmarkConfig) -> tuple[int, bool]:
+        required = getattr(cfg, "required_world_size", None)
+        if required is None:
+            required = getattr(benchmark_obj, "required_world_size", None)
+        if required is not None:
+            required = int(required)
+            if required <= 0:
+                raise ValueError(f"required_world_size must be positive, got {required}")
+            return required, True
+        multi_gpu_required = bool(
+            getattr(cfg, "multi_gpu_required", False) or getattr(benchmark_obj, "multi_gpu_required", False)
+        )
+        if multi_gpu_required:
+            return 2, False
+        return 1, True
+
     def _run_with_config(benchmark_obj, run_id: str, target_label: Optional[str] = None):
         merged = _merge_benchmark_config(
             base_config=base_config,
@@ -2527,6 +2543,10 @@ def _test_chapter_impl(
             defaults_obj=_defaults_obj,
             locked_fields=locked_fields,
         )
+        if getattr(merged, "use_subprocess", False):
+            required, exact = _resolve_required_world_size(benchmark_obj, merged)
+            if exact and required == 1:
+                merged.single_gpu = True
         if target_label and getattr(merged, "target_label", None) is None:
             merged.target_label = target_label
         logger.info("merged config launch_via=%s execution_mode=%s", merged.launch_via, merged.execution_mode)
@@ -5968,6 +5988,16 @@ def main():
         help='Override warmup iteration count for Python benchmarks (default: 5 unless the benchmark defines its own).'
     )
     parser.add_argument(
+        '--accept-regressions',
+        action='store_true',
+        help='Update expectation files when regressions are detected instead of failing the run.'
+    )
+    parser.add_argument(
+        '--update-expectations',
+        action='store_true',
+        help='Force-write observed metrics into expectation files (overrides regressions and provenance checks).'
+    )
+    parser.add_argument(
         '--launch-via',
         choices=['python', 'torchrun'],
         default='python',
@@ -6159,6 +6189,7 @@ def main():
             warmup=args.warmup,
             only_examples=only_examples,
             accept_regressions=args.accept_regressions if hasattr(args, "accept_regressions") else False,
+            update_expectations=args.update_expectations if hasattr(args, "update_expectations") else False,
             ncu_metric_set=args.ncu_metric_set,
             pm_sampling_interval=args.pm_sampling_interval,
             graph_capture_ratio_threshold=args.graph_capture_ratio_threshold,

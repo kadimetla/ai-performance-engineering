@@ -20,7 +20,6 @@ from core.harness.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkConfig,
     BenchmarkMode,
-    ExecutionMode,
     WorkloadMetadata,
 )
 from core.benchmark.verification_mixin import VerificationPayloadMixin
@@ -214,15 +213,16 @@ def run_benchmark(
             iterations=1,
             warmup=5,
             profile_mode=profile,
-            use_subprocess=False,
-            execution_mode=ExecutionMode.THREAD,
         ),
     )
     result = harness.benchmark(benchmark, name="baseline_grace_coherent_memory")
+    mean_ms = result.timing.mean_ms if result.timing else 0.0
+    elapsed_s = mean_ms / 1000.0 if mean_ms > 0 else 0.0
+    bandwidth_gb_s = (size_mb / 1024) * iterations * 2 / elapsed_s if elapsed_s > 0 else 0.0
 
     return {
-        "mean_time_ms": result.timing.mean_ms if result.timing else 0.0,
-        "bandwidth_gb_s": (benchmark.bandwidth_gb_s or 0.0) if hasattr(benchmark, "bandwidth_gb_s") else 0.0,
+        "mean_time_ms": mean_ms,
+        "bandwidth_gb_s": bandwidth_gb_s,
         "is_grace_blackwell": getattr(benchmark, "_impl", None).is_grace_blackwell if hasattr(benchmark, "_impl") else False,
         "size_mb": size_mb,
         "iterations": iterations,

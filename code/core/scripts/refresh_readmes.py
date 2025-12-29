@@ -173,7 +173,8 @@ ENTRIES["README.md"] = Entry(
         ],
         notes=[
             "`setup.sh` installs system prerequisites (drivers, CUDA, Nsight) and should be rerun after driver upgrades.",
-            "Use `python core/harness/run_benchmarks.py --targets ch*` for automated regression suites.",
+            "Use `python -m cli.aisp bench expectations --hardware b200 --min-speedup 1.05` to report expectation entries below a target threshold.",
+            "Use `python -m cli.aisp bench run --targets ch*` for automated regression suites.",
             "`python core/analysis/analyze_expectations.py --artifacts-dir artifacts` compares new runs to stored thresholds.",
         ],
     ),

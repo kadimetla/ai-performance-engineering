@@ -60,8 +60,8 @@ engine.ai.ask("Why is my attention kernel slow?")
 
 ```bash
 # System info
-aisp info status
-aisp info gpu
+aisp system status
+aisp gpu info
 
 # Optimization recommendations
 aisp optimize recommend --model-size 70 --gpus 8
@@ -92,10 +92,10 @@ Hardware information, topology, power management, and bandwidth testing.
 
 | Operation | Description | CLI | MCP Tool |
 |-----------|-------------|-----|----------|
-| `info()` | GPU name, memory, temperature, utilization | `aisp info gpu` | `aisp_gpu_info` |
-| `topology()` | Multi-GPU topology, NVLink, P2P matrix | `aisp info topo` | `aisp_gpu_topology` |
-| `power()` | Power draw, limits, thermal status | - | `aisp_gpu_power` |
-| `bandwidth()` | Memory bandwidth test (HBM) | `aisp hw memory` | `aisp_gpu_bandwidth` |
+| `info()` | GPU name, memory, temperature, utilization | `aisp gpu info` | `aisp_gpu_info` |
+| `topology()` | Multi-GPU topology, NVLink, P2P matrix | `aisp gpu topology` | `aisp_gpu_topology` |
+| `power()` | Power draw, limits, thermal status | `aisp gpu power` | `aisp_gpu_power` |
+| `bandwidth()` | Memory bandwidth test (HBM) | `aisp gpu bandwidth` | `aisp_gpu_bandwidth` |
 | `nvlink()` | NVLink status and bandwidth | - | `aisp_gpu_topology` |
 | `control()` | Clock settings, persistence mode | - | - |
 
@@ -115,10 +115,10 @@ Software stack, dependencies, and environment information.
 
 | Operation | Description | CLI | MCP Tool |
 |-----------|-------------|-----|----------|
-| `software()` | PyTorch, CUDA, Python versions | `aisp info status` | `aisp_system_software` |
-| `dependencies()` | ML/AI dependency health | `aisp info deps` | `aisp_system_dependencies` |
-| `capabilities()` | Hardware features (TMA, FP8, tensor cores) | `aisp info features` | `aisp_system_capabilities` |
-| `context()` | Full system context for AI analysis | - | `aisp_system_context` |
+| `software()` | PyTorch, CUDA, Python versions | `aisp system software` | `aisp_system_software` |
+| `dependencies()` | ML/AI dependency health | `aisp system deps` | `aisp_system_dependencies` |
+| `capabilities()` | Hardware features (TMA, FP8, tensor cores) | `aisp system capabilities` | `aisp_system_capabilities` |
+| `context()` | Full system context for AI analysis | `aisp system context` | `aisp_system_context` |
 | `parameters()` | Kernel parameters affecting performance | - | `aisp_system_parameters` |
 | `container()` | Container/cgroup limits | - | `aisp_container_limits` |
 
@@ -222,7 +222,7 @@ Distributed training: parallelism planning, NCCL tuning, FSDP configuration.
 | `fsdp(model)` | FSDP configuration | - | - |
 | `tensor_parallel(model)` | Tensor parallelism config | - | - |
 | `pipeline(model)` | Pipeline parallelism config | - | - |
-| `slurm(...)` | Generate SLURM script | `aisp cluster slurm` | `aisp_cluster_slurm` |
+| `slurm(...)` | Generate SLURM script | `aisp distributed slurm` | `aisp_cluster_slurm` |
 | `cost_estimate(...)` | Cloud cost estimation | - | `aisp_cost_estimate` |
 
 **Python API:**
@@ -263,11 +263,11 @@ Benchmark execution, history tracking, and result comparison.
 | Operation | Description | CLI | MCP Tool |
 |-----------|-------------|-----|----------|
 | `run(targets, profile)` | Run benchmarks | `aisp bench run` | `aisp_run_benchmarks` |
-| `targets()` | List benchmark targets | `aisp bench targets` | `aisp_benchmark_targets` |
+| `targets()` | List benchmark targets | `aisp bench list-targets` | `aisp_benchmark_targets` |
 | `history()` | Historical benchmark runs | - | - |
 | `data()` | Load benchmark results | - | - |
 | `available()` | Available benchmarks | - | `aisp_available_benchmarks` |
-| `speed_test()` | Quick speed tests | `aisp hw speed` | `aisp_hw_speed` |
+| `speed_test()` | Quick speed tests | `aisp benchmark speed` | `aisp_hw_speed` |
 
 **Python API:**
 ```python
@@ -309,9 +309,9 @@ Export reports in various formats.
 
 | Operation | Description | CLI | MCP Tool |
 |-----------|-------------|-----|----------|
-| `csv(detailed)` | Export to CSV | `aisp report export --format csv` | `aisp_export_csv` |
-| `pdf()` | Generate PDF report | `aisp report export --format pdf` | `aisp_export_pdf` |
-| `html()` | Generate HTML report | `aisp report export --format html` | `aisp_export_html` |
+| `csv(detailed)` | Export to CSV | `aisp bench export --format csv` | `aisp_export_csv` |
+| `pdf()` | Generate PDF report | `aisp bench report --format pdf` | `aisp_export_pdf` |
+| `html()` | Generate HTML report | `aisp bench report --format html` | `aisp_export_html` |
 
 **Python API:**
 ```python
@@ -341,8 +341,8 @@ engine.list_domains()     # List all domains and operations
 
 | Engine Domain | CLI Command Group | MCP Tool Prefix | Dashboard API |
 |---------------|-------------------|-----------------|---------------|
-| `gpu` | `aisp info` | `aisp_gpu_*` | `/api/gpu/*` |
-| `system` | `aisp info` | `aisp_system_*` | `/api/software`, `/api/deps` |
+| `gpu` | `aisp gpu` | `aisp_gpu_*` | `/api/gpu/*` |
+| `system` | `aisp system` | `aisp_system_*` | `/api/software`, `/api/deps` |
 | `profile` | `aisp profile` | `aisp_profile_*` | `/api/profiler/*` |
 | `analyze` | `aisp analyze` | `aisp_analyze_*` | `/api/analysis/*` |
 | `optimize` | `aisp optimize` | `aisp_optimize_*`, `aisp_recommend` | `/api/optimize/*` |
@@ -350,7 +350,7 @@ engine.list_domains()     # List all domains and operations
 | `inference` | `aisp inference` | `aisp_inference_*` | `/api/inference/*` |
 | `benchmark` | `aisp bench` | `aisp_benchmark_*`, `aisp_run_*` | `/api/benchmarks/*` |
 | `ai` | `aisp ai` | `aisp_ask`, `aisp_explain` | `/api/ai/*` |
-| `export` | `aisp report` | `aisp_export_*` | `/api/export/*` |
+| `export` | `aisp bench report/export` | `aisp_export_*` | `/api/export/*` |
 
 ---
 
@@ -414,14 +414,6 @@ explanation = engine.ai.ask(f"Explain these bottlenecks: {bottlenecks}")
 # Python:    engine.optimize.recommend(model_size=70, gpus=8)
 # MCP:       aisp_recommend with {"model_size": 70, "gpus": 8}
 ```
-
-
-
-
-
-
-
-
 
 
 

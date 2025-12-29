@@ -830,7 +830,13 @@ def _normalize_profile_name(name: str) -> str:
     name = _snake_case(name)
     name = re.sub(r"baseline|optimized", "", name, flags=re.IGNORECASE)
     name = re.sub(r"[_]+", "_", name)
-    return name.strip("_").lower()
+    normalized = name.strip("_").lower()
+    tokens = [token for token in normalized.split("_") if token]
+    if tokens and len(tokens) % 2 == 0:
+        half = len(tokens) // 2
+        if tokens[:half] == tokens[half:]:
+            normalized = "_".join(tokens[:half])
+    return normalized
 
 
 def _tokenize_profile_name(name: str) -> List[str]:

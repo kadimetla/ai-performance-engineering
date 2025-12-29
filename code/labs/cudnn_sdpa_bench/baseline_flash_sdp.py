@@ -193,7 +193,6 @@ class FlashSDPLabBenchmark(VerificationPayloadMixin, BaseBenchmark):
             enable_profiling=False,
             enable_nsys=False,
             enable_ncu=False,
-            use_subprocess=False,
             measurement_timeout_seconds=30,
             setup_timeout_seconds=30,
         )
