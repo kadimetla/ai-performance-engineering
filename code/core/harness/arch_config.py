@@ -16,16 +16,11 @@ import torch
 from importlib import metadata as importlib_metadata
 from contextlib import nullcontext
 
-from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
-)
 from core.utils.compile_utils import enable_tf32
 from core.benchmark.triton_compat import (
     ENABLE_TRITON_PATCH as _TRITON_PATCH_ENABLED,
     ensure_triton_compat,
 )
-
-_ensure_symmetric_memory_api()
 
 try:
     from torch.nn.attention import sdpa_kernel as _sdpa_kernel
@@ -420,189 +415,10 @@ class ArchitectureConfig:
             print(f"Profiling Tools: {', '.join(cfg['profiling_tools'])}")
 
 _OPTIMIZATIONS_APPLIED = False
-_SYMMETRIC_SHIM_INSTALLED = False
 
 # Feature flags (can be disabled via environment variables)
-ENABLE_SYMMETRIC_MEMORY_SHIM = os.environ.get("ENABLE_SYMMETRIC_MEMORY_SHIM", "1") == "1"
 VERBOSE_EXPERIMENTAL_FEATURES = os.environ.get("VERBOSE_EXPERIMENTAL_FEATURES", "0") == "1"
 ENABLE_TRITON_PATCH = _TRITON_PATCH_ENABLED
-
-
-def _install_symmetric_memory_shim() -> None:
-    """
-    Bridge PyTorch symmetric memory APIs when they are hidden under experimental modules.
-    
-    WHY THIS EXISTS:
-    PyTorch 2.10+ includes symmetric memory (backed by NVSHMEM) but the API may be
-    located in experimental modules. This shim provides a stable interface until
-    PyTorch stabilizes the API location.
-    
-    WHAT IT DOES:
-    - Checks if torch.distributed.nn.SymmetricMemory exists (PyTorch 2.10+ stable API)
-    - If not, attempts to bridge from torch.distributed._symmetric_memory (experimental)
-    - Creates a wrapper that matches the stable API semantics
-    
-    WHEN TO DISABLE:
-    - Set ENABLE_SYMMETRIC_MEMORY_SHIM=0 if you experience issues
-    - The shim gracefully degrades if dependencies are unavailable
-    
-    PERFORMANCE IMPACT:
-    - Minimal: Only activates when needed
-    - Provides <5µs cross-GPU access vs ~10-50µs with NCCL
-    """
-    global _SYMMETRIC_SHIM_INSTALLED
-    
-    if _SYMMETRIC_SHIM_INSTALLED:
-        return
-    
-    if not ENABLE_SYMMETRIC_MEMORY_SHIM:
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print("INFO:  Symmetric memory shim disabled via ENABLE_SYMMETRIC_MEMORY_SHIM=0")
-        return
-
-    try:
-        import torch.distributed as dist
-        import torch.distributed.nn  # noqa: F401 - ensures dist.nn is registered
-    except ImportError:
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print("WARNING: Symmetric memory shim: torch.distributed not available")
-        return
-
-    # Version detection: PyTorch 2.10+ should have stable API
-    # Check PyTorch version to determine which API to use
-    pytorch_version_str = torch.__version__
-    pytorch_version = _parse_version_tuple(pytorch_version_str)
-    
-    # Check if stable API already exists (PyTorch 2.10+)
-    if hasattr(dist.nn, "SymmetricMemory"):
-        _SYMMETRIC_SHIM_INSTALLED = True
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print(f"PASSED: Symmetric memory: Using stable PyTorch API (PyTorch {pytorch_version_str})")
-        return
-    
-    # PyTorch 2.10+ should have stable API - warn if missing
-    if pytorch_version >= (2, 9, 0):
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print(f"WARNING: Symmetric memory: PyTorch {pytorch_version_str} detected but stable API not found, using experimental API")
-
-    # Attempt to bridge from experimental API
-    try:
-        import torch.distributed._symmetric_memory as _symm
-        import torch.distributed.distributed_c10d as c10d
-        from torch._C._distributed_c10d import ProcessGroup as _ProcessGroup  # type: ignore
-    except ImportError as e:
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print(f"WARNING: Symmetric memory shim: Experimental API not available ({e})")
-        return
-
-    # Check NVSHMEM availability
-    try:
-        if not _symm.is_nvshmem_available():
-            if VERBOSE_EXPERIMENTAL_FEATURES:
-                print("WARNING: Symmetric memory shim: NVSHMEM not available")
-            return
-    except Exception as e:
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print(f"WARNING: Symmetric memory shim: NVSHMEM check failed ({e})")
-        return
-
-    class _SymmetricMemoryWrapper:
-        """
-        Minimal wrapper that mirrors torch.distributed.nn.SymmetricMemory semantics.
-        
-        This wrapper bridges the experimental _symmetric_memory module to provide
-        a stable API compatible with PyTorch 2.10+ stable symmetric memory.
-        """
-
-        __slots__ = ("buffer", "_group", "_handle")
-
-        def __init__(self, tensor: torch.Tensor, group=None):
-            if group is None:
-                group = dist.group.WORLD
-
-            self._group = group
-
-            # Configure backend
-            try:
-                backend = _symm.get_backend(tensor.device)
-            except Exception as e:
-                if VERBOSE_EXPERIMENTAL_FEATURES:
-                    print(f"WARNING: Symmetric memory: Failed to get backend ({e})")
-                backend = None
-            
-            if backend != "NVSHMEM":
-                try:
-                    _symm.set_backend("NVSHMEM")
-                except Exception as e:
-                    if VERBOSE_EXPERIMENTAL_FEATURES:
-                        print(f"WARNING: Symmetric memory: Failed to set NVSHMEM backend ({e})")
-                    # Continue anyway - may still work
-
-            # Allocate symmetric buffer
-            try:
-                self.buffer = _symm.empty(
-                    tensor.shape,
-                    dtype=tensor.dtype,
-                    device=tensor.device,
-                )
-            except Exception as e:
-                raise RuntimeError(
-                    f"Failed to allocate symmetric memory buffer: {e}. "
-                    f"This may indicate NVSHMEM configuration issues."
-                ) from e
-
-            # Copy initial data if needed
-            try:
-                if tensor.data_ptr() != self.buffer.data_ptr():
-                    self.buffer.copy_(tensor)
-            except RuntimeError as e:
-                if VERBOSE_EXPERIMENTAL_FEATURES:
-                    print(f"WARNING: Symmetric memory: Failed to copy initial data ({e})")
-                # Continue - buffer is allocated, data may be set later
-
-            # Create rendezvous handle
-            try:
-                self._handle = _symm.rendezvous(self.buffer, group)
-            except Exception as e:
-                raise RuntimeError(
-                    f"Failed to create symmetric memory rendezvous: {e}. "
-                    f"Ensure all ranks call this simultaneously."
-                ) from e
-
-        def get_buffer(self, rank: int):
-            """Get buffer from specified rank."""
-            try:
-                return self._handle.get_buffer(rank)
-            except Exception as e:
-                raise RuntimeError(
-                    f"Failed to get buffer from rank {rank}: {e}"
-                ) from e
-
-        def barrier(self):
-            """Synchronize all ranks."""
-            dist.barrier(group=self._resolve_group())
-
-        def _resolve_group(self):
-            """Resolve process group."""
-            if isinstance(self._group, _ProcessGroup):
-                return self._group
-            if isinstance(self._group, str):
-                return c10d._resolve_process_group(self._group)
-            return dist.group.WORLD
-
-        def __getattr__(self, name: str):
-            """Delegate unknown attributes to handle."""
-            return getattr(self._handle, name)
-
-    try:
-        dist.nn.SymmetricMemory = _SymmetricMemoryWrapper  # type: ignore[attr-defined]
-        _SYMMETRIC_SHIM_INSTALLED = True
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print("PASSED: Symmetric memory shim: Installed successfully")
-    except Exception as e:
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print(f"FAILED: Symmetric memory shim: Installation failed ({e})")
-        # Don't raise - allow code to continue without shim
 
 
 def configure_optimizations() -> None:
@@ -610,7 +426,6 @@ def configure_optimizations() -> None:
     if _OPTIMIZATIONS_APPLIED:
         return
     ArchitectureConfig().configure_pytorch_optimizations()
-    _install_symmetric_memory_shim()
     ensure_triton_compat()
     _OPTIMIZATIONS_APPLIED = True
     

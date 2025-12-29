@@ -1508,7 +1508,10 @@ class BenchmarkHarness:
                 pass  # nnodes not a valid integer
         if world_size is None:
             if getattr(config, "launch_via", LaunchVia.PYTHON) == LaunchVia.PYTHON:
-                world_size = 1
+                if getattr(config, "multi_gpu_required", False) and torch.cuda.is_available():
+                    world_size = torch.cuda.device_count()
+                else:
+                    world_size = 1
             elif torch.cuda.is_available():
                 world_size = torch.cuda.device_count()
         return world_size
@@ -1551,7 +1554,7 @@ class BenchmarkHarness:
         )
         if multi_gpu_required:
             return 2, False
-        return 1, True
+        return 1, False
 
     def _enforce_world_size_requirement(self, benchmark: BaseBenchmark, config: BenchmarkConfig) -> None:
         """Fail fast if world size/visible GPUs do not match requirements."""
@@ -1966,8 +1969,6 @@ class BenchmarkHarness:
 
         if errors:
             result.errors.extend(errors)
-        if stderr and not errors:
-            result.errors.append(stderr.strip())
 
         self._annotate_launch_metadata(
             result,

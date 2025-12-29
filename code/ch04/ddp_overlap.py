@@ -110,14 +110,14 @@ class OptimizedOverlapDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         # Initialize distributed if environment variables are set
         if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+            torch.cuda.set_device(local_rank)
             if not dist.is_initialized():
-                dist.init_process_group(backend="nccl")
+                dist.init_process_group(backend="nccl", device_id=local_rank)
                 self.initialized = True
             self.rank = dist.get_rank()
             self.world_size = dist.get_world_size()
-            local_rank = int(os.environ.get("LOCAL_RANK", "0"))
             self.device = torch.device(f"cuda:{local_rank}")
-            torch.cuda.set_device(self.device)
         else:
             # Single process mode for testing
             self.rank = 0

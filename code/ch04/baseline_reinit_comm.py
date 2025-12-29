@@ -48,6 +48,7 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.rank = 0
         self.world_size = 1
+        self.local_rank = 0
         self.input_tensor = None
         self.tensor = None
         self.initialized = False
@@ -62,9 +63,9 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
         setup_single_gpu_env()
         self.rank = int(os.environ.get("RANK", "0"))
         self.world_size = int(os.environ.get("WORLD_SIZE", "1"))
-        local_rank = int(os.environ.get("LOCAL_RANK", self.rank))
-        self.device = torch.device(f"cuda:{local_rank}")
-        torch.cuda.set_device(self.device)
+        self.local_rank = int(os.environ.get("LOCAL_RANK", self.rank))
+        self.device = torch.device(f"cuda:{self.local_rank}")
+        torch.cuda.set_device(self.local_rank)
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         # Intentionally tiny payload: this benchmark isolates communicator reinit overhead,
@@ -85,12 +86,14 @@ class BaselineReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
             # Anti-pattern: reinitialize NCCL every iteration
             if dist.is_initialized():
                 dist.destroy_process_group()
-            
+
+            torch.cuda.set_device(self.local_rank)
             dist.init_process_group(
                 backend="nccl",
                 init_method="env://",
                 world_size=self.world_size,
                 rank=self.rank,
+                device_id=self.local_rank,
             )
             
             # Perform all-reduce

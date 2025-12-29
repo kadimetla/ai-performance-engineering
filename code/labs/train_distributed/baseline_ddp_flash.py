@@ -28,21 +28,18 @@ def main():
         build_text_model_flash,
         build_tokenizer,
         get_dataset,
-        set_seed,
     )
 
     args = parse_args()
-    set_seed(1234)
-
-    if not dist.is_initialized() and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        dist.init_process_group(backend="nccl")
-
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
         device = torch.device("cuda", local_rank)
     else:
         device = torch.device("cpu")
+
+    if not dist.is_initialized() and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        dist.init_process_group(backend="nccl", device_id=local_rank)
 
     rank = dist.get_rank() if dist.is_initialized() else 0
     is_main = rank == 0

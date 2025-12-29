@@ -13,6 +13,7 @@ import torch
 
 from typing import Optional
 
+from core.benchmark.gpu_requirements import require_peer_access
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -51,10 +52,8 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.data_gpu0 = torch.randn(self.N, device=torch.device("cuda:0"), dtype=torch.float32)
         self.data_gpu1 = torch.randn(self.N, device=torch.device("cuda:1"), dtype=torch.float32)
         
-        # Enable peer access for NVLink (if available)
-        if torch.cuda.can_device_access_peer(0, 1):
-            torch.cuda.device(0).enable_peer_access(1)
-            torch.cuda.device(1).enable_peer_access(0)
+        # Require NVLink peer access (no explicit enable API in current PyTorch builds).
+        require_peer_access(0, 1, script_name=__file__)
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:

@@ -21,7 +21,8 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 
-from core.benchmark.verification import PrecisionFlags, simple_signature
+from core.benchmark.verification import PrecisionFlags
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -47,12 +48,12 @@ else:
 def _init_distributed() -> tuple[int, int, int]:
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         raise RuntimeError("optimized_torchcomms requires torchrun (RANK/WORLD_SIZE missing).")
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", device_id=local_rank)
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    local_rank = int(os.environ.get("LOCAL_RANK", rank))
-    torch.cuda.set_device(local_rank)
     return rank, world_size, local_rank
 
 
@@ -138,20 +139,81 @@ def main() -> None:
     _run_worker(args.iters, args.warmup, args.batch, args.hidden)
 
 
-class OptimizedTorchcommsBenchmark(BaseBenchmark):
+class OptimizedTorchcommsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness entry that launches this module via torchrun."""
-
-    verification_not_applicable_reason = "torchrun benchmarks execute in external processes"
-    skip_input_check = True
-    skip_output_check = True
 
     def __init__(self) -> None:
         super().__init__()
         tokens = float(_DEFAULT_BATCH * _DEFAULT_HIDDEN)
         self.register_workload_metadata(requests_per_iteration=float(_DEFAULT_BATCH), tokens_per_iteration=tokens)
+        self._comm_block: Optional[nn.Sequential] = None
+        self._aux_block: Optional[nn.Sequential] = None
+        self._input: Optional[torch.Tensor] = None
+        self._output: Optional[torch.Tensor] = None
+        self._world_size = _resolve_world_size()
+
+    def setup(self) -> None:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        self._comm_block = _build_block(_DEFAULT_HIDDEN, self.device)
+        self._aux_block = _build_block(_DEFAULT_HIDDEN, self.device)
+        self._input = torch.randn(
+            _DEFAULT_BATCH,
+            _DEFAULT_HIDDEN,
+            device=self.device,
+            dtype=torch.float32,
+        )
 
     def benchmark_fn(self) -> None:
-        raise RuntimeError("SKIPPED: optimized_torchcomms requires torchrun")
+        if self._comm_block is None or self._aux_block is None or self._input is None:
+            raise RuntimeError("setup() must run before benchmark_fn()")
+        with torch.no_grad():
+            comm_out = self._comm_block(self._input)
+            aux_out = self._aux_block(self._input)
+            self._output = comm_out + aux_out
+
+    def capture_verification_payload(self) -> None:
+        if self._output is None or self._input is None or self._comm_block is None or self._aux_block is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        param_count = sum(p.numel() for p in self._comm_block.parameters())
+        param_count += sum(p.numel() for p in self._aux_block.parameters())
+        self._set_verification_payload(
+            inputs={"input": self._input},
+            output=self._output,
+            batch_size=_DEFAULT_BATCH,
+            parameter_count=int(param_count),
+            precision_flags=PrecisionFlags(tf32=False),
+            output_tolerance=(1e-5, 1e-5),
+            signature_overrides={
+                "world_size": self._world_size,
+                "collective_type": "all_reduce",
+            },
+        )
+
+    def _prepare_verification_payload(self) -> None:
+        if hasattr(self, "_subprocess_verify_output"):
+            return
+        self.setup()
+        try:
+            self.benchmark_fn()
+            self.capture_verification_payload()
+            self._subprocess_verify_output = self.get_verify_output()
+            self._subprocess_output_tolerance = self.get_output_tolerance()
+            self._subprocess_input_signature = self.get_input_signature()
+        finally:
+            self.teardown()
+
+    def teardown(self) -> None:
+        self._comm_block = None
+        self._aux_block = None
+        self._input = None
+        self._output = None
+        torch.cuda.empty_cache()
+
+    def validate_result(self) -> Optional[str]:
+        if self._output is None:
+            return "No output captured"
+        return None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -164,6 +226,7 @@ class OptimizedTorchcommsBenchmark(BaseBenchmark):
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        self._prepare_verification_payload()
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
@@ -174,24 +237,6 @@ class OptimizedTorchcommsBenchmark(BaseBenchmark):
                 "warmup": "--warmup",
             },
         )
-
-    def get_input_signature(self) -> dict:
-        world_size = _resolve_world_size()
-        signature = simple_signature(
-            batch_size=_DEFAULT_BATCH,
-            dtype="float32",
-            hidden_size=_DEFAULT_HIDDEN,
-            precision_flags=PrecisionFlags(tf32=False),
-        )
-        signature.world_size = world_size
-        signature.collective_type = "all_reduce"
-        return signature
-
-    def get_output_tolerance(self) -> tuple:
-        return (1e-5, 1e-5)
-
-    def get_verify_output(self) -> torch.Tensor:
-        raise RuntimeError("optimized_torchcomms does not expose verification outputs in-process.")
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -47,13 +47,13 @@ def init_runtime() -> tuple[int, int, torch.device, bool]:
         torch.cuda.set_device(device.index or 0)
         return 0, 1, device, False
 
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group("nccl", init_method="env://")
+        dist.init_process_group("nccl", init_method="env://", device_id=local_rank)
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    local_rank = int(os.environ.get("LOCAL_RANK", rank))
-    torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
     return rank, world_size, device, True
 

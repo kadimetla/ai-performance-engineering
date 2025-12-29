@@ -35,10 +35,10 @@ from typing import Dict, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
+    SymmetricMemoryHandle,
+    maybe_create_symmetric_memory_handle,
+    symmetric_memory_available,
 )
-
-_ensure_symmetric_memory_api()
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -71,14 +71,7 @@ from torch.distributed.fsdp import (
 
 def nvshmem_available() -> bool:
     """Detect whether NVSHMEM-like symmetric memory APIs are exposed."""
-    if hasattr(dist, "nn") and hasattr(dist.nn, "SymmetricMemory"):
-        return True
-    try:
-        import nvshmem  # noqa: F401
-
-        return True
-    except Exception:
-        return False
+    return symmetric_memory_available()
 
 
 def init_process_group() -> Tuple[int, int, torch.device]:
@@ -90,20 +83,21 @@ def init_process_group() -> Tuple[int, int, torch.device]:
         world_size = int(os.environ.get("WORLD_SIZE", max(1, torch.cuda.device_count())))
         local_rank = int(os.environ.get("LOCAL_RANK", rank))
         backend = "nccl" if torch.cuda.is_available() else "gloo"
-        
-        dist.init_process_group(
+
+        if backend == "nccl":
+            torch.cuda.set_device(local_rank)
+        init_kwargs = dict(
             backend=backend,
             init_method="env://",
             rank=rank,
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60),
         )
-        
-        if torch.cuda.is_available():
-            torch.cuda.set_device(local_rank)
-            device = torch.device(f"cuda:{local_rank}")
-        else:
-            device = torch.device("cpu")
+        if backend == "nccl":
+            init_kwargs["device_id"] = local_rank
+        dist.init_process_group(**init_kwargs)
+
+        device = torch.device(f"cuda:{local_rank}") if backend == "nccl" else torch.device("cpu")
     else:
         rank = dist.get_rank()
         world_size = dist.get_world_size()
@@ -129,18 +123,15 @@ class GradientBucket:
     dtype: torch.dtype
     device: torch.device
     world_size: int
-    handle: Optional[object] = None
+    handle: Optional[SymmetricMemoryHandle] = None
     tensor: Optional[torch.Tensor] = None
 
     def __post_init__(self) -> None:
         local = torch.zeros(self.numel, device=self.device, dtype=self.dtype)
-        if nvshmem_available():
-            try:
-                self.handle = dist.nn.SymmetricMemory(local)
-                self.tensor = self.handle.buffer
-            except Exception:
-                self.handle = None
-                self.tensor = local
+        handle = maybe_create_symmetric_memory_handle(local)
+        if handle is not None:
+            self.handle = handle
+            self.tensor = handle.buffer
         else:
             self.tensor = local
 
@@ -158,13 +149,26 @@ class GradientBucket:
             for step in range(self.world_size - 1):
                 target = (rank + 1 + step) % self.world_size
                 remote_buf = self.handle.get_buffer(target)
-                remote_buf[rank].copy_(chunk)
+                remote_buf.view(self.world_size, -1)[rank].copy_(chunk)
                 dist.barrier()
-                chunk.add_(self.handle.get_buffer((rank - 1 - step) % self.world_size)[rank])
+                chunk.add_(
+                    self.handle.get_buffer((rank - 1 - step) % self.world_size)
+                    .view(self.world_size, -1)[rank]
+                )
             self.tensor.view(self.world_size, -1)[rank].copy_(chunk)
         else:
             dist.all_reduce(self.tensor, op=dist.ReduceOp.SUM)
             self.tensor.mul_(1.0 / self.world_size)
+
+    def close(self) -> None:
+        if self.handle is None:
+            self.tensor = None
+            return
+        if self.device.type == "cuda":
+            torch.cuda.set_device(self.device)
+            torch.cuda.synchronize(self.device)
+        self.tensor = None
+        self.handle = None
 
 
 def demo_gradient_buckets(batch: torch.Tensor, model: nn.Module) -> None:
@@ -199,9 +203,12 @@ def demo_gradient_buckets(batch: torch.Tensor, model: nn.Module) -> None:
     loss = output.float().sum()
     loss.backward()
     bucket.allreduce_ring(rank)
+    reduced_norm = bucket.tensor.norm().item()
+    dist.barrier()
+    bucket.close()
 
     if rank == 0:
-        print(f"[gradient_bucket] Reduced norm={bucket.tensor.norm().item():.3f}")
+        print(f"[gradient_bucket] Reduced norm={reduced_norm:.3f}")
 
 
 # ============================================================================
@@ -261,6 +268,11 @@ class NVSHMEMParameterServer:
             raise KeyError(f"Parameter {name} not backed by NVSHMEM buffer")
         return self.buffers[name].tensor
 
+    def close(self) -> None:
+        for bucket in self.buffers.values():
+            bucket.close()
+        self.buffers.clear()
+
 
 def demo_hybrid_sharding(microbatch: torch.Tensor) -> None:
     """Showcase FSDP sharding with NVSHMEM-backed parameter server tensors."""
@@ -268,7 +280,14 @@ def demo_hybrid_sharding(microbatch: torch.Tensor) -> None:
         raise RuntimeError("Hybrid sharding demo requires CUDA-enabled environment")
 
     rank, world_size, device = init_process_group()
-    torch.cuda.manual_seed(17 + rank)
+    generator = torch.Generator(device=device)
+    generator.manual_seed(17 + rank)
+    microbatch = torch.randn(
+        microbatch.shape,
+        device=device,
+        dtype=microbatch.dtype,
+        generator=generator,
+    )
 
     model = TransformerBlock().to(device)
     fsdp_model = FSDP(
@@ -291,9 +310,12 @@ def demo_hybrid_sharding(microbatch: torch.Tensor) -> None:
     out = fsdp_model(microbatch.to(device))
     loss = out.sum()
     loss.backward()
+    buffer_count = len(server.buffers)
+    dist.barrier()
+    server.close()
 
     if rank == 0:
-        print(f"[hybrid_shard] gradients ready, NVSHMEM buffers={len(server.buffers)}")
+        print(f"[hybrid_shard] gradients ready, NVSHMEM buffers={buffer_count}")
 
 
 # ============================================================================
@@ -357,6 +379,8 @@ def demo_pipeline_parallel(microbatch: torch.Tensor) -> None:
             microbatch = bucket.tensor.view_as(microbatch)
         microbatch = stage1(microbatch)
 
+    dist.barrier()
+    bucket.close()
     if rank == 0:
         print("[pipeline] completed forward pass with NVSHMEM handoff")
 

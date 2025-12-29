@@ -38,8 +38,10 @@ def init_distributed() -> tuple[int, int, torch.device]:
 
     if not dist.is_initialized():
         setup_single_gpu_env()  # Auto-setup for single-GPU mode
-    # Use GLOO backend since monitored_barrier is only implemented for GLOO
-    dist.init_process_group("gloo", init_method="env://")
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        torch.cuda.set_device(local_rank)
+        # Use GLOO backend since monitored_barrier is only implemented for GLOO
+        dist.init_process_group("gloo", init_method="env://")
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()

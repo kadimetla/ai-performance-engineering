@@ -80,10 +80,10 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
+    SymmetricMemoryHandle,
+    maybe_create_symmetric_memory_handle,
+    symmetric_memory_available,
 )
-
-_ensure_symmetric_memory_api()
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -115,11 +115,6 @@ import torch.nn as nn
 # ============================================================================
 
 
-def symmetric_memory_available() -> bool:
-    """Check if PyTorch 2.10+ symmetric memory is available."""
-    return hasattr(dist, "nn") and hasattr(dist.nn, "SymmetricMemory")
-
-
 def init_distributed() -> Tuple[int, int, int]:
     """Initialize distributed process group."""
     setup_single_gpu_env()  # Auto-setup for single-GPU mode
@@ -127,16 +122,17 @@ def init_distributed() -> Tuple[int, int, int]:
     if not dist.is_initialized():
         rank = int(os.environ.get("RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
-        local_rank = int(os.environ.get("LOCAL_RANK", rank))
-        
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        torch.cuda.set_device(local_rank)
         dist.init_process_group(
             backend="nccl",
             init_method="env://",
             rank=rank,
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60),
+            device_id=local_rank,
         )
-        torch.cuda.set_device(local_rank)
         
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
@@ -187,10 +183,11 @@ class DistributedTensor:
         self.local_shard = torch.zeros(local_shape, dtype=dtype, device=device)
         
         # Make it symmetric for zero-copy access
-        self.handle: Optional[dist.nn.SymmetricMemory] = None
-        if symmetric_memory_available():
-            self.handle = dist.nn.SymmetricMemory(self.local_shard)
-            self.local_shard = self.handle.buffer
+        self.handle: Optional[SymmetricMemoryHandle] = None
+        handle = maybe_create_symmetric_memory_handle(self.local_shard)
+        if handle is not None:
+            self.handle = handle
+            self.local_shard = handle.buffer
     
     def get_local_shard(self) -> torch.Tensor:
         """Get local shard of the distributed tensor."""
@@ -321,7 +318,7 @@ class SymmetricParameterCache:
         self.current_size_mb = 0.0
         
         # Symmetric memory handles
-        self.handles: Dict[str, Optional[dist.nn.SymmetricMemory]] = {}
+        self.handles: Dict[str, Optional[SymmetricMemoryHandle]] = {}
     
     def _get_tensor_size_mb(self, tensor: torch.Tensor) -> float:
         """Calculate tensor size in MB."""
@@ -349,10 +346,8 @@ class SymmetricParameterCache:
         
         # Create symmetric memory buffer
         local_tensor = tensor.clone().to(self.device)
-        handle: Optional[dist.nn.SymmetricMemory] = None
-        
-        if symmetric_memory_available():
-            handle = dist.nn.SymmetricMemory(local_tensor)
+        handle = maybe_create_symmetric_memory_handle(local_tensor)
+        if handle is not None:
             local_tensor = handle.buffer
         
         # Add to cache
@@ -459,14 +454,18 @@ class CrossGPUHashMap:
         self.occupied = torch.zeros(capacity_per_rank, dtype=torch.bool, device=device)
         
         # Make symmetric
-        self.keys_handle: Optional[dist.nn.SymmetricMemory] = None
-        self.values_handle: Optional[dist.nn.SymmetricMemory] = None
-        
-        if symmetric_memory_available():
-                self.keys_handle = dist.nn.SymmetricMemory(self.keys)
-                self.values_handle = dist.nn.SymmetricMemory(self.values)
-                self.keys = self.keys_handle.buffer
-                self.values = self.values_handle.buffer
+        self.keys_handle: Optional[SymmetricMemoryHandle] = None
+        self.values_handle: Optional[SymmetricMemoryHandle] = None
+
+        keys_handle = maybe_create_symmetric_memory_handle(self.keys)
+        if keys_handle is not None:
+            self.keys_handle = keys_handle
+            self.keys = keys_handle.buffer
+
+        values_handle = maybe_create_symmetric_memory_handle(self.values)
+        if values_handle is not None:
+            self.values_handle = values_handle
+            self.values = values_handle.buffer
     
     def _hash_to_rank(self, key: int) -> int:
         """Determine which rank owns this key."""
@@ -592,17 +591,24 @@ class LockFreeRingBuffer:
         self.tail = torch.zeros(1, dtype=torch.int64, device=device)
         
         # Make symmetric
-        self.buffer_handle: Optional[dist.nn.SymmetricMemory] = None
-        self.head_handle: Optional[dist.nn.SymmetricMemory] = None
-        self.tail_handle: Optional[dist.nn.SymmetricMemory] = None
-        
-        if symmetric_memory_available():
-                self.buffer_handle = dist.nn.SymmetricMemory(self.buffer)
-                self.head_handle = dist.nn.SymmetricMemory(self.head)
-                self.tail_handle = dist.nn.SymmetricMemory(self.tail)
-                self.buffer = self.buffer_handle.buffer
-                self.head = self.head_handle.buffer
-                self.tail = self.tail_handle.buffer
+        self.buffer_handle: Optional[SymmetricMemoryHandle] = None
+        self.head_handle: Optional[SymmetricMemoryHandle] = None
+        self.tail_handle: Optional[SymmetricMemoryHandle] = None
+
+        buffer_handle = maybe_create_symmetric_memory_handle(self.buffer)
+        if buffer_handle is not None:
+            self.buffer_handle = buffer_handle
+            self.buffer = buffer_handle.buffer
+
+        head_handle = maybe_create_symmetric_memory_handle(self.head)
+        if head_handle is not None:
+            self.head_handle = head_handle
+            self.head = head_handle.buffer
+
+        tail_handle = maybe_create_symmetric_memory_handle(self.tail)
+        if tail_handle is not None:
+            self.tail_handle = tail_handle
+            self.tail = tail_handle.buffer
     
     def enqueue(self, data: torch.Tensor) -> bool:
         """

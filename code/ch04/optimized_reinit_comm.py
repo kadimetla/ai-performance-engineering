@@ -44,6 +44,7 @@ class OptimizedReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.rank = 0
         self.world_size = 1
+        self.local_rank = 0
         self.input_tensor = None
         self.tensor = None
         self.initialized = False
@@ -56,15 +57,19 @@ class OptimizedReinitCommBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize NCCL once."""
         skip_if_insufficient_gpus()
         setup_single_gpu_env()
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        torch.cuda.set_device(self.local_rank)
         if not dist.is_initialized():
-            dist.init_process_group("nccl", init_method="env://")
+            dist.init_process_group(
+                "nccl",
+                init_method="env://",
+                device_id=self.local_rank,
+            )
             self.initialized = True
         
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
-        local_rank = int(os.environ.get("LOCAL_RANK", self.rank))
-        self.device = torch.device(f"cuda:{local_rank}")
-        torch.cuda.set_device(local_rank)
+        self.device = torch.device(f"cuda:{self.local_rank}")
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         # Intentionally tiny payload: this benchmark isolates communicator reuse vs reinit,

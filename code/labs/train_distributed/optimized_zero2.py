@@ -14,7 +14,7 @@ from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from labs.train_distributed.training_utils.memory import print_memory_stats
-from labs.train_distributed.training_utils.utils import get, set_seed
+from labs.train_distributed.training_utils.utils import get
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
 
@@ -56,14 +56,14 @@ def _optimizer_cfg(params, lr):
 
 
 def main():
-    if dist.get_world_size() < 2:
-        print("Warning: Optimized ZeRO-2 running with world_size < 2; no sharding benefit will be observed.")
     args = parse_args()
-    dist.init_process_group("nccl")
+    local_rank = get("lrank")
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group("nccl", device_id=local_rank)
+    if get("ws") < 2:
+        print("Warning: Optimized ZeRO-2 running with world_size < 2; no sharding benefit will be observed.")
     rank = get("rank")
-    device = torch.device(f"cuda:{rank}")
-    torch.cuda.set_device(device)
-    set_seed(999 + rank)
+    device = torch.device(f"cuda:{local_rank}")
 
 
     model = _build_model(args.hidden_size, device)

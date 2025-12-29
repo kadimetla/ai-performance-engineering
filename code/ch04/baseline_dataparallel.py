@@ -48,6 +48,9 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.target = None
         self._last_input: Optional[torch.Tensor] = None
         self._last_target: Optional[torch.Tensor] = None
+        self._verify_state: Optional[dict] = None
+        self._verify_input: Optional[torch.Tensor] = None
+        self._verify_target: Optional[torch.Tensor] = None
         # Large input to make per-iteration H2D copies dominate.
         self.input_size = 4096
         self.batch_size = 4096
@@ -72,10 +75,13 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         device_index = 0 if self.device.index is None else int(self.device.index)
         self.model = nn.DataParallel(model, device_ids=[device_index], output_device=device_index)
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        self._verify_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
         data_gen = torch.Generator().manual_seed(1234)
         self.data = torch.randn(self.batch_size, self.input_size, generator=data_gen)
         self.target = torch.randn(self.batch_size, 1, generator=data_gen)
+        self._verify_input = self.data.clone()
+        self._verify_target = self.target.clone()
 
         torch.cuda.synchronize(self.device)
     
@@ -95,12 +101,24 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
 
     def capture_verification_payload(self) -> None:
-        if self._last_input is None or self._last_target is None or self.output is None:
+        if (
+            self._verify_input is None
+            or self._verify_target is None
+            or self._verify_state is None
+            or self.output is None
+        ):
             raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
-        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        verify_model = SimpleNet(self.input_size).to(self.device)
+        verify_model.load_state_dict(self._verify_state)
+        verify_model.eval()
+        with torch.no_grad():
+            verify_input = self._verify_input.to(self.device)
+            verify_target = self._verify_target.to(self.device)
+            output = verify_model(verify_input)
+        param_count = sum(p.numel() for p in verify_model.parameters())
         self._set_verification_payload(
-            inputs={"data": self._last_input, "target": self._last_target},
-            output=self.output,
+            inputs={"data": verify_input, "target": verify_target},
+            output=output,
             batch_size=int(self.batch_size),
             parameter_count=param_count,
             precision_flags={
@@ -119,6 +137,9 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.optimizer = None
         self.data = None
         self.target = None
+        self._verify_state = None
+        self._verify_input = None
+        self._verify_target = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

@@ -1184,9 +1184,19 @@ NVSHMEM_BIN_CANDIDATES=(
     "/opt/nvidia/nvshmem/bin"
     "/usr/lib/nvshmem/bin"
     "/usr/lib/x86_64-linux-gnu/nvshmem/bin"
+    "/usr/bin/nvshmem_13"
+    "/usr/bin"
 )
 if ! ensure_tool_on_path "nvshmemrun" "${NVSHMEM_BIN_CANDIDATES[@]}"; then
-    echo "WARNING: nvshmemrun not found on system PATH; set NVSHMEM_HOME or install nvshmemrun to enable NVSHMEM multi-GPU launchers"
+    if ensure_tool_on_path "nvshmrun.hydra" "/usr/bin/nvshmem_13" "/usr/bin"; then
+        ln -sf "/usr/local/bin/nvshmrun.hydra" "/usr/local/bin/nvshmemrun"
+        echo "Ensured nvshmemrun is on PATH via nvshmrun.hydra alias"
+    else
+        echo "WARNING: nvshmemrun not found on system PATH; set NVSHMEM_HOME or install nvshmemrun to enable NVSHMEM multi-GPU launchers"
+    fi
+fi
+if ! ensure_tool_on_path "hydra_pmi_proxy" "/usr/bin/nvshmem_13" "/usr/bin"; then
+    echo "WARNING: hydra_pmi_proxy not found on system PATH; nvshmemrun may fail to launch"
 fi
 
 # Install GPUDirect Storage (GDS) for high-performance I/O

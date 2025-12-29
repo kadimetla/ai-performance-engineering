@@ -227,10 +227,10 @@ def setup_multigpu_distributed(tp_size: int = 2, dp_size: Optional[int] = None) 
     # Initialize process group
     if not dist.is_initialized():
         setup_single_gpu_env()  # Auto-setup for single-GPU mode
-    dist.init_process_group(backend="nccl")
-    
-    # Set device
-    torch.cuda.set_device(local_rank)
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl", device_id=local_rank)
+    else:
+        torch.cuda.set_device(local_rank)
     
     # Derive DP size if not provided
     if dp_size is None:

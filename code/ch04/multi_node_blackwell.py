@@ -135,12 +135,22 @@ def setup_blackwell_distributed(
     # Initialize process group
     if not dist.is_initialized():
         setup_single_gpu_env()  # Auto-setup for single-GPU mode
-        dist.init_process_group(
-            backend=backend,
-            init_method=init_method,
-            rank=rank,
-            world_size=world_size,
-        )
+        if backend == "nccl":
+            torch.cuda.set_device(local_rank)
+            dist.init_process_group(
+                backend=backend,
+                init_method=init_method,
+                rank=rank,
+                world_size=world_size,
+                device_id=local_rank,
+            )
+        else:
+            dist.init_process_group(
+                backend=backend,
+                init_method=init_method,
+                rank=rank,
+                world_size=world_size,
+            )
     
     # Set device
     torch.cuda.set_device(local_rank)

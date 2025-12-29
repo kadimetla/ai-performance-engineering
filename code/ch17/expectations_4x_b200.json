@@ -5,27 +5,85 @@
       "metadata": {
         "best_optimization": "optimized_prefill_decode_disagg_multigpu",
         "best_optimization_file": "optimized_prefill_decode_disagg_multigpu.py",
-        "best_optimization_speedup": 1.4057133589913433,
+        "best_optimization_speedup": 1.0017685199815733,
         "best_optimization_technique": "optimized_prefill_decode_disagg_multigpu",
-        "best_optimization_time_ms": 8450.237035751343,
+        "best_optimization_time_ms": 1971.7337489128113,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 11878.611087799072,
-        "baseline_time_ms": 11878.611087799072,
-        "best_optimized_p75_ms": 8450.237035751343,
-        "best_optimized_speedup": 1.4057133589913433,
-        "best_optimized_time_ms": 8450.237035751343,
-        "best_speedup": 1.4057133589913433,
+        "baseline_p75_ms": 1975.220799446106,
+        "baseline_time_ms": 1975.220799446106,
+        "best_optimized_p75_ms": 1971.7337489128113,
+        "best_optimized_speedup": 1.0017685199815733,
+        "best_optimized_time_ms": 1971.7337489128113,
+        "best_speedup": 1.0017685199815733,
         "is_regression": false
       },
       "provenance": {
-        "git_commit": "fd0ee0d0ac19f4b0ab674930a6e6a6a209ba187c",
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
         "hardware_key": "4x_b200",
-        "iterations": 1,
+        "iterations": 20,
         "profile_name": "none",
-        "timestamp": "2025-12-28T17:49:30.943882",
-        "warmup_iterations": 1
+        "timestamp": "2025-12-29T10:29:54.813855",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    },
+    "prefill_decode_disagg_tpot_long_multigpu": {
+      "example": "prefill_decode_disagg_tpot_long_multigpu",
+      "metadata": {
+        "best_optimization": "optimized_prefill_decode_disagg_tpot_long_multigpu",
+        "best_optimization_file": "optimized_prefill_decode_disagg_tpot_long_multigpu.py",
+        "best_optimization_speedup": 1.0136996112091508,
+        "best_optimization_technique": "optimized_prefill_decode_disagg_tpot_long_multigpu",
+        "best_optimization_time_ms": 1998.2436895370483,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_p75_ms": 2025.618851184845,
+        "baseline_time_ms": 2025.618851184845,
+        "best_optimized_p75_ms": 1998.2436895370483,
+        "best_optimized_speedup": 1.0136996112091508,
+        "best_optimized_time_ms": 1998.2436895370483,
+        "best_speedup": 1.0136996112091508,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "4x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T10:30:14.541869",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    },
+    "prefill_decode_disagg_ttft_multigpu": {
+      "example": "prefill_decode_disagg_ttft_multigpu",
+      "metadata": {
+        "best_optimization": "optimized_prefill_decode_disagg_ttft_multigpu",
+        "best_optimization_file": "optimized_prefill_decode_disagg_ttft_multigpu.py",
+        "best_optimization_speedup": 0.9640157342219327,
+        "best_optimization_technique": "optimized_prefill_decode_disagg_ttft_multigpu",
+        "best_optimization_time_ms": 2022.150158882141,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_p75_ms": 1949.3845701217651,
+        "baseline_time_ms": 1949.3845701217651,
+        "best_optimized_p75_ms": 2022.150158882141,
+        "best_optimized_speedup": 0.9640157342219327,
+        "best_optimized_time_ms": 2022.150158882141,
+        "best_speedup": 0.9640157342219327,
+        "is_regression": true
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "4x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T10:30:32.561773",
+        "warmup_iterations": 5
       },
       "type": "python"
     }

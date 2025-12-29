@@ -41,15 +41,10 @@ from typing import Dict, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
+    SymmetricMemoryHandle,
+    maybe_create_symmetric_memory_handle,
+    symmetric_memory_available as _symmetric_memory_available,
 )
-
-_ensure_symmetric_memory_api()
-
-try:
-    import torch.distributed._symmetric_memory as symm_mem
-except ImportError:
-    symm_mem = None  # type: ignore[assignment]
 
 import torch
 import torch.distributed as dist
@@ -62,12 +57,7 @@ import torch.distributed as dist
 
 def symmetric_memory_available() -> bool:
     """Return True when symmetric memory APIs are accessible."""
-    if symm_mem is not None:
-        try:
-            return bool(symm_mem.is_nvshmem_available())
-        except Exception:
-            return True  # Best-effort fallback if NVSHMEM probe fails
-    return hasattr(dist, "nn") and hasattr(dist.nn, "SymmetricMemory")
+    return _symmetric_memory_available()
 
 
 def init_distributed() -> Tuple[int, int, torch.device]:
@@ -112,7 +102,7 @@ class SymmetricMemoryCacheShard:
     dtype: torch.dtype
     device: torch.device
     world_size: int
-    handle: Optional[dist.nn.SymmetricMemory] = None
+    handle: Optional[SymmetricMemoryHandle] = None
     buffer: torch.Tensor = field(init=False)
     meta: Dict[str, Tuple[int, int]] = field(default_factory=dict)
 
@@ -126,13 +116,10 @@ class SymmetricMemoryCacheShard:
             2,
         )
         local = torch.zeros(shape, dtype=self.dtype, device=self.device)
-        if symmetric_memory_available():
-            try:
-                self.handle = dist.nn.SymmetricMemory(local)
-                self.buffer = self.handle.buffer
-            except Exception:
-                self.handle = None
-                self.buffer = local
+        handle = maybe_create_symmetric_memory_handle(local)
+        if handle is not None:
+            self.handle = handle
+            self.buffer = handle.buffer
         else:
             self.buffer = local
         self._tokens_per_rank = tokens_per_rank
@@ -225,6 +212,7 @@ def _random_model_id(prefix: str = "model") -> str:
 class ModelWeightsSnapshot:
     name: str
     tensor: torch.Tensor
+    handle: Optional[SymmetricMemoryHandle] = None
 
 
 class MultiModelSymmetricPool:
@@ -246,10 +234,10 @@ class MultiModelSymmetricPool:
         generator = torch.Generator(device=self.device.type)
         generator.manual_seed(abs(hash(name)) % (2**31))
         tensor = torch.randn(elements, device=self.device, dtype=self.dtype, generator=generator)
-        if symmetric_memory_available():
-            handle = dist.nn.SymmetricMemory(tensor)
+        handle = maybe_create_symmetric_memory_handle(tensor)
+        if handle is not None:
             tensor = handle.buffer
-        self.snapshots[name] = ModelWeightsSnapshot(name=name, tensor=tensor)
+        self.snapshots[name] = ModelWeightsSnapshot(name=name, tensor=tensor, handle=handle)
 
     def route_to(self, name: str) -> torch.Tensor:
         if name not in self.snapshots:
@@ -292,9 +280,10 @@ class SpeculativeDecodingCoordinator:
         self.device = device
         self.max_tokens = max_tokens
         self.buffer = torch.zeros(max_tokens, 256, device=device, dtype=torch.float16)
-        if symmetric_memory_available():
-            self.handle = dist.nn.SymmetricMemory(self.buffer)
-            self.buffer = self.handle.buffer
+        handle = maybe_create_symmetric_memory_handle(self.buffer)
+        if handle is not None:
+            self.handle = handle
+            self.buffer = handle.buffer
         else:
             self.handle = None
 

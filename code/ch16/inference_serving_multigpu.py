@@ -58,11 +58,10 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
+    SymmetricMemoryHandle,
+    maybe_create_symmetric_memory_handle,
 )
 from core.utils.compile_utils import compile_callable, compile_model
-
-_ensure_symmetric_memory_api()
 
 
 try:
@@ -90,11 +89,6 @@ try:
     from torch.nn.attention.flex_attention import flex_attention
 except ImportError:
     flex_attention = None
-
-try:
-    from torch.distributed.nn import SymmetricMemory as _SymmetricMemory
-except Exception:
-    _SymmetricMemory = None
 
 try:
     from ch16.symmetric_memory_inference import symmetric_memory_available as _sym_available
@@ -390,7 +384,7 @@ class ShardedKVCacheManager:
         self.dtype = dtype
         self.page_size = page_size
         self.enable_symmetric_memory = (
-            enable_symmetric_memory and _SymmetricMemory is not None and _sym_available() and torch.cuda.is_available()
+            enable_symmetric_memory and _sym_available() and torch.cuda.is_available()
         )
 
         if num_gpus < 1:
@@ -420,8 +414,8 @@ class ShardedKVCacheManager:
         self.free_pages: deque[int] = deque()
         self._slot_last_page = [-1] * max_batch_size
         self._slot_page_offset = [0] * max_batch_size
-        self._key_page_handles: List[Optional[_SymmetricMemory]] = []
-        self._value_page_handles: List[Optional[_SymmetricMemory]] = []
+        self._key_page_handles: List[Optional[SymmetricMemoryHandle]] = []
+        self._value_page_handles: List[Optional[SymmetricMemoryHandle]] = []
         self.total_pages_limit = (
             (max_seq_len + page_size - 1) // page_size
         ) * max_batch_size
@@ -680,13 +674,9 @@ class ShardedKVCacheManager:
         value_page = torch.empty_like(key_page)
         self.key_pages.append(key_page)
         self.value_pages.append(value_page)
-        if self.enable_symmetric_memory and _SymmetricMemory is not None:
-            try:
-                self._key_page_handles.append(_SymmetricMemory(key_page))
-                self._value_page_handles.append(_SymmetricMemory(value_page))
-            except Exception:
-                self._key_page_handles.append(None)
-                self._value_page_handles.append(None)
+        if self.enable_symmetric_memory:
+            self._key_page_handles.append(maybe_create_symmetric_memory_handle(key_page))
+            self._value_page_handles.append(maybe_create_symmetric_memory_handle(value_page))
         else:
             self._key_page_handles.append(None)
             self._value_page_handles.append(None)

@@ -69,9 +69,6 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
         require_peer_access(self.src_id, self.dst_id)
         require_peer_access(self.dst_id, self.src_id)
 
-        torch.cuda.device(self.src_id).enable_peer_access(self.dst_id)
-        torch.cuda.device(self.dst_id).enable_peer_access(self.src_id)
-
         self.src = torch.randn(n, device=f"cuda:{self.src_id}", dtype=self.dtype)
         self.dst = torch.empty(n, device=f"cuda:{self.dst_id}", dtype=self.dtype)
         self._synchronize()

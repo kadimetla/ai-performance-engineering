@@ -26,12 +26,6 @@ from ch15.verification_payload_mixin import VerificationPayloadMixin
 def _enable_peer_access() -> None:
     # Fail fast if peer access is not supported. This benchmark is specifically about NVLink pooling.
     require_peer_access(0, 1)
-    try:
-        torch.cuda.device(0).enable_peer_access(1)
-        torch.cuda.device(1).enable_peer_access(0)
-    except RuntimeError:
-        # enable_peer_access can throw if already enabled; peer capability is still enforced above.
-        pass
 
 
 class OptimizedPrefillDecodeDisaggBenchmark(VerificationPayloadMixin, BaseBenchmark):

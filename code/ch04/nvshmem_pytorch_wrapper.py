@@ -40,6 +40,11 @@ from typing import Optional
 import torch
 import torch.distributed as dist
 
+from core.optimization.symmetric_memory_patch import (
+    SymmetricMemoryHandle,
+    maybe_create_symmetric_memory_handle,
+    symmetric_memory_available,
+)
 
 def setup_single_gpu_env() -> None:
     """Setup environment for single-GPU testing."""
@@ -58,9 +63,7 @@ def check_nvshmem_availability() -> bool:
     Returns:
         True if NVSHMEM support is available
     """
-    if hasattr(torch.distributed, 'nn') and hasattr(torch.distributed.nn, 'SymmetricMemory'):
-        return True
-    return False
+    return symmetric_memory_available()
 
 
 NVSHMEM_AVAILABLE = check_nvshmem_availability()
@@ -89,12 +92,13 @@ class SymmetricMemoryBuffer:
         self.dtype = tensor.dtype
         self.local_tensor = tensor
         
-        self.sym_mem = None
+        self.sym_mem: Optional[SymmetricMemoryHandle] = None
         self.backend = "fallback"
         
         if NVSHMEM_AVAILABLE:
-            self.sym_mem = torch.distributed.nn.SymmetricMemory(tensor, group=group)
-            self.backend = "symmetric_memory"
+            self.sym_mem = maybe_create_symmetric_memory_handle(tensor, group=group)
+            if self.sym_mem is not None:
+                self.backend = "symmetric_memory"
     
     def put(self, data: torch.Tensor, target_rank: int) -> None:
         """
@@ -208,7 +212,9 @@ def main() -> None:
     """Main demonstration."""
     if not dist.is_initialized():
         setup_single_gpu_env()
-        dist.init_process_group(backend="nccl")
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl", device_id=local_rank)
     
     rank = dist.get_rank()
     world_size = dist.get_world_size()

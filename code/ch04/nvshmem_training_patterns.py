@@ -80,10 +80,10 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
+    SymmetricMemoryHandle,
+    maybe_create_symmetric_memory_handle,
+    symmetric_memory_available,
 )
-
-_ensure_symmetric_memory_api()
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -123,13 +123,7 @@ from torch.distributed.fsdp import (
 
 def nvshmem_available() -> bool:
     """Check if NVSHMEM-like symmetric memory APIs are available."""
-    if hasattr(dist, "nn") and hasattr(dist.nn, "SymmetricMemory"):
-        return True
-    try:
-        import nvshmem  # noqa: F401
-        return True
-    except Exception:
-        return False
+    return symmetric_memory_available()
 
 
 def init_process_group() -> Tuple[int, int, int]:
@@ -139,16 +133,17 @@ def init_process_group() -> Tuple[int, int, int]:
     if not dist.is_initialized():
         rank = int(os.environ.get("RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
-        local_rank = int(os.environ.get("LOCAL_RANK", rank))
-        
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        torch.cuda.set_device(local_rank)
         dist.init_process_group(
             backend="nccl",
             init_method="env://",
             rank=rank,
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60),
+            device_id=local_rank,
         )
-        torch.cuda.set_device(local_rank)
     
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
@@ -180,19 +175,16 @@ class GradientBucket:
     dtype: torch.dtype
     device: torch.device
     world_size: int
-    handle: Optional[object] = None
+    handle: Optional[SymmetricMemoryHandle] = None
     tensor: Optional[torch.Tensor] = None
 
     def __post_init__(self) -> None:
         """Initialize symmetric memory buffer for gradient storage."""
         local = torch.zeros(self.numel, device=self.device, dtype=self.dtype)
-        if nvshmem_available():
-            try:
-                self.handle = dist.nn.SymmetricMemory(local)
-                self.tensor = self.handle.buffer
-            except Exception:
-                self.handle = None
-                self.tensor = local
+        handle = maybe_create_symmetric_memory_handle(local)
+        if handle is not None:
+            self.handle = handle
+            self.tensor = handle.buffer
         else:
             self.tensor = local
 

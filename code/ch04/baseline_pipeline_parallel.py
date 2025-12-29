@@ -23,7 +23,8 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 
-from core.benchmark.verification import PrecisionFlags, simple_signature
+from core.benchmark.verification import PrecisionFlags
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -80,12 +81,12 @@ def _resolve_batch_config(
 def _init_distributed() -> tuple[int, int, int]:
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         raise RuntimeError("baseline_pipeline_parallel requires torchrun (RANK/WORLD_SIZE missing).")
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", device_id=local_rank)
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    local_rank = int(os.environ.get("LOCAL_RANK", rank))
-    torch.cuda.set_device(local_rank)
     return rank, world_size, local_rank
 
 
@@ -231,20 +232,98 @@ def main() -> None:
     )
 
 
-class BaselinePipelineParallelBenchmark(BaseBenchmark):
+class BaselinePipelineParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness entry that launches this module via torchrun."""
-
-    verification_not_applicable_reason = "torchrun benchmarks execute in external processes"
-    skip_input_check = True
-    skip_output_check = True
 
     def __init__(self) -> None:
         super().__init__()
         tokens = float(_DEFAULT_BATCH * _DEFAULT_SEQ)
         self.register_workload_metadata(requests_per_iteration=float(_DEFAULT_BATCH), tokens_per_iteration=tokens)
+        self._fwd_layers: Optional[nn.ModuleList] = None
+        self._bwd_layers: Optional[nn.ModuleList] = None
+        self._input: Optional[torch.Tensor] = None
+        self._output: Optional[torch.Tensor] = None
+        self._world_size = _resolve_world_size()
+        self._num_layers = _resolve_num_layers(None, self._world_size)
+        self._batch_size, self._micro_batches = _resolve_batch_config(None, None, self._world_size)
+        self._layers_per_stage = self._num_layers // self._world_size
+
+    def setup(self) -> None:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        self._fwd_layers, self._bwd_layers = _build_stage_layers(
+            _DEFAULT_HIDDEN,
+            self._layers_per_stage,
+            self.device,
+        )
+        self._input = torch.randn(
+            self._batch_size,
+            _DEFAULT_SEQ,
+            _DEFAULT_HIDDEN,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
 
     def benchmark_fn(self) -> None:
-        raise RuntimeError("SKIPPED: baseline_pipeline_parallel requires torchrun")
+        if self._input is None or self._fwd_layers is None or self._bwd_layers is None:
+            raise RuntimeError("setup() must run before benchmark_fn()")
+        micro_batch_size = self._batch_size // self._micro_batches
+        micro_batch = self._input[:micro_batch_size]
+        x = micro_batch
+        for _ in range(self._world_size):
+            for layer in self._fwd_layers:
+                x = torch.relu(layer(x))
+        for _ in range(self._world_size):
+            for layer in self._bwd_layers:
+                x = torch.relu(layer(x))
+        self._output = x
+
+    def capture_verification_payload(self) -> None:
+        if self._output is None or self._input is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        param_count = 2 * self._num_layers * (_DEFAULT_HIDDEN * _DEFAULT_HIDDEN)
+        self._set_verification_payload(
+            inputs={"input": self._input},
+            output=self._output,
+            batch_size=self._batch_size,
+            parameter_count=int(param_count),
+            precision_flags=PrecisionFlags(bf16=True, tf32=False),
+            output_tolerance=(0.1, 1.0),
+            signature_overrides={
+                "world_size": self._world_size,
+                "pipeline_stages": self._world_size,
+                "pipeline_stage_boundaries": [
+                    (stage_idx * self._layers_per_stage, (stage_idx + 1) * self._layers_per_stage - 1)
+                    for stage_idx in range(self._world_size)
+                ],
+                "collective_type": "send_recv",
+            },
+        )
+
+    def _prepare_verification_payload(self) -> None:
+        if hasattr(self, "_subprocess_verify_output"):
+            return
+        self.setup()
+        try:
+            self.benchmark_fn()
+            self.capture_verification_payload()
+            self._subprocess_verify_output = self.get_verify_output()
+            self._subprocess_output_tolerance = self.get_output_tolerance()
+            self._subprocess_input_signature = self.get_input_signature()
+        finally:
+            self.teardown()
+
+    def teardown(self) -> None:
+        self._fwd_layers = None
+        self._bwd_layers = None
+        self._input = None
+        self._output = None
+        torch.cuda.empty_cache()
+
+    def validate_result(self) -> Optional[str]:
+        if self._output is None:
+            return "No output captured"
+        return None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -257,6 +336,7 @@ class BaselinePipelineParallelBenchmark(BaseBenchmark):
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        self._prepare_verification_payload()
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
@@ -267,34 +347,6 @@ class BaselinePipelineParallelBenchmark(BaseBenchmark):
                 "warmup": "--warmup",
             },
         )
-
-    def get_input_signature(self) -> dict:
-        world_size = _resolve_world_size()
-        num_layers = _resolve_num_layers(None, world_size)
-        batch_size, _ = _resolve_batch_config(None, None, world_size)
-        layers_per_stage = num_layers // world_size
-        signature = simple_signature(
-            batch_size=batch_size,
-            dtype="bfloat16",
-            seq_length=_DEFAULT_SEQ,
-            hidden_size=_DEFAULT_HIDDEN,
-            num_layers=num_layers,
-            precision_flags=PrecisionFlags(bf16=True, tf32=False),
-        )
-        signature.world_size = world_size
-        signature.pipeline_stages = world_size
-        signature.pipeline_stage_boundaries = [
-            (stage_idx * layers_per_stage, (stage_idx + 1) * layers_per_stage - 1)
-            for stage_idx in range(world_size)
-        ]
-        signature.collective_type = "send_recv"
-        return signature
-
-    def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
-
-    def get_verify_output(self) -> torch.Tensor:
-        raise RuntimeError("baseline_pipeline_parallel does not expose verification outputs in-process.")
 
 
 def get_benchmark() -> BaseBenchmark:

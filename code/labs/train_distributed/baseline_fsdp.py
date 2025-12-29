@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import random
 from functools import partial
 from pathlib import Path
 
@@ -43,19 +42,14 @@ def parse_args():
 
 
 def _init_distributed() -> tuple[int, int, int]:
-    if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl", device_id=local_rank)
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
     return rank, world_size, local_rank
 
-
-def _set_seed(seed: int) -> None:
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
 
 
 def _build_dataloader(seq_len: int, micro_batch: int, rank: int, world_size: int):
@@ -103,8 +97,6 @@ def main():
 
     args = parse_args()
     rank, world_size, local_rank = _init_distributed()
-    _set_seed(1337 + rank)
-
 
     dataloader, sampler = _build_dataloader(args.sequence_length, args.micro_batch_size, rank, world_size)
 

@@ -1,0 +1,143 @@
+{
+  "examples": {
+    "disaggregated_inference_multigpu": {
+      "example": "disaggregated_inference_multigpu",
+      "metadata": {
+        "best_optimization": "optimized_disaggregated_inference_multigpu",
+        "best_optimization_file": "optimized_disaggregated_inference_multigpu.py",
+        "best_optimization_speedup": 0.8306378526871185,
+        "best_optimization_technique": "optimized_disaggregated_inference_multigpu",
+        "best_optimization_time_ms": 7377.816617488861,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_p75_ms": 6128.293752670288,
+        "baseline_time_ms": 6128.293752670288,
+        "best_optimized_p75_ms": 7377.816617488861,
+        "best_optimized_speedup": 0.8306378526871185,
+        "best_optimized_time_ms": 7377.816617488861,
+        "best_speedup": 0.8306378526871185,
+        "is_regression": true
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "2x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T20:59:09.579377",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    },
+    "kv_cache_nvlink_pool": {
+      "example": "kv_cache_nvlink_pool",
+      "metadata": {
+        "best_memory_savings_pct": -0.0006375843205263897,
+        "best_memory_savings_ratio": 0.9999936241974459,
+        "best_optimization": "optimized_kv_cache_nvlink_pool",
+        "best_optimization_file": "optimized_kv_cache_nvlink_pool.py",
+        "best_optimization_memory_mb": 153.1669921875,
+        "best_optimization_speedup": 0.984976127758497,
+        "best_optimization_technique": "optimized_kv_cache_nvlink_pool",
+        "best_optimization_time_ms": 8.942021131515503,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_memory_mb": 153.166015625,
+        "baseline_p75_ms": 8.756064414978027,
+        "baseline_throughput.bytes_per_s": null,
+        "baseline_throughput.custom_unit_name": null,
+        "baseline_throughput.custom_unit_per_s": null,
+        "baseline_throughput.goodput": null,
+        "baseline_throughput.latency_ms": 8.807677348454794,
+        "baseline_throughput.requests_per_s": 454.1492429558349,
+        "baseline_throughput.samples_per_s": null,
+        "baseline_throughput.schemaVersion": "1.0",
+        "baseline_throughput.tokens_per_s": 29065.551549173433,
+        "baseline_time_ms": 8.807677348454794,
+        "best_memory_savings_pct": -0.0006375843205263897,
+        "best_memory_savings_ratio": 0.9999936241974459,
+        "best_optimized_memory_mb": 153.1669921875,
+        "best_optimized_p75_ms": 8.880895614624023,
+        "best_optimized_speedup": 0.984976127758497,
+        "best_optimized_throughput.bytes_per_s": null,
+        "best_optimized_throughput.custom_unit_name": null,
+        "best_optimized_throughput.custom_unit_per_s": null,
+        "best_optimized_throughput.goodput": null,
+        "best_optimized_throughput.latency_ms": 8.942021131515503,
+        "best_optimized_throughput.requests_per_s": 447.32616275109115,
+        "best_optimized_throughput.samples_per_s": null,
+        "best_optimized_throughput.schemaVersion": "1.0",
+        "best_optimized_throughput.tokens_per_s": 28628.874416069833,
+        "best_optimized_time_ms": 8.942021131515503,
+        "best_speedup": 0.984976127758497,
+        "is_regression": true
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "2x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T20:59:19.938486",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    },
+    "prefill_decode_disagg": {
+      "example": "prefill_decode_disagg",
+      "metadata": {
+        "best_memory_savings_pct": 0.0,
+        "best_memory_savings_ratio": 1.0,
+        "best_optimization": "optimized_prefill_decode_disagg",
+        "best_optimization_file": "optimized_prefill_decode_disagg.py",
+        "best_optimization_memory_mb": 196.125,
+        "best_optimization_speedup": 1.1820024267921991,
+        "best_optimization_technique": "optimized_prefill_decode_disagg",
+        "best_optimization_time_ms": 5.5403253767225475,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_memory_mb": 196.125,
+        "baseline_p75_ms": 6.519296169281006,
+        "baseline_throughput.bytes_per_s": null,
+        "baseline_throughput.custom_unit_name": null,
+        "baseline_throughput.custom_unit_per_s": null,
+        "baseline_throughput.goodput": null,
+        "baseline_throughput.latency_ms": 6.548678040504456,
+        "baseline_throughput.requests_per_s": 1221.6206004507967,
+        "baseline_throughput.samples_per_s": null,
+        "baseline_throughput.schemaVersion": "1.0",
+        "baseline_throughput.tokens_per_s": 1329123.213290467,
+        "baseline_time_ms": 6.548678040504456,
+        "best_memory_savings_pct": 0.0,
+        "best_memory_savings_ratio": 1.0,
+        "best_optimized_memory_mb": 196.125,
+        "best_optimized_p75_ms": 5.515999794006348,
+        "best_optimized_speedup": 1.1820024267921991,
+        "best_optimized_throughput.bytes_per_s": null,
+        "best_optimized_throughput.custom_unit_name": null,
+        "best_optimized_throughput.custom_unit_per_s": null,
+        "best_optimized_throughput.goodput": null,
+        "best_optimized_throughput.latency_ms": 5.5403253767225475,
+        "best_optimized_throughput.requests_per_s": 1443.9585143521851,
+        "best_optimized_throughput.samples_per_s": null,
+        "best_optimized_throughput.schemaVersion": "1.0",
+        "best_optimized_throughput.tokens_per_s": 1571026.8636151773,
+        "best_optimized_time_ms": 5.5403253767225475,
+        "best_speedup": 1.1820024267921991,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "2x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T20:59:30.167834",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "2x_b200",
+  "schema_version": 2
+}

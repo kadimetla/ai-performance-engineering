@@ -22,7 +22,8 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 
-from core.benchmark.verification import PrecisionFlags, simple_signature
+from core.benchmark.verification import PrecisionFlags
+from ch04.verification_payload_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -60,12 +61,12 @@ def _resolve_hidden(hidden: Optional[int], world_size: int) -> int:
 def _init_distributed() -> tuple[int, int, int]:
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         raise RuntimeError("baseline_tensor_parallel requires torchrun (RANK/WORLD_SIZE missing).")
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", device_id=local_rank)
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    local_rank = int(os.environ.get("LOCAL_RANK", rank))
-    torch.cuda.set_device(local_rank)
     return rank, world_size, local_rank
 
 
@@ -163,20 +164,93 @@ def main() -> None:
     )
 
 
-class BaselineTensorParallelBenchmark(BaseBenchmark):
+class BaselineTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness entry that launches this module via torchrun."""
-
-    verification_not_applicable_reason = "torchrun benchmarks execute in external processes"
-    skip_input_check = True
-    skip_output_check = True
 
     def __init__(self) -> None:
         super().__init__()
         tokens = float(_DEFAULT_BATCH * _DEFAULT_SEQ)
         self.register_workload_metadata(requests_per_iteration=float(_DEFAULT_BATCH), tokens_per_iteration=tokens)
+        self._shard_layers: Optional[nn.ModuleList] = None
+        self._proj_layers: Optional[nn.ModuleList] = None
+        self._aux_layers: Optional[nn.ModuleList] = None
+        self._input: Optional[torch.Tensor] = None
+        self._output: Optional[torch.Tensor] = None
+        self._world_size = _resolve_world_size()
+        self._hidden = _resolve_hidden(None, self._world_size)
+        self._hidden_per_rank = self._hidden // self._world_size
+
+    def setup(self) -> None:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        self._shard_layers, self._proj_layers, self._aux_layers = _build_layers(
+            self._hidden,
+            self._hidden_per_rank,
+            _DEFAULT_LAYERS,
+            self.device,
+        )
+        self._input = torch.randn(
+            _DEFAULT_BATCH,
+            _DEFAULT_SEQ,
+            self._hidden,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
 
     def benchmark_fn(self) -> None:
-        raise RuntimeError("SKIPPED: baseline_tensor_parallel requires torchrun")
+        if self._input is None or self._shard_layers is None or self._proj_layers is None or self._aux_layers is None:
+            raise RuntimeError("setup() must run before benchmark_fn()")
+        x = self._input
+        for layer_idx in range(_DEFAULT_LAYERS):
+            local_out = self._shard_layers[layer_idx](x)
+            full_out = torch.cat([local_out] * self._world_size, dim=-1)
+            aux_out = self._aux_layers[layer_idx](x)
+            proj_out = self._proj_layers[layer_idx](full_out)
+            x = proj_out + aux_out
+        self._output = x
+
+    def capture_verification_payload(self) -> None:
+        if self._output is None or self._input is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        param_count = 3 * _DEFAULT_LAYERS * (self._hidden * self._hidden)
+        self._set_verification_payload(
+            inputs={"input": self._input},
+            output=self._output,
+            batch_size=_DEFAULT_BATCH,
+            parameter_count=int(param_count),
+            precision_flags=PrecisionFlags(bf16=True, tf32=False),
+            output_tolerance=(0.1, 1.0),
+            signature_overrides={
+                "world_size": self._world_size,
+                "collective_type": "all_gather",
+            },
+        )
+
+    def _prepare_verification_payload(self) -> None:
+        if hasattr(self, "_subprocess_verify_output"):
+            return
+        self.setup()
+        try:
+            self.benchmark_fn()
+            self.capture_verification_payload()
+            self._subprocess_verify_output = self.get_verify_output()
+            self._subprocess_output_tolerance = self.get_output_tolerance()
+            self._subprocess_input_signature = self.get_input_signature()
+        finally:
+            self.teardown()
+
+    def teardown(self) -> None:
+        self._shard_layers = None
+        self._proj_layers = None
+        self._aux_layers = None
+        self._input = None
+        self._output = None
+        torch.cuda.empty_cache()
+
+    def validate_result(self) -> Optional[str]:
+        if self._output is None:
+            return "No output captured"
+        return None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -189,6 +263,7 @@ class BaselineTensorParallelBenchmark(BaseBenchmark):
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        self._prepare_verification_payload()
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
@@ -199,27 +274,6 @@ class BaselineTensorParallelBenchmark(BaseBenchmark):
                 "warmup": "--warmup",
             },
         )
-
-    def get_input_signature(self) -> dict:
-        world_size = _resolve_world_size()
-        hidden = _resolve_hidden(None, world_size)
-        signature = simple_signature(
-            batch_size=_DEFAULT_BATCH,
-            dtype="bfloat16",
-            seq_length=_DEFAULT_SEQ,
-            hidden_size=hidden,
-            num_layers=_DEFAULT_LAYERS,
-            precision_flags=PrecisionFlags(bf16=True, tf32=False),
-        )
-        signature.world_size = world_size
-        signature.collective_type = "all_gather"
-        return signature
-
-    def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
-
-    def get_verify_output(self) -> torch.Tensor:
-        raise RuntimeError("baseline_tensor_parallel does not expose verification outputs in-process.")
 
 
 def get_benchmark() -> BaseBenchmark:

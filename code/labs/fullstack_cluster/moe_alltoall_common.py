@@ -109,7 +109,12 @@ def init_distributed(backend: str = "nccl") -> Tuple[int, int, int, bool]:
         return rank, world_size, local_rank, False
 
     torch.cuda.set_device(local_rank)
-    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
+    dist.init_process_group(
+        backend=backend,
+        rank=rank,
+        world_size=world_size,
+        device_id=local_rank,
+    )
     return rank, world_size, local_rank, True
 
 
@@ -138,27 +143,41 @@ def run_alltoall_single(
         raise ValueError(f"msg_bytes {msg_bytes} too small for dtype {dtype}")
 
     send_counts = make_zipf_counts(world_size, total_elems, skew_alpha)
-    recv_counts = send_counts
+    send_counts_t = torch.tensor(send_counts, dtype=torch.int64, device="cuda")
+    gathered_counts = [torch.empty_like(send_counts_t) for _ in range(world_size)]
+    dist.all_gather(gathered_counts, send_counts_t)
+    recv_counts = [int(gathered_counts[src][dist.get_rank()].item()) for src in range(world_size)]
 
-    send_splits = torch.tensor(send_counts, dtype=torch.int64, device="cuda")
-    recv_splits = torch.tensor(recv_counts, dtype=torch.int64, device="cuda")
+    send_splits = send_counts
+    recv_splits = recv_counts
 
     send_buf = torch.randn(total_elems, dtype=dtype, device="cuda")
-    recv_buf = torch.empty_like(send_buf)
+    recv_total = int(sum(recv_counts))
+    recv_buf = torch.empty(recv_total, dtype=dtype, device="cuda")
 
     counts_t = torch.tensor(send_counts, dtype=torch.float32)
     gini = gini_coefficient(counts_t)
     max_over_mean = float(counts_t.max().item() / (counts_t.mean().item() + 1e-6))
 
     for _ in range(5):
-        dist.all_to_all_single(recv_buf, send_buf, recv_splits=recv_splits, send_splits=send_splits)
+        dist.all_to_all_single(
+            recv_buf,
+            send_buf,
+            output_split_sizes=recv_splits,
+            input_split_sizes=send_splits,
+        )
     torch.cuda.synchronize()
 
     latencies_ms: List[float] = []
     for _ in range(num_iters):
         torch.cuda.synchronize()
         t0 = time.perf_counter()
-        dist.all_to_all_single(recv_buf, send_buf, recv_splits=recv_splits, send_splits=send_splits)
+        dist.all_to_all_single(
+            recv_buf,
+            send_buf,
+            output_split_sizes=recv_splits,
+            input_split_sizes=send_splits,
+        )
         torch.cuda.synchronize()
         latencies_ms.append((time.perf_counter() - t0) * 1000.0)
 

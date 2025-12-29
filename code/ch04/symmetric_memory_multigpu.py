@@ -45,11 +45,7 @@ from pathlib import Path
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
-)
-
-_ensure_symmetric_memory_api()
+from core.optimization.symmetric_memory_patch import symmetric_memory_available
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -73,29 +69,29 @@ import math
 
 def setup_distributed():
     """Initialize distributed environment."""
-    if not dist.is_initialized():
-        rank = int(os.environ.get("RANK", 0))
-        world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
-        local_rank = int(os.environ.get("LOCAL_RANK", rank))
-        
     setup_single_gpu_env()  # Auto-setup for single-GPU mode
+    if dist.is_initialized():
+        return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
+
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+    torch.cuda.set_device(local_rank)
     dist.init_process_group(
         backend="nccl",
         init_method="env://",
         world_size=world_size,
         rank=rank,
+        device_id=local_rank,
     )
-    torch.cuda.set_device(local_rank)
-    
+
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
 
 def check_symmetric_memory_available() -> bool:
     """Check if symmetric memory is available."""
-    return (
-        hasattr(torch.distributed, 'nn') 
-        and hasattr(torch.distributed.nn, 'SymmetricMemory')
-    )
+    return symmetric_memory_available()
 
 
 # ============================================================================

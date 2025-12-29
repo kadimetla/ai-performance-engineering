@@ -94,6 +94,15 @@ def run_probe(args: argparse.Namespace) -> Tuple[Dict[Tuple[int, float], object]
     return results, rank, world_size
 
 
+def _resolve_world_size() -> int:
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA required for MoE readiness benchmark")
+    world_size = torch.cuda.device_count()
+    if world_size < 2:
+        raise RuntimeError("MoE readiness benchmark requires >=2 GPUs.")
+    return world_size
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -138,7 +147,7 @@ class BaselineMoEReadinessBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=2,
+            nproc_per_node=_resolve_world_size(),
             iterations=1,
             warmup=5,
             multi_gpu_required=True,
@@ -153,6 +162,7 @@ class BaselineMoEReadinessBenchmark(VerificationPayloadMixin, BaseBenchmark):
         }
 
     def get_torchrun_spec(self, config: BenchmarkConfig | None = None) -> TorchrunLaunchSpec:
+        self._prepare_verification_payload()
         script_path = Path(__file__).resolve()
         cfg = config or BenchmarkConfig()
         return TorchrunLaunchSpec(
@@ -180,7 +190,20 @@ class BaselineMoEReadinessBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
             output_tolerance=(0.1, 1.0),
+            signature_overrides={
+                "world_size": _resolve_world_size(),
+                "collective_type": "all_to_all",
+            },
         )
+
+    def _prepare_verification_payload(self) -> None:
+        if hasattr(self, "_subprocess_verify_output"):
+            return
+        self.benchmark_fn()
+        self.capture_verification_payload()
+        self._subprocess_verify_output = self.get_verify_output()
+        self._subprocess_output_tolerance = self.get_output_tolerance()
+        self._subprocess_input_signature = self.get_input_signature()
 
 
 def get_benchmark() -> BaselineMoEReadinessBenchmark:

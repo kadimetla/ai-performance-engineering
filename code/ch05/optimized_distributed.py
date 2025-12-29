@@ -19,6 +19,7 @@ class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.data: Optional[torch.Tensor] = None
+        self._verify_data: Optional[torch.Tensor] = None
         self.is_distributed = False
         self.rank = 0
         self.world_size = 1
@@ -32,6 +33,7 @@ class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize data and (optional) distributed process group."""
         skip_if_insufficient_gpus()
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Initialize distributed if running in multi-rank mode
         if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
@@ -52,10 +54,11 @@ class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.device = torch.device(f"cuda:{local_rank}")
         torch.cuda.set_device(local_rank)
         
+        self._verify_data = torch.randn(self.N, device=self.device)
         chunk_size = self.N // max(self.world_size, 1)
         start_idx = self.rank * chunk_size
         end_idx = start_idx + chunk_size if self.rank < self.world_size - 1 else self.N
-        self.data = torch.randn(end_idx - start_idx, device=self.device)
+        self.data = self._verify_data[start_idx:end_idx]
         self._synchronize()
     
     def benchmark_fn(self) -> None:
@@ -65,7 +68,7 @@ class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             local_result = self.data.sum()
             if self.is_distributed:
                 dist.all_reduce(local_result, op=dist.ReduceOp.SUM)
-                result = local_result / self.world_size
+                result = local_result
             else:
                 result = local_result
             _ = result
@@ -73,13 +76,14 @@ class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output = result.detach().clone()
 
     def capture_verification_payload(self) -> None:
+        if self._verify_data is None:
+            raise RuntimeError("setup() must be called before capture_verification_payload()")
         self._set_verification_payload(
             inputs={
-                "data": self.data,
-                "world_size": torch.tensor([self.world_size], device=self.device),
+                "data": self._verify_data,
             },
             output=self.output,
-            batch_size=self.data.shape[0],
+            batch_size=self._verify_data.shape[0],
             parameter_count=0,
             precision_flags={
                 "fp16": False,
@@ -95,6 +99,7 @@ class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.is_distributed:
             dist.destroy_process_group()
         self.data = None
+        self._verify_data = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

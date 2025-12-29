@@ -96,10 +96,10 @@ import torch
 import torch.distributed as dist
 
 from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
+    SymmetricMemoryHandle,
+    maybe_create_symmetric_memory_handle,
+    symmetric_memory_available as _symmetric_memory_available,
 )
-
-_ensure_symmetric_memory_api()
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
@@ -114,7 +114,7 @@ def symmetric_memory_available() -> bool:
     """Check if torch.distributed.nn.SymmetricMemory is available (PyTorch 2.10+)."""
     if os.environ.get("SYMMETRIC_MEMORY_DISABLED", "").lower() in {"1", "true", "yes"}:
         return False
-    return hasattr(dist, "nn") and hasattr(dist.nn, "SymmetricMemory")
+    return _symmetric_memory_available()
 
 
 def init_distributed() -> Tuple[int, int, int]:
@@ -124,16 +124,17 @@ def init_distributed() -> Tuple[int, int, int]:
     if not dist.is_initialized():
         rank = int(os.environ.get("RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
-        local_rank = int(os.environ.get("LOCAL_RANK", rank))
-        
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        torch.cuda.set_device(local_rank)
         dist.init_process_group(
             backend="nccl",
             init_method="env://",
             rank=rank,
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60),
+            device_id=local_rank,
         )
-        torch.cuda.set_device(local_rank)
         
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
@@ -161,8 +162,9 @@ class AsyncGradientBuffer:
     dtype: torch.dtype = torch.float32
     
     # Symmetric memory handle and buffer
-    handle: Optional[dist.nn.SymmetricMemory] = None
+    handle: Optional[SymmetricMemoryHandle] = None
     buffer: Optional[torch.Tensor] = None
+    versions_handle: Optional[SymmetricMemoryHandle] = None
     
     # Version tracking for lock-free updates
     version: int = 0
@@ -179,20 +181,18 @@ class AsyncGradientBuffer:
         # Version tracking buffer: [world_size] for lock-free coordination
         local_versions = torch.zeros(self.world_size, device=self.device, dtype=torch.int64)
         
-        if symmetric_memory_available():
-            try:
-                self.handle = dist.nn.SymmetricMemory(local_buf)
-                self.buffer = self.handle.buffer
-                
-                # Also make versions symmetric for lock-free coordination
-                ver_handle = dist.nn.SymmetricMemory(local_versions)
-                self.versions = ver_handle.buffer
-            except Exception:
-                self.handle = None
-                self.buffer = local_buf
-                self.versions = local_versions
+        handle = maybe_create_symmetric_memory_handle(local_buf)
+        if handle is not None:
+            self.handle = handle
+            self.buffer = handle.buffer
         else:
             self.buffer = local_buf
+
+        versions_handle = maybe_create_symmetric_memory_handle(local_versions)
+        if versions_handle is not None:
+            self.versions_handle = versions_handle
+            self.versions = versions_handle.buffer
+        else:
             self.versions = local_versions
 
     def async_put(self, rank: int, gradients: torch.Tensor) -> None:
@@ -429,19 +429,20 @@ class LockFreeGradientAccumulator:
         self.peer_versions = torch.zeros(world_size, device=device, dtype=torch.int64)
         
         # Symmetric memory handles
-        self.sym_handle = None
-        self.version_handle = None
-        
-        if symmetric_memory_available():
-                # Make accumulation buffer symmetric
-                local_buf = torch.zeros(param_numel, device=device, dtype=torch.float32)
-                self.sym_handle = dist.nn.SymmetricMemory(local_buf)
-                self.accum_buffer = self.sym_handle.buffer
-                
-                # Make version buffer symmetric
-                local_versions = torch.zeros(world_size, device=device, dtype=torch.int64)
-                self.version_handle = dist.nn.SymmetricMemory(local_versions)
-                self.peer_versions = self.version_handle.buffer
+        self.sym_handle: Optional[SymmetricMemoryHandle] = None
+        self.version_handle: Optional[SymmetricMemoryHandle] = None
+
+        local_buf = torch.zeros(param_numel, device=device, dtype=torch.float32)
+        sym_handle = maybe_create_symmetric_memory_handle(local_buf)
+        if sym_handle is not None:
+            self.sym_handle = sym_handle
+            self.accum_buffer = sym_handle.buffer
+
+        local_versions = torch.zeros(world_size, device=device, dtype=torch.int64)
+        version_handle = maybe_create_symmetric_memory_handle(local_versions)
+        if version_handle is not None:
+            self.version_handle = version_handle
+            self.peer_versions = version_handle.buffer
 
     def accumulate(self, rank: int, gradients: torch.Tensor) -> None:
         """
@@ -597,19 +598,13 @@ class SymmetricMemoryOptimizer:
         self.device = parameters[0].device
         
         # Create symmetric memory buffers for parameters
-        self.param_buffers: List[Optional[dist.nn.SymmetricMemory]] = []
+        self.param_buffers: List[Optional[SymmetricMemoryHandle]] = []
         self.momentum_buffers: List[torch.Tensor] = []
         
         for param in parameters:
             # Make parameters symmetric
-            if symmetric_memory_available():
-                try:
-                    handle = dist.nn.SymmetricMemory(param.data)
-                    self.param_buffers.append(handle)
-                except Exception:
-                    self.param_buffers.append(None)
-            else:
-                self.param_buffers.append(None)
+            handle = maybe_create_symmetric_memory_handle(param.data)
+            self.param_buffers.append(handle)
             
             # Initialize momentum
             self.momentum_buffers.append(torch.zeros_like(param.data))
@@ -731,7 +726,7 @@ class ZeROStyleSymmetricMemoryTrainer:
         )
         
         # Create symmetric memory buffers for optimizer states
-        self.optimizer_state_buffers: Dict[str, dist.nn.SymmetricMemory] = {}
+        self.optimizer_state_buffers: Dict[str, SymmetricMemoryHandle] = {}
         self._initialize_optimizer_states()
 
     def _initialize_optimizer_states(self) -> None:
@@ -743,8 +738,9 @@ class ZeROStyleSymmetricMemoryTrainer:
             if param.requires_grad:
                     # Create momentum and variance buffers (for Adam-like optimizers)
                     momentum = torch.zeros_like(param.data)
-                    handle = dist.nn.SymmetricMemory(momentum)
-                    self.optimizer_state_buffers[f"{name}_momentum"] = handle
+                    handle = maybe_create_symmetric_memory_handle(momentum)
+                    if handle is not None:
+                        self.optimizer_state_buffers[f"{name}_momentum"] = handle
 
     def training_step(self, batch: torch.Tensor) -> torch.Tensor:
         """

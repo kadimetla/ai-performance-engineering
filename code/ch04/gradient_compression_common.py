@@ -87,10 +87,13 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def _int8_all_reduce(self) -> torch.Tensor:
         max_vals = [t.abs().max() for t in self.inputs]
         max_tensors = [m.clone() for m in max_vals]
-        torch.cuda.nccl.all_reduce(max_tensors, op=torch.cuda.nccl.ReduceOp.MAX)
-        scales = [m * (self.world_size / 127.0) for m in max_tensors]
+        # NCCL op value 2 maps to MAX for torch.cuda.nccl.all_reduce.
+        torch.cuda.nccl.all_reduce(max_tensors, op=2)
+        # Keep summed int8 values within [-127, 127] after all-reduce.
+        limit = max(1, 127 // self.world_size)
+        scales = [m / float(limit) for m in max_tensors]
         quantized = [
-            torch.clamp((t / scale).round(), -127, 127).to(torch.int8)
+            torch.clamp((t / scale).round(), -limit, limit).to(torch.int8)
             for t, scale in zip(self.inputs, scales)
         ]
         outputs = [torch.empty_like(t) for t in quantized]

@@ -18,7 +18,7 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import lambda_auto_wrap_policy
 
 from labs.train_distributed.training_utils.memory import print_memory_stats
-from labs.train_distributed.training_utils.utils import get, set_seed
+from labs.train_distributed.training_utils.utils import get
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
 
@@ -55,14 +55,14 @@ def _build_model(hidden_size: int):
 
 
 def main():
-    if dist.get_world_size() < 2:
-        print("Warning: Optimized ZeRO-3 running with world_size < 2; no sharding benefit will be observed.")
     args = parse_args()
-    dist.init_process_group("nccl")
+    local_rank = get("lrank")
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group("nccl", device_id=local_rank)
+    if get("ws") < 2:
+        print("Warning: Optimized ZeRO-3 running with world_size < 2; no sharding benefit will be observed.")
     rank = get("rank")
-    device = torch.device(f"cuda:{rank}")
-    torch.cuda.set_device(device)
-    set_seed(2024 + rank)
+    device = torch.device(f"cuda:{local_rank}")
 
 
     base_model = _build_model(args.hidden_size)

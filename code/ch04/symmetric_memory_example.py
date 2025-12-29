@@ -22,11 +22,7 @@ from pathlib import Path
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
-)
-
-_ensure_symmetric_memory_api()
+from core.optimization.symmetric_memory_patch import maybe_create_symmetric_memory_handle
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -50,23 +46,26 @@ from typing import Optional
 
 def setup_distributed():
     """Initialize distributed environment for multi-GPU operation."""
-    if not dist.is_initialized():
-        # For single-node multi-GPU
-        rank = int(os.environ.get("RANK", 0))
-        world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
-        local_rank = int(os.environ.get("LOCAL_RANK", rank))
-        
-        # Use NCCL backend for GPU communication with timeout
     setup_single_gpu_env()  # Auto-setup for single-GPU mode
+    if dist.is_initialized():
+        return dist.get_rank(), dist.get_world_size()
+
+    # For single-node multi-GPU
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+    torch.cuda.set_device(local_rank)
+    # Use NCCL backend for GPU communication with timeout
     dist.init_process_group(
         backend="nccl",
-            init_method="env://",
-            world_size=world_size,
-            rank=rank,
-            timeout=torch.distributed.timedelta(seconds=30)  # 30 second timeout
-        )
-    torch.cuda.set_device(local_rank)
-    
+        init_method="env://",
+        world_size=world_size,
+        rank=rank,
+        timeout=torch.distributed.timedelta(seconds=30),  # 30 second timeout
+        device_id=local_rank,
+    )
+
     return dist.get_rank(), dist.get_world_size()
 
 
@@ -195,10 +194,12 @@ def benchmark_symmetric_memory(tensor: torch.Tensor, iterations: int = 100):
         # Allocate symmetric memory buffer
         # All GPUs in the group can directly address this memory
         with nvtx.range("symmetric_memory_allocation"):
-            sym_mem = torch.distributed.nn.SymmetricMemory(
+            sym_mem = maybe_create_symmetric_memory_handle(
                 tensor,
-                group=dist.group.WORLD
+                group=dist.group.WORLD,
             )
+            if sym_mem is None:
+                raise RuntimeError("Symmetric memory not available")
     except (AttributeError, RuntimeError) as e:
         print(f"Rank {rank}: Symmetric memory not available: {e}")
         print("This feature requires PyTorch 2.10+ with proper CUDA 13/NVSHMEM support")
@@ -214,7 +215,7 @@ def benchmark_symmetric_memory(tensor: torch.Tensor, iterations: int = 100):
         dist.barrier()
         if rank == 1:
             # Rank 1 directly reads from rank 0's symmetric buffer
-            remote_data = sym_mem.get_buffer(src_rank=0)
+            remote_data = sym_mem.get_buffer(0)
             _ = remote_data.sum()  # Force materialization
     
     dist.barrier()
@@ -232,7 +233,7 @@ def benchmark_symmetric_memory(tensor: torch.Tensor, iterations: int = 100):
                 sym_mem.buffer[:] = tensor
             dist.barrier()
             if rank == 1:
-                remote_data = sym_mem.get_buffer(src_rank=0)
+                remote_data = sym_mem.get_buffer(0)
                 _ = remote_data.sum()
     
     end.record()

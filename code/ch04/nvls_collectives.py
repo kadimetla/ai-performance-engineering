@@ -44,7 +44,9 @@ class NVLSCollectivesBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if not dist.is_initialized():
             if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
                 raise RuntimeError("SKIPPED: launch with torchrun to enable NCCL NVLS demo")
-            dist.init_process_group("nccl")
+            local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            torch.cuda.set_device(local_rank)
+            dist.init_process_group("nccl", device_id=local_rank)
 
         os.environ.setdefault("NCCL_NVLS_ENABLE", "1")
         os.environ.setdefault("NCCL_ALGO", "Tree,Ring,NVLS")

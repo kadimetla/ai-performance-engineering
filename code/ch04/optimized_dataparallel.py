@@ -70,6 +70,9 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         self._last_input: Optional[torch.Tensor] = None
         self._last_target: Optional[torch.Tensor] = None
+        self._verify_state: Optional[dict] = None
+        self._verify_input: Optional[torch.Tensor] = None
+        self._verify_target: Optional[torch.Tensor] = None
         # Training benchmarks don't support jitter check
         tokens = self.batch_size * self.input_size
         self._workload = WorkloadMetadata(
@@ -86,12 +89,15 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Use same precision as baseline (float32) for fair verification comparison
         self.model = SimpleNet(self.input_size).to(self.device)
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        self._verify_state = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
 
         data_gen = torch.Generator().manual_seed(1234)
         cpu_input = torch.randn(self.batch_size, self.input_size, dtype=torch.float32, generator=data_gen)
         cpu_target = torch.randn(self.batch_size, 1, dtype=torch.float32, generator=data_gen)
         self.inputs.append(cpu_input.to(self.device))
         self.targets.append(cpu_target.to(self.device))
+        self._verify_input = cpu_input.clone()
+        self._verify_target = cpu_target.clone()
 
         torch.cuda.synchronize(self.device)
 
@@ -113,12 +119,24 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
 
     def capture_verification_payload(self) -> None:
-        if self._last_input is None or self._last_target is None or self.output is None:
+        if (
+            self._verify_input is None
+            or self._verify_target is None
+            or self._verify_state is None
+            or self.output is None
+        ):
             raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
-        param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        verify_model = SimpleNet(self.input_size).to(self.device)
+        verify_model.load_state_dict(self._verify_state)
+        verify_model.eval()
+        with torch.no_grad():
+            verify_input = self._verify_input.to(self.device)
+            verify_target = self._verify_target.to(self.device)
+            output = verify_model(verify_input)
+        param_count = sum(p.numel() for p in verify_model.parameters())
         self._set_verification_payload(
-            inputs={"data": self._last_input, "target": self._last_target},
-            output=self.output,
+            inputs={"data": verify_input, "target": verify_target},
+            output=output,
             batch_size=int(self.batch_size),
             parameter_count=param_count,
             precision_flags={
@@ -135,6 +153,9 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.optimizer = None
         self.inputs = []
         self.targets = []
+        self._verify_state = None
+        self._verify_input = None
+        self._verify_target = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

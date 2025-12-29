@@ -74,10 +74,10 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
+    SymmetricMemoryHandle,
+    maybe_create_symmetric_memory_handle,
+    symmetric_memory_available,
 )
-
-_ensure_symmetric_memory_api()
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -111,11 +111,6 @@ import torch.nn as nn
 # ============================================================================
 
 
-def symmetric_memory_available() -> bool:
-    """Check if PyTorch 2.10+ symmetric memory is available."""
-    return hasattr(dist, "nn") and hasattr(dist.nn, "SymmetricMemory")
-
-
 def init_distributed() -> Tuple[int, int, int]:
     """Initialize distributed process group."""
     gpu_count = torch.cuda.device_count()
@@ -129,6 +124,12 @@ def init_distributed() -> Tuple[int, int, int]:
     world_size = int(os.environ.get("WORLD_SIZE", max(1, gpu_count)))
     local_rank = int(os.environ.get("LOCAL_RANK", rank % max(1, gpu_count)))
 
+    if local_rank >= gpu_count:
+        raise RuntimeError(
+            f"LOCAL_RANK {local_rank} is out of range for available GPUs ({gpu_count})."
+        )
+
+    torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
         dist.init_process_group(
             backend="nccl",
@@ -136,14 +137,8 @@ def init_distributed() -> Tuple[int, int, int]:
             rank=rank,
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60),
+            device_id=local_rank,
         )
-
-    if local_rank >= gpu_count:
-        raise RuntimeError(
-            f"LOCAL_RANK {local_rank} is out of range for available GPUs ({gpu_count})."
-        )
-
-    torch.cuda.set_device(local_rank)
     warn_optimal_gpu_count(4, script_name="nvshmem_pipeline_parallel.py")
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
@@ -167,7 +162,7 @@ class ActivationBuffer:
     world_size: int
     num_buffers: int = 2  # Double buffering
     
-    handles: List[Optional[dist.nn.SymmetricMemory]] = field(default_factory=list, init=False)
+    handles: List[Optional[SymmetricMemoryHandle]] = field(default_factory=list, init=False)
     buffers: List[torch.Tensor] = field(default_factory=list, init=False)
     current_idx: int = field(default=0, init=False)
     
@@ -176,14 +171,10 @@ class ActivationBuffer:
         for _ in range(self.num_buffers):
             local_buffer = torch.zeros(self.shape, dtype=self.dtype, device=self.device)
             
-            if symmetric_memory_available():
-                try:
-                    handle = dist.nn.SymmetricMemory(local_buffer)
-                    self.handles.append(handle)
-                    self.buffers.append(handle.buffer)
-                except Exception:
-                    self.handles.append(None)
-                    self.buffers.append(local_buffer)
+            handle = maybe_create_symmetric_memory_handle(local_buffer)
+            if handle is not None:
+                self.handles.append(handle)
+                self.buffers.append(handle.buffer)
             else:
                 self.handles.append(None)
                 self.buffers.append(local_buffer)

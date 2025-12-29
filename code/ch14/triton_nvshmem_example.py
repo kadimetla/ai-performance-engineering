@@ -26,11 +26,7 @@ import os
 # Add parent directory to path to import arch_config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
-)
-
-_ensure_symmetric_memory_api()
+from core.optimization.symmetric_memory_patch import maybe_create_symmetric_memory_handle
 
 
 import torch
@@ -151,10 +147,12 @@ def pytorch_symmetric_memory_approach():
     try:
         # Allocate symmetric memory (PyTorch 2.10+)
         # This enables direct cross-GPU access
-        sym_mem = torch.distributed.nn.SymmetricMemory(
+        sym_mem = maybe_create_symmetric_memory_handle(
             tensors[0],
-            group=None  # Use default group
+            group=None,  # Use default group
         )
+        if sym_mem is None:
+            raise RuntimeError("Symmetric memory not available")
         print(" Symmetric memory allocated successfully")
         
         # You can now write custom CUDA/Triton kernels that access

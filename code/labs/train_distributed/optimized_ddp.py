@@ -24,7 +24,6 @@ from labs.train_distributed.training_utils.utils import (
     build_text_model,
     build_tokenizer,
     get_dataset,
-    set_seed,
 )
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
@@ -59,12 +58,6 @@ def _maybe_fused_adamw(params, lr):
 
 def main():
     args = parse_args()
-    if not dist.is_initialized():
-        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-            dist.init_process_group(backend="nccl")
-        else:
-            raise RuntimeError("DDP optimized run requires torch.distributed process group to be initialized.")
-
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     if not torch.cuda.is_available():
         raise RuntimeError("DDP optimized run requires CUDA GPUs.")
@@ -72,8 +65,13 @@ def main():
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
 
+    if not dist.is_initialized():
+        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            dist.init_process_group(backend="nccl", device_id=local_rank)
+        else:
+            raise RuntimeError("DDP optimized run requires torch.distributed process group to be initialized.")
+
     rank = dist.get_rank()
-    set_seed(2025 + rank)
     tokenizer = build_tokenizer()
     dataset = get_dataset()["train"]
 

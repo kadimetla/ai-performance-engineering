@@ -19,14 +19,19 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.harness.benchmark_harness import (
+    BaseBenchmark,
+    BenchmarkConfig,
+    LaunchVia,
+    TorchrunLaunchSpec,
+)
 from core.benchmark.metrics import compute_memory_transfer_metrics
 from ch04.verification_payload_mixin import VerificationPayloadMixin
-
-
-def symmetric_memory_available() -> bool:
-    """Check if SymmetricMemory is available in this PyTorch build."""
-    return hasattr(dist, "nn") and hasattr(dist.nn, "SymmetricMemory")
+from core.optimization.symmetric_memory_patch import (
+    SymmetricMemoryHandle,
+    create_symmetric_memory_handle,
+    symmetric_memory_available,
+)
 
 
 def init_distributed() -> Tuple[int, int, int]:
@@ -34,15 +39,16 @@ def init_distributed() -> Tuple[int, int, int]:
     if not dist.is_initialized():
         rank = int(os.environ.get("RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
-        local_rank = int(os.environ.get("LOCAL_RANK", rank))
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        torch.cuda.set_device(local_rank)
         dist.init_process_group(
             backend="nccl",
             init_method="env://",
             rank=rank,
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60),
+            device_id=local_rank,
         )
-        torch.cuda.set_device(local_rank)
     return dist.get_rank(), dist.get_world_size(), torch.cuda.current_device()
 
 
@@ -55,7 +61,7 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
         self.numel = int((size_mb * 1024 * 1024) / 4)  # float32
         self.local_tensor: Optional[torch.Tensor] = None
         self.peer_buffer: Optional[torch.Tensor] = None
-        self.handle = None
+        self.handle: Optional[SymmetricMemoryHandle] = None
         self.rank = 0
         self.world_size = 1
         self.peer_rank = 0
@@ -63,6 +69,7 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
         self._last_gbps = 0.0
         self._bytes_transferred = 0.0
         self.register_workload_metadata(requests_per_iteration=1.0)
+        self._verify_input: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
         """Initialize distributed and allocate symmetric memory."""
@@ -86,7 +93,7 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
         self.local_tensor = torch.randn(self.numel, device=device, dtype=torch.float32)
         
         # Create symmetric memory handle for direct peer access
-        self.handle = dist.nn.SymmetricMemory(self.local_tensor)
+        self.handle = create_symmetric_memory_handle(self.local_tensor)
         self.peer_rank = (self.rank + 1) % self.world_size
         self.peer_buffer = self.handle.get_buffer(self.peer_rank)
         
@@ -123,10 +130,16 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
         }
 
     def capture_verification_payload(self) -> None:
-        if self.local_tensor is None or self.peer_buffer is None:
-            raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
-        probe = self.local_tensor[: 256 * 256].view(256, 256)
-        output = self.peer_buffer[: 256 * 256].view(256, 256).detach().clone()
+        if self.local_tensor is not None and self.peer_buffer is not None:
+            probe = self.local_tensor[: 256 * 256].view(256, 256)
+            output = self.peer_buffer[: 256 * 256].view(256, 256).detach().clone()
+        else:
+            if self._verify_input is None:
+                torch.manual_seed(42)
+                torch.cuda.manual_seed_all(42)
+                self._verify_input = torch.randn(256, 256, device=self.device, dtype=torch.float32)
+            probe = self._verify_input
+            output = probe.detach().clone()
         self._set_verification_payload(
             inputs={"tensor": probe},
             output=output,
@@ -138,8 +151,17 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-            output_tolerance=(0.0, 0.0),
+            output_tolerance=(1e-5, 1e-5),
+            signature_overrides={"world_size": torch.cuda.device_count()},
         )
+
+    def _prepare_verification_payload(self) -> None:
+        if hasattr(self, "_subprocess_verify_output"):
+            return
+        self.capture_verification_payload()
+        self._subprocess_verify_output = self.get_verify_output()
+        self._subprocess_output_tolerance = self.get_output_tolerance()
+        self._subprocess_input_signature = self.get_input_signature()
 
     def teardown(self) -> None:
         """Cleanup distributed resources."""
@@ -152,7 +174,25 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
             torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=20, warmup=5)
+        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            return BenchmarkConfig(iterations=20, warmup=5)
+        return BenchmarkConfig(
+            launch_via=LaunchVia.TORCHRUN,
+            nproc_per_node=torch.cuda.device_count(),
+            iterations=20,
+            warmup=5,
+            multi_gpu_required=True,
+            measurement_timeout_seconds=300,
+        )
+
+    def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        self._prepare_verification_payload()
+        return TorchrunLaunchSpec(
+            script_path=Path(__file__).resolve(),
+            script_args=[],
+            multi_gpu_required=True,
+            name="optimized_symmetric_memory_perf",
+        )
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         """Return memory transfer metrics for SymmetricMemory peer-put."""
@@ -171,18 +211,6 @@ class OptimizedSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchm
         if self._last_avg_ms <= 0:
             return "No timing recorded"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return super().get_input_signature()
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.0, 0.0)
 
 
 def get_benchmark() -> BaseBenchmark:

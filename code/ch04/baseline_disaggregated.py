@@ -60,8 +60,15 @@ class BaselineDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Only initialize distributed when launched under torchrun.
         import os
         if dist.is_available() and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            if torch.cuda.is_available():
+                torch.cuda.set_device(local_rank)
             if not dist.is_initialized():
-                dist.init_process_group(backend="nccl", init_method="env://")
+                dist.init_process_group(
+                    backend="nccl",
+                    init_method="env://",
+                    device_id=local_rank,
+                )
             self.is_distributed = True
             self.rank = dist.get_rank()
             self.world_size = dist.get_world_size()
@@ -127,6 +134,7 @@ class BaselineDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.prefill_input is None or self.decode_input is None or self.output is None:
             raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
+        param_count *= 2
         self._set_verification_payload(
             inputs={"prefill": self.prefill_input, "decode": self.decode_input},
             output=self.output.to(dtype=torch.float32),

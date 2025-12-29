@@ -882,6 +882,7 @@ def is_distributed_benchmark(file_path: Path) -> bool:
     """
     try:
         content = file_path.read_text()
+        content_lower = content.lower()
         
         # Check for distributed imports
         has_dist_import = any(pattern in content for pattern in [
@@ -923,6 +924,17 @@ def is_distributed_benchmark(file_path: Path) -> bool:
             "MIN_GPUS_REQUIRED",
         )
         has_explicit_multi_gpu_guard = any(marker in content for marker in multi_gpu_markers)
+
+        explicit_gpu_checks = (
+            "device_count() < 2",
+            "device_count()<2",
+            "requires >=2 gpu",
+            "requires >=2 gpus",
+            "requires >= 2 gpu",
+            "requires >= 2 gpus",
+            "requires multiple gpus",
+        )
+        has_explicit_gpu_check = any(token in content_lower for token in explicit_gpu_checks)
         
         # Torchrun is a strong indicator of multi-process / multi-GPU execution even if
         # distributed init is abstracted behind helpers imported from other modules.
@@ -936,6 +948,7 @@ def is_distributed_benchmark(file_path: Path) -> bool:
             or has_nccl
             or (has_world_size and has_rank and has_dist_ops)
             or has_explicit_multi_gpu_guard
+            or has_explicit_gpu_check
             or has_torchrun_launch
         )
     except Exception:
@@ -2536,6 +2549,20 @@ def _test_chapter_impl(
             return 2, False
         return 1, True
 
+    def _is_multi_gpu_benchmark(benchmark_obj: Any) -> bool:
+        try:
+            import inspect
+
+            source_path = inspect.getsourcefile(benchmark_obj.__class__)
+        except Exception:
+            source_path = None
+        if not source_path:
+            return False
+        try:
+            return is_distributed_benchmark(Path(source_path))
+        except Exception:
+            return False
+
     def _run_with_config(benchmark_obj, run_id: str, target_label: Optional[str] = None):
         merged = _merge_benchmark_config(
             base_config=base_config,
@@ -2545,7 +2572,7 @@ def _test_chapter_impl(
         )
         if getattr(merged, "use_subprocess", False):
             required, exact = _resolve_required_world_size(benchmark_obj, merged)
-            if exact and required == 1:
+            if exact and required == 1 and not _is_multi_gpu_benchmark(benchmark_obj):
                 merged.single_gpu = True
         if target_label and getattr(merged, "target_label", None) is None:
             merged.target_label = target_label

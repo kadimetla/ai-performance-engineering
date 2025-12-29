@@ -26,7 +26,8 @@ repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from core.benchmark.verification import PrecisionFlags, simple_signature
+from core.benchmark.verification import PrecisionFlags
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -67,13 +68,22 @@ class SimpleTransformerLayer(nn.Module):
 def _init_distributed() -> tuple[int, int, int]:
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         raise RuntimeError("FSDP2 optimized requires torchrun (RANK/WORLD_SIZE missing).")
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", device_id=local_rank)
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    local_rank = int(os.environ.get("LOCAL_RANK", rank))
-    torch.cuda.set_device(local_rank)
     return rank, world_size, local_rank
+
+
+def _resolve_world_size() -> int:
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA required for FSDP2 benchmarks")
+    world_size = torch.cuda.device_count()
+    if world_size < 2:
+        raise RuntimeError("FSDP2 optimized requires >=2 GPUs.")
+    return world_size
 
 
 def _require_torchao() -> None:
@@ -202,24 +212,86 @@ def run_benchmark(**_kwargs) -> dict:
     raise RuntimeError("optimized_fsdp2_standalone must be executed via torchrun.")
 
 
-class OptimizedFSDP2Benchmark(BaseBenchmark):
+class OptimizedFSDP2Benchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness entry that launches this module via torchrun."""
-
-    verification_not_applicable_reason = "torchrun benchmarks execute in external processes"
-    skip_input_check = True
-    skip_output_check = True
 
     def __init__(self) -> None:
         super().__init__()
         self.register_workload_metadata(requests_per_iteration=float(_DEFAULT_BATCH_SIZE))
+        self._model: Optional[nn.ModuleList] = None
+        self._input: Optional[torch.Tensor] = None
+        self._output: Optional[torch.Tensor] = None
+        self._param_count = 0
+        self._world_size = _resolve_world_size()
+
+    def setup(self) -> None:
+        _require_torchao()
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        self._model = _build_model(_DEFAULT_HIDDEN, _DEFAULT_LAYERS, self.device)
+        fp8_config = Float8LinearConfig(
+            enable_fsdp_float8_all_gather=True,
+            enable_pre_and_post_forward=True,
+        )
+        convert_to_float8_training(self._model, config=fp8_config)
+        self._input = torch.randn(
+            _DEFAULT_BATCH_SIZE,
+            _DEFAULT_SEQ_LEN,
+            _DEFAULT_HIDDEN,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+        self._param_count = sum(p.numel() for p in self._model.parameters())
 
     def benchmark_fn(self) -> None:
-        raise RuntimeError("SKIPPED: optimized_fsdp2_standalone requires torchrun")
+        if self._model is None or self._input is None:
+            raise RuntimeError("setup() must run before benchmark_fn()")
+        x = self._input
+        for layer in self._model:
+            x = layer(x)
+        self._output = x
+
+    def capture_verification_payload(self) -> None:
+        if self._output is None or self._input is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"input": self._input},
+            output=self._output,
+            batch_size=_DEFAULT_BATCH_SIZE,
+            parameter_count=int(self._param_count),
+            precision_flags=PrecisionFlags(fp8=True, bf16=True, tf32=False),
+            output_tolerance=(0.1, 1.0),
+            signature_overrides={"world_size": self._world_size},
+        )
+
+    def _prepare_verification_payload(self) -> None:
+        if hasattr(self, "_subprocess_verify_output"):
+            return
+        self.setup()
+        try:
+            self.benchmark_fn()
+            self.capture_verification_payload()
+            self._subprocess_verify_output = self.get_verify_output()
+            self._subprocess_output_tolerance = self.get_output_tolerance()
+            self._subprocess_input_signature = self.get_input_signature()
+        finally:
+            self.teardown()
+
+    def teardown(self) -> None:
+        self._model = None
+        self._input = None
+        self._output = None
+        torch.cuda.empty_cache()
+
+    def validate_result(self) -> Optional[str]:
+        if self._output is None:
+            return "No output captured"
+        return None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             launch_via=LaunchVia.TORCHRUN,
-            nproc_per_node=2,
+            nproc_per_node=self._world_size,
             iterations=3,
             warmup=5,
             multi_gpu_required=True,
@@ -227,6 +299,7 @@ class OptimizedFSDP2Benchmark(BaseBenchmark):
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        self._prepare_verification_payload()
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],
@@ -237,25 +310,6 @@ class OptimizedFSDP2Benchmark(BaseBenchmark):
                 "warmup": "--warmup",
             },
         )
-
-    def get_input_signature(self) -> dict:
-        signature = simple_signature(
-            batch_size=_DEFAULT_BATCH_SIZE,
-            dtype="bfloat16",
-            seq_length=_DEFAULT_SEQ_LEN,
-            hidden_size=_DEFAULT_HIDDEN,
-            num_layers=_DEFAULT_LAYERS,
-            micro_batch_size=_DEFAULT_MICRO_BATCH,
-            precision_flags=PrecisionFlags(fp8=True, bf16=True, tf32=False),
-        )
-        signature.world_size = 2
-        return signature
-
-    def get_output_tolerance(self) -> tuple:
-        return (0.1, 1.0)
-
-    def get_verify_output(self) -> torch.Tensor:
-        raise RuntimeError("optimized_fsdp2_standalone does not expose verification outputs in-process.")
 
 
 def get_benchmark() -> BaseBenchmark:

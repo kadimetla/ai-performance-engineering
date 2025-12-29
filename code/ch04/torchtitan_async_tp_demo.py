@@ -101,14 +101,14 @@ def init_distributed(tp_degree: int) -> int:
         local_rank = 0
 
     setup_single_gpu_env()  # Auto-setup for single-GPU mode
-    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl", device_id=local_rank)
     world_size = dist.get_world_size()
     if world_size != tp_degree:
         raise SystemExit(
             f"World size ({world_size}) must match --tp-degree ({tp_degree}) for this demo."
         )
-
-    torch.cuda.set_device(local_rank)
     return local_rank
 
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+from pathlib import Path
 from time import perf_counter
 
 
@@ -44,24 +46,21 @@ def main():
         build_text_model,
         build_tokenizer,
         get_dataset,
-        set_seed,
     )
 
     args = parse_args()
-    set_seed(42)
-
-    if not dist.is_initialized() and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        dist.init_process_group(backend="nccl")
-
-    if not dist.is_initialized() or dist.get_world_size() < 2:
-        raise RuntimeError("SKIPPED: requires >=2 GPUs for gradient compression")
-
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
         device = torch.device("cuda", local_rank)
     else:
         device = torch.device("cpu")
+
+    if not dist.is_initialized() and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        dist.init_process_group(backend="nccl", device_id=local_rank)
+
+    if not dist.is_initialized() or dist.get_world_size() < 2:
+        raise RuntimeError("SKIPPED: requires >=2 GPUs for gradient compression")
 
     rank = dist.get_rank() if dist.is_initialized() else 0
     is_main = rank == 0
@@ -149,3 +148,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))

@@ -12,7 +12,7 @@ import torch.nn as nn
 from torch.optim import Adam, Optimizer
 
 from labs.train_distributed.training_utils.memory import print_memory_stats
-from labs.train_distributed.training_utils.utils import get, set_seed
+from labs.train_distributed.training_utils.utils import get
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
 
@@ -135,13 +135,13 @@ def train(model, optimizer, batch_size, device, steps, label):
 
 def main():
     args = parse_args()
-    dist.init_process_group("nccl")
+    local_rank = get("lrank")
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group("nccl", device_id=local_rank)
     if get("ws") < 2:
         print("Warning: baseline ZeRO-2 demo is running on a single GPU; sharding benefits require world_size>=2.")
     rank = get("rank")
-    device = torch.device(f"cuda:{rank}")
-    torch.cuda.set_device(device)
-    set_seed(321 + rank)
+    device = torch.device(f"cuda:{local_rank}")
 
     baseline_model = _build_model(args.hidden_size, device)
     baseline_opt = Adam(baseline_model.parameters(), lr=1e-3)

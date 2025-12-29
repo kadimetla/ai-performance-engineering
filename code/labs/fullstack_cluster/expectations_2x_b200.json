@@ -1,0 +1,35 @@
+{
+  "examples": {
+    "moe_readiness": {
+      "example": "moe_readiness",
+      "metadata": {
+        "best_optimization": "optimized_moe_readiness",
+        "best_optimization_file": "optimized_moe_readiness.py",
+        "best_optimization_speedup": 1.0009022267948813,
+        "best_optimization_technique": "optimized_moe_readiness",
+        "best_optimization_time_ms": 5511.317014694214,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_p75_ms": 5516.289472579956,
+        "baseline_time_ms": 5516.289472579956,
+        "best_optimized_p75_ms": 5511.317014694214,
+        "best_optimized_speedup": 1.0009022267948813,
+        "best_optimized_time_ms": 5511.317014694214,
+        "best_speedup": 1.0009022267948813,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "2x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T21:01:21.370561",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "2x_b200",
+  "schema_version": 2
+}

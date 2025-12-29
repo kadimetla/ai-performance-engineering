@@ -32,10 +32,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.optimization.symmetric_memory_patch import (
-    ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
+    maybe_create_symmetric_memory_handle,
+    symmetric_memory_available,
 )
-
-_ensure_symmetric_memory_api()
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -65,26 +64,23 @@ import torch.distributed as dist
 # ============================================================================
 
 
-def symmetric_memory_available() -> bool:
-    return hasattr(dist, "nn") and hasattr(dist.nn, "SymmetricMemory")
-
-
 def init_distributed() -> int:
     setup_single_gpu_env()  # Auto-setup for single-GPU mode
     
     if not dist.is_initialized():
         rank = int(os.environ.get("RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", torch.cuda.device_count()))
-        local_rank = int(os.environ.get("LOCAL_RANK", rank))
-        
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        torch.cuda.set_device(local_rank)
         dist.init_process_group(
             backend="nccl",
             init_method="env://",
             rank=rank,
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60),
+            device_id=local_rank,
         )
-        torch.cuda.set_device(local_rank)
     else:
         rank = dist.get_rank()
         world_size = dist.get_world_size()
@@ -150,14 +146,13 @@ def _measure_symmetric_memory(bytes_per_rank: int, iterations: int) -> Optional[
     numel = max(1, numel)
 
     local = torch.randn(numel, device=device, dtype=dtype)
-    try:
-        sym = dist.nn.SymmetricMemory(local)
-        buffer = sym.buffer
-    except Exception:
+    sym_handle = maybe_create_symmetric_memory_handle(local)
+    if sym_handle is None:
         return None
+    buffer = sym_handle.buffer
 
     neighbor = (dist.get_rank() + 1) % dist.get_world_size()
-    remote = sym.get_buffer(neighbor)
+    remote = sym_handle.get_buffer(neighbor)
 
     for _ in range(5):
         remote.copy_(buffer)

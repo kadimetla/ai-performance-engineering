@@ -1,0 +1,93 @@
+{
+  "examples": {
+    "prefill_decode_disagg_multigpu": {
+      "example": "prefill_decode_disagg_multigpu",
+      "metadata": {
+        "best_optimization": "optimized_prefill_decode_disagg_multigpu",
+        "best_optimization_file": "optimized_prefill_decode_disagg_multigpu.py",
+        "best_optimization_speedup": 0.9994010182808806,
+        "best_optimization_technique": "optimized_prefill_decode_disagg_multigpu",
+        "best_optimization_time_ms": 1495.33611536026,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_p75_ms": 1494.4404363632202,
+        "baseline_time_ms": 1494.4404363632202,
+        "best_optimized_p75_ms": 1495.33611536026,
+        "best_optimized_speedup": 0.9994010182808806,
+        "best_optimized_time_ms": 1495.33611536026,
+        "best_speedup": 0.9994010182808806,
+        "is_regression": true
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "2x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T21:00:23.763849",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    },
+    "prefill_decode_disagg_tpot_long_multigpu": {
+      "example": "prefill_decode_disagg_tpot_long_multigpu",
+      "metadata": {
+        "best_optimization": "optimized_prefill_decode_disagg_tpot_long_multigpu",
+        "best_optimization_file": "optimized_prefill_decode_disagg_tpot_long_multigpu.py",
+        "best_optimization_speedup": 1.8844447833225357,
+        "best_optimization_technique": "optimized_prefill_decode_disagg_tpot_long_multigpu",
+        "best_optimization_time_ms": 1472.7702140808105,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_p75_ms": 2775.3541469573975,
+        "baseline_time_ms": 2775.3541469573975,
+        "best_optimized_p75_ms": 1472.7702140808105,
+        "best_optimized_speedup": 1.8844447833225357,
+        "best_optimized_time_ms": 1472.7702140808105,
+        "best_speedup": 1.8844447833225357,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "2x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T21:00:42.940523",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    },
+    "prefill_decode_disagg_ttft_multigpu": {
+      "example": "prefill_decode_disagg_ttft_multigpu",
+      "metadata": {
+        "best_optimization": "optimized_prefill_decode_disagg_ttft_multigpu",
+        "best_optimization_file": "optimized_prefill_decode_disagg_ttft_multigpu.py",
+        "best_optimization_speedup": 0.9837608384947493,
+        "best_optimization_technique": "optimized_prefill_decode_disagg_ttft_multigpu",
+        "best_optimization_time_ms": 1494.0763711929321,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_p75_ms": 1469.8138236999512,
+        "baseline_time_ms": 1469.8138236999512,
+        "best_optimized_p75_ms": 1494.0763711929321,
+        "best_optimized_speedup": 0.9837608384947493,
+        "best_optimized_time_ms": 1494.0763711929321,
+        "best_speedup": 0.9837608384947493,
+        "is_regression": true
+      },
+      "provenance": {
+        "git_commit": "f94e49aa2051e84cb64f06f38288264b60123ab4",
+        "hardware_key": "2x_b200",
+        "iterations": 20,
+        "profile_name": "none",
+        "timestamp": "2025-12-29T21:00:56.488972",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "2x_b200",
+  "schema_version": 2
+}

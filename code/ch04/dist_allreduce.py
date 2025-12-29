@@ -44,9 +44,15 @@ def main():
         print("Falling back to Gloo backend.", flush=True)
         args.backend = "gloo"
 
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
     # Initialize the default ProcessGroup over env:// (uses MASTER_ADDR, MASTER_PORT, etc.)
     try:
-        dist.init_process_group(backend=args.backend, init_method="env://")
+        init_kwargs = {"backend": args.backend, "init_method": "env://"}
+        if args.backend == "nccl":
+            torch.cuda.set_device(local_rank)
+            init_kwargs["device_id"] = local_rank
+        dist.init_process_group(**init_kwargs)
     except Exception as e:
         print(f"Failed to initialize process group: {e}", flush=True)
         print("Running single-process benchmark instead.", flush=True)
