@@ -1,4 +1,4 @@
-"""Baseline FSDP2 example using native torchrun."""
+"""Baseline FSDP example using native torchrun."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from labs.train_distributed.utils import (
     create_collate_fn,
     get_model_flops_per_token,
     gpu_memory_usage,
+    load_tinystories_packed,
     load_tinystories,
     setup_tokenizer,
 )
@@ -32,7 +33,7 @@ MODEL_ID = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Baseline FSDP2 BF16 training")
+    parser = argparse.ArgumentParser(description="Baseline FSDP BF16 training")
     parser.add_argument("--steps", type=int, default=100, help="Number of optimizer steps to run")
     parser.add_argument("--sequence-length", type=int, default=4096)
     parser.add_argument("--micro-batch-size", type=int, default=1, help="Per-rank microbatch size")
@@ -53,8 +54,12 @@ def _init_distributed() -> tuple[int, int, int]:
 
 
 def _build_dataloader(seq_len: int, micro_batch: int, rank: int, world_size: int):
-    tokenizer = setup_tokenizer(MODEL_ID)
-    dataset = load_tinystories(tokenizer, seq_len, is_main_process=rank == 0)
+    packed_path = os.getenv("AISP_TINYSTORIES_PACKED_PATH")
+    if packed_path:
+        dataset = load_tinystories_packed(packed_path, seq_len, is_main_process=rank == 0)
+    else:
+        tokenizer = setup_tokenizer(MODEL_ID)
+        dataset = load_tinystories(tokenizer, seq_len, is_main_process=rank == 0)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
     dataloader = DataLoader(
         dataset,
@@ -100,7 +105,13 @@ def main():
 
     dataloader, sampler = _build_dataloader(args.sequence_length, args.micro_batch_size, rank, world_size)
 
-    config = AutoConfig.from_pretrained(MODEL_ID, use_cache=False, attn_implementation="eager")
+    config_path = os.getenv("AISP_TINYSTORIES_CONFIG_PATH")
+    if config_path:
+        config = AutoConfig.from_pretrained(config_path)
+        config.use_cache = False
+        config.attn_implementation = "eager"
+    else:
+        config = AutoConfig.from_pretrained(MODEL_ID, use_cache=False, attn_implementation="eager")
     model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16, attn_implementation="eager")
     fsdp_model = _wrap_fsdp(model)
     optimizer = torch.optim.AdamW(fsdp_model.parameters(), lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=0.1)
@@ -164,12 +175,36 @@ if __name__ == "__main__":
 
 def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
+    local_data_path = Path(__file__).parent / "data" / "tinystories_sample.jsonl"
+    # Scale up by switching to a larger config (ex: tinyllama_micro_config.json)
+    # and matching it with a packed dataset at the desired sequence length.
+    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq16.jsonl"
+    config_path = Path(__file__).parent / "data" / "tinyllama_min_config.json"
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "train_fsdp.py",
-        base_args=["--mode", "baseline"],
+        base_args=[
+            "--mode",
+            "baseline",
+            "--variant",
+            "single",
+            "--sequence-length",
+            "16",
+            "--micro-batch-size",
+            "1",
+            "--grad-accum",
+            "1",
+        ],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:fsdp",
         default_nproc_per_node=1,
         multi_gpu_required=False,
+        default_iterations=10,
+        env={
+            "AISP_TINYSTORIES_LOCAL_PATH": str(local_data_path),
+            "AISP_TINYSTORIES_PACKED_PATH": str(packed_data_path),
+            "AISP_TINYSTORIES_CONFIG_PATH": str(config_path),
+            "AISP_TINYSTORIES_LAYERS": "1",
+            "TOKENIZERS_PARALLELISM": "false",
+        },
         name="baseline_fsdp",
     )

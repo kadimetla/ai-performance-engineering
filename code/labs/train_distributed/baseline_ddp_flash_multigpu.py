@@ -1,4 +1,4 @@
-"""Baseline DDP training loop using flash attention (requires compatible kernels)."""
+"""Baseline DDP training loop using eager attention (flash disabled)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=50, help="Number of optimization steps.")
     parser.add_argument("--batch-size", type=int, default=8, help="Per-rank batch size.")
+    parser.add_argument("--max-length", type=int, default=1024, help="Pad sequences to a fixed length.")
     parser.add_argument("--learning-rate", type=float, default=2e-4, help="AdamW learning rate.")
     return parser.parse_args()
 
@@ -25,7 +26,7 @@ def main():
 
     from labs.train_distributed.training_utils.utils import (
         build_dataloader,
-        build_text_model_flash,
+        build_text_model,
         build_tokenizer,
         get_dataset,
     )
@@ -55,9 +56,10 @@ def main():
         distributed=dist.is_initialized() and dist.get_world_size() > 1,
         num_workers=2,
         prefetch_factor=2,
+        max_length=args.max_length,
     )
 
-    model = build_text_model_flash()
+    model = build_text_model()
     model.to(device)
     model.train()
 
@@ -116,7 +118,7 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "ddp.py",
-        base_args=["--mode", "baseline_flash", "--batch-size", "16"],
+        base_args=["--mode", "baseline_flash", "--batch-size", "16", "--max-length", "1024"],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,
         target_label="labs/train_distributed:ddp_flash_multigpu",

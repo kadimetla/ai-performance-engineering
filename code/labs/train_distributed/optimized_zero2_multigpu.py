@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import inspect
+import sys
+import traceback
 from time import perf_counter
 from pathlib import Path
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from torch.distributed.algorithms.ddp_comm_hooks import default_hooks as comm_hooks
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -24,6 +26,12 @@ def parse_args():
     parser.add_argument("--hidden-size", type=int, default=10_000)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--grad-accum", type=int, default=2)
+    parser.add_argument(
+        "--extra-grad-mb",
+        type=int,
+        default=0,
+        help="Extra gradient payload size (MB) to amplify communication.",
+    )
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--compile", action="store_true", help="Use torch.compile on the DDP module.")
     return parser.parse_args()
@@ -38,21 +46,18 @@ def _build_model(hidden_size: int, device):
 
 
 def _optimizer_cfg(params, lr):
+    kwargs = dict(
+        optimizer_class=torch.optim.AdamW,
+        lr=lr,
+        betas=(0.9, 0.95),
+        weight_decay=0.05,
+    )
     try:
-        return dict(
-            optimizer_class=torch.optim.AdamW,
-            lr=lr,
-            betas=(0.9, 0.95),
-            weight_decay=0.05,
-            fused=True,
-        )
-    except TypeError:
-        return dict(
-            optimizer_class=torch.optim.AdamW,
-            lr=lr,
-            betas=(0.9, 0.95),
-            weight_decay=0.05,
-        )
+        if "fused" in inspect.signature(torch.optim.AdamW).parameters:
+            kwargs["fused"] = True
+    except (TypeError, ValueError):
+        pass
+    return kwargs
 
 
 def _completed_future(tensor: torch.Tensor) -> torch.futures.Future[torch.Tensor]:
@@ -105,92 +110,98 @@ _reduce_scatter_allgather_hook.__annotations__["return"] = torch.futures.Future[
 
 def main():
     args = parse_args()
-    local_rank = get("lrank")
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl", device_id=local_rank)
-    if get("ws") < 2:
-        print("Warning: Optimized ZeRO-2 running with world_size < 2; no sharding benefit will be observed.")
-    rank = get("rank")
-    device = torch.device(f"cuda:{local_rank}")
+    try:
+        local_rank = get("lrank")
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group("nccl", device_id=local_rank)
+        if get("ws") < 2:
+            print("Warning: Optimized ZeRO-2 running with world_size < 2; no sharding benefit will be observed.")
+        rank = get("rank")
+        device = torch.device(f"cuda:{local_rank}")
 
-
-    model = _build_model(args.hidden_size, device)
-    ddp_model = DDP(
-        model,
-        device_ids=[device],
-        static_graph=True,
-        gradient_as_bucket_view=True,
-        bucket_cap_mb=25,
-    )
-    hook = getattr(comm_hooks, "batched_reduce_scatter_hook", None)
-    if hook is None:
-        hook = getattr(comm_hooks, "reduce_scatter_hook", None)
-    if hook is None:
-        hook = _reduce_scatter_allgather_hook
+        model = _build_model(args.hidden_size, device).to(torch.bfloat16)
+        extra_param = None
+        if args.extra_grad_mb > 0:
+            elem_bytes = torch.tensor([], dtype=torch.bfloat16).element_size()
+            numel = (args.extra_grad_mb * 1024 * 1024) // elem_bytes
+            extra_param = torch.nn.Parameter(torch.zeros(numel, device=device, dtype=torch.bfloat16))
+            model.register_parameter("extra_grad_payload", extra_param)
+        ddp_model = DDP(
+            model,
+            device_ids=[device],
+            static_graph=True,
+            gradient_as_bucket_view=True,
+            bucket_cap_mb=25,
+        )
         if rank == 0:
-            print("Warning: reduce-scatter hooks unavailable; using custom reduce-scatter hook for ZeRO-2.")
-    if hook is None:
-        raise RuntimeError("PyTorch build missing reduce-scatter hooks required for ZeRO-2.")
-    ddp_model.register_comm_hook(state=dist.group.WORLD, hook=hook)
+            print("Using custom reduce-scatter hook for ZeRO-2.")
+        ddp_model.register_comm_hook(state=dist.group.WORLD, hook=_reduce_scatter_allgather_hook)
 
-    if args.compile:
-        ddp_model = torch.compile(ddp_model, mode="reduce-overhead")
+        if args.compile:
+            ddp_model = torch.compile(ddp_model, mode="reduce-overhead")
 
-    optimizer = ZeroRedundancyOptimizer(
-        ddp_model.parameters(),
-        overlap_with_ddp=True,
-        parameters_as_bucket_view=True,
-        **_optimizer_cfg(ddp_model.parameters(), args.learning_rate),
-    )
+        optimizer = ZeroRedundancyOptimizer(
+            ddp_model.parameters(),
+            overlap_with_ddp=False,
+            parameters_as_bucket_view=False,
+            **_optimizer_cfg(ddp_model.parameters(), args.learning_rate),
+        )
 
-    grad_clip = 1.0
+        grad_clip = 1.0
 
-    # Warmup
-    warm_x = torch.randn(args.batch_size, args.hidden_size, device=device)
-    warm_y = torch.randn_like(warm_x)
-    optimizer.zero_grad(set_to_none=True)
-    with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-        warm_loss = nn.functional.mse_loss(ddp_model(warm_x), warm_y)
-    warm_loss.backward()
-    optimizer.step()
-
-    if rank == 0:
-        print_memory_stats("optimized-zero2 warmup", ddp_model, optimizer, rank, device)
-    dist.barrier()
-    torch.cuda.synchronize(device)
-
-    total_tokens = 0
-    start = perf_counter()
-
-    for step in range(args.steps):
+        # Warmup
+        warm_x = torch.randn(args.batch_size, args.hidden_size, device=device)
+        warm_y = torch.randn_like(warm_x)
         optimizer.zero_grad(set_to_none=True)
-        for micro in range(args.grad_accum):
-            x = torch.randn(args.batch_size, args.hidden_size, device=device)
-            y = torch.randn_like(x)
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                loss = nn.functional.mse_loss(ddp_model(x), y) / args.grad_accum
-            loss.backward()
-            total_tokens += x.numel()
-
-        torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), grad_clip)
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            warm_loss = nn.functional.mse_loss(ddp_model(warm_x), warm_y)
+        if extra_param is not None:
+            warm_loss = warm_loss + extra_param.sum() * 0.0
+        warm_loss.backward()
         optimizer.step()
 
-        if rank == 0 and step % 10 == 0:
-            elapsed = perf_counter() - start
-            toks_per_sec = total_tokens / elapsed if elapsed > 0 else 0.0
-            print(
-                f"[optimized-zero2] step {step}/{args.steps} "
-                f"loss={loss.item():.4f} "
-                f"tokens/s per rank={toks_per_sec:,.0f}"
-            )
+        if rank == 0:
+            print_memory_stats("optimized-zero2 warmup", ddp_model, optimizer, rank, device)
+        dist.barrier()
+        torch.cuda.synchronize(device)
 
-    torch.cuda.synchronize(device)
-    total_time = perf_counter() - start
-    if rank == 0:
-        toks_per_sec = total_tokens / total_time
-        print(f"[optimized-zero2] finished {args.steps} steps | {toks_per_sec:,.0f} toks/s per rank")
+        total_tokens = 0
+        start = perf_counter()
 
-    dist.destroy_process_group()
+        for step in range(args.steps):
+            optimizer.zero_grad(set_to_none=True)
+            for micro in range(args.grad_accum):
+                x = torch.randn(args.batch_size, args.hidden_size, device=device)
+                y = torch.randn_like(x)
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    loss = nn.functional.mse_loss(ddp_model(x), y) / args.grad_accum
+                if extra_param is not None:
+                    loss = loss + extra_param.sum() * 0.0
+                loss.backward()
+                total_tokens += x.numel()
+
+            torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), grad_clip)
+            optimizer.step()
+
+            if rank == 0 and step % 10 == 0:
+                elapsed = perf_counter() - start
+                toks_per_sec = total_tokens / elapsed if elapsed > 0 else 0.0
+                print(
+                    f"[optimized-zero2] step {step}/{args.steps} "
+                    f"loss={loss.item():.4f} "
+                    f"tokens/s per rank={toks_per_sec:,.0f}"
+                )
+
+        torch.cuda.synchronize(device)
+        total_time = perf_counter() - start
+        if rank == 0:
+            toks_per_sec = total_tokens / total_time
+            print(f"[optimized-zero2] finished {args.steps} steps | {toks_per_sec:,.0f} toks/s per rank")
+
+        dist.destroy_process_group()
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        raise
 
 
 if __name__ == "__main__":
@@ -210,6 +221,8 @@ def get_benchmark():
             "10000",
             "--grad-accum",
             "1",
+            "--extra-grad-mb",
+            "2048",
         ],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,

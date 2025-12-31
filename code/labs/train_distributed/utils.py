@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 import time
+from pathlib import Path
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -38,13 +40,12 @@ def _main_process_first(is_main_process: bool):
         yield
         return
 
-    if not is_main_process:
-        dist.barrier()
-
-    try:
+    if is_main_process:
         yield
-    finally:
         dist.barrier()
+    else:
+        dist.barrier()
+        yield
 
 
 def load_tinystories(
@@ -56,12 +57,41 @@ def load_tinystories(
 ) -> Dataset:
     """Tokenize and pack TinyStories into contiguous blocks for LM training."""
     try:
-        from datasets import load_dataset
+        from datasets import load_dataset, load_from_disk
     except ImportError as exc:
         raise RuntimeError("load_tinystories() requires the `datasets` package") from exc
+    def _parse_streaming_limit(dataset_split: str) -> int:
+        match = re.search(r":(\\d+)\\]$", dataset_split)
+        if match:
+            return int(match.group(1))
+        return int(os.getenv("AISP_TINYSTORIES_STREAMING_MAX", "512"))
+
     with _main_process_first(is_main_process):
-        dataset_split = split or os.getenv("AISP_TINYSTORIES_SPLIT", "train[:5%]")
-        raw_dataset = load_dataset("roneneldan/TinyStories", split=dataset_split)
+        local_path = os.getenv("AISP_TINYSTORIES_LOCAL_PATH")
+        if local_path:
+            path = Path(local_path)
+            if not path.exists():
+                raise FileNotFoundError(f"TinyStories local path not found: {path}")
+            if path.is_dir():
+                raw_dataset = load_from_disk(str(path))
+            else:
+                raw_dataset = load_dataset("json", data_files=str(path), split="train")
+        else:
+            dataset_split = split or os.getenv("AISP_TINYSTORIES_SPLIT", "train[:5%]")
+            streaming = os.getenv("AISP_TINYSTORIES_STREAMING") == "1"
+            if streaming:
+                limit = _parse_streaming_limit(dataset_split)
+                raw_iter = load_dataset("roneneldan/TinyStories", split="train", streaming=True)
+                samples = []
+                for idx, example in enumerate(raw_iter):
+                    if idx >= limit:
+                        break
+                    samples.append(example)
+                from datasets import Dataset
+
+                raw_dataset = Dataset.from_list(samples)
+            else:
+                raw_dataset = load_dataset("roneneldan/TinyStories", split=dataset_split)
 
     def tokenize_function(examples):
         tokens = tokenizer(
@@ -106,6 +136,36 @@ def load_tinystories(
     return packed_dataset.shuffle(seed=2025)
 
 
+def load_tinystories_packed(path: str | Path, seq_len: int, *, is_main_process: bool) -> Dataset:
+    """Load a pre-packed TinyStories dataset (input_ids/labels already aligned)."""
+    try:
+        from datasets import load_dataset, load_from_disk
+    except ImportError as exc:
+        raise RuntimeError("load_tinystories_packed() requires the `datasets` package") from exc
+
+    packed_path = Path(path)
+    if not packed_path.exists():
+        raise FileNotFoundError(f"Packed TinyStories path not found: {packed_path}")
+
+    with _main_process_first(is_main_process):
+        if packed_path.is_dir():
+            dataset = load_from_disk(str(packed_path))
+        else:
+            dataset = load_dataset("json", data_files=str(packed_path), split="train")
+
+    columns = set(dataset.column_names)
+    if not {"input_ids", "labels"}.issubset(columns):
+        raise ValueError("Packed TinyStories dataset must include input_ids and labels columns.")
+    if len(dataset) == 0:
+        raise ValueError("Packed TinyStories dataset is empty.")
+
+    sample = dataset[0]
+    if len(sample["input_ids"]) != seq_len or len(sample["labels"]) != seq_len:
+        raise ValueError(f"Packed TinyStories sequences must match seq_len={seq_len}.")
+
+    return dataset.shuffle(seed=2025)
+
+
 def create_collate_fn():
     def collate_fn(batch):
         input_ids = torch.tensor([item["input_ids"] for item in batch], dtype=torch.long)
@@ -144,7 +204,7 @@ class ThroughputTracker:
             self.start_time = time.perf_counter()
             self.tokens = 0
             self.in_warmup = False
-            return {"warmup_done": True}
+            return {}
 
         if self.in_warmup or self.start_time is None:
             return {}

@@ -20,6 +20,12 @@ def parse_args():
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--hidden-size", type=int, default=10_000)
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument(
+        "--extra-grad-mb",
+        type=int,
+        default=0,
+        help="Extra gradient payload size (MB) to amplify communication.",
+    )
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     return parser.parse_args()
 
@@ -42,6 +48,12 @@ def main():
     device = torch.device(f"cuda:{local_rank}")
 
     model = _build_model(args.hidden_size, device)
+    extra_param = None
+    if args.extra_grad_mb > 0:
+        elem_bytes = torch.tensor([], dtype=torch.bfloat16).element_size()
+        numel = (args.extra_grad_mb * 1024 * 1024) // elem_bytes
+        extra_param = torch.nn.Parameter(torch.zeros(numel, device=device, dtype=torch.bfloat16))
+        model.register_parameter("extra_grad_payload", extra_param)
     ddp_model = DDP(
         model,
         device_ids=[device],
@@ -61,6 +73,8 @@ def main():
     optimizer.zero_grad(set_to_none=True)
     with torch.cuda.amp.autocast(dtype=torch.bfloat16):
         warm_loss = nn.functional.mse_loss(ddp_model(warm_x), warm_y)
+    if extra_param is not None:
+        warm_loss = warm_loss + extra_param.sum() * 0.0
     warm_loss.backward()
     optimizer.step()
     dist.barrier()
@@ -75,6 +89,8 @@ def main():
         y = torch.randn_like(x)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             loss = nn.functional.mse_loss(ddp_model(x), y)
+        if extra_param is not None:
+            loss = loss + extra_param.sum() * 0.0
         loss.backward()
         optimizer.step()
         total_tokens += x.numel()
@@ -102,7 +118,16 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "zero2.py",
-        base_args=["--mode", "baseline", "--batch-size", "16", "--hidden-size", "10000"],
+        base_args=[
+            "--mode",
+            "baseline",
+            "--batch-size",
+            "16",
+            "--hidden-size",
+            "10000",
+            "--extra-grad-mb",
+            "2048",
+        ],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,
         target_label="labs/train_distributed:zero2_multigpu",

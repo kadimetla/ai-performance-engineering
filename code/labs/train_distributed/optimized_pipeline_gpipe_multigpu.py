@@ -100,7 +100,7 @@ def get_benchmark():
             "--batch-size",
             "512",
             "--micro-batch-size",
-            "64",
+            "128",
             "--hidden-dim",
             "2048",
             "--depth",

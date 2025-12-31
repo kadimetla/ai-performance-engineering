@@ -1,4 +1,4 @@
-"""Optimized DDP training loop using flash attention (requires compatible kernels)."""
+"""Optimized DDP training loop using flash attention and fused optimizer."""
 
 from __future__ import annotations
 
@@ -9,10 +9,8 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import bf16_compress_hook
 
 from labs.train_distributed.training_utils.utils import (
     build_dataloader,
@@ -28,6 +26,7 @@ def parse_args():
     parser.add_argument("--steps", type=int, default=200, help="Number of optimization steps.")
     parser.add_argument("--batch-size", type=int, default=16, help="Per-rank microbatch size.")
     parser.add_argument("--grad-accum", type=int, default=1, help="Gradient accumulation steps.")
+    parser.add_argument("--max-length", type=int, default=1024, help="Pad sequences to a fixed length.")
     parser.add_argument("--learning-rate", type=float, default=2e-4, help="AdamW learning rate.")
     parser.add_argument("--compile", action="store_true", help="Enable torch.compile on the model.")
     return parser.parse_args()
@@ -79,9 +78,10 @@ def main():
         shuffle=True,
         drop_last=True,
         distributed=True,
-        num_workers=4,
-        prefetch_factor=4,
+        num_workers=2,
+        prefetch_factor=2,
         pin_memory=True,
+        max_length=args.max_length,
     )
 
     model = build_text_model_flash()
@@ -95,15 +95,11 @@ def main():
         bucket_cap_mb=50,
         gradient_as_bucket_view=True,
     )
-    ddp_model.register_comm_hook(state=torch.distributed.group.WORLD, hook=bf16_compress_hook)
 
     if args.compile:
         ddp_model = torch.compile(ddp_model, mode="reduce-overhead")
 
     optimizer = _maybe_fused_adamw(ddp_model.parameters(), args.learning_rate)
-    grad_clip = 1.0
-    scaler = torch.cuda.amp.GradScaler(enabled=False)  # bf16 path does not need scaling
-
     num_steps = min(args.steps, len(dataloader))
     total_tokens = 0
     start_time = perf_counter()
@@ -123,13 +119,10 @@ def main():
             batch["labels"] = batch["input_ids"].clone()
             outputs = ddp_model(**batch)
             loss = outputs.loss / args.grad_accum
-
-        scaler.scale(loss).backward()
+        loss.backward()
 
         if micro_step == args.grad_accum - 1:
-            torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
         total_tokens += batch["input_ids"].numel()
@@ -163,7 +156,16 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "ddp.py",
-        base_args=["--mode", "optimized_flash", "--batch-size", "16", "--grad-accum", "1"],
+        base_args=[
+            "--mode",
+            "optimized_flash",
+            "--batch-size",
+            "16",
+            "--grad-accum",
+            "1",
+            "--max-length",
+            "1024",
+        ],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,
         target_label="labs/train_distributed:ddp_flash_multigpu",

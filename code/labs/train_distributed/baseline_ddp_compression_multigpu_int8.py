@@ -1,4 +1,4 @@
-"""Baseline DDP training with uncompressed all-reduce (compression off, multi-GPU)."""
+"""Baseline DDP training with INT8 gradient compression (multi-GPU)."""
 
 from __future__ import annotations
 
@@ -12,17 +12,17 @@ def get_benchmark():
         script_path=Path(__file__).parent / "ddp_compression.py",
         base_args=[
             "--compression",
-            "none",
+            "int8",
             "--extra-grad-mb",
-            "8192",
+            "16384",
             "--batch-size",
-            "4",
-            "--bucket-cap-mb",
             "1",
-            "--disable-bucket-view",
+            "--bucket-cap-mb",
+            "512",
         ],
         config_arg_map={"iterations": "--steps"},
-        target_label="labs/train_distributed:ddp_compression_multigpu",
+        target_label="labs/train_distributed:ddp_compression_multigpu_int8",
         multi_gpu_required=True,
-        name="baseline_ddp_compression_multigpu",
+        default_iterations=20,
+        name="baseline_ddp_compression_multigpu_int8",
     )

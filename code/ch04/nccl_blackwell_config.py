@@ -23,10 +23,23 @@ Usage:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Dict
 
 import torch
 import torch.distributed as dist
+
+
+def _ib_devices_present() -> bool:
+    if os.environ.get("NCCL_IB_HCA"):
+        return True
+    ib_path = Path("/sys/class/infiniband")
+    if not ib_path.exists():
+        return False
+    try:
+        return any(ib_path.iterdir())
+    except OSError:
+        return False
 
 
 def configure_nccl_for_blackwell(
@@ -75,10 +88,20 @@ def configure_nccl_for_blackwell(
     env_vars["NCCL_P2P_LEVEL"] = "NVL"
 
     # 7. IB (InfiniBand) optimizations for multi-node
-    os.environ.setdefault("NCCL_IB_DISABLE", "0")  # Enable IB if available
-    os.environ.setdefault("NCCL_IB_HCA", "mlx5")  # Mellanox adapters
-    env_vars["NCCL_IB_DISABLE"] = "0"
-    env_vars["NCCL_IB_HCA"] = "mlx5"
+    ib_disable_override = os.environ.get("NCCL_IB_DISABLE")
+    if ib_disable_override is not None:
+        env_vars["NCCL_IB_DISABLE"] = ib_disable_override
+        if ib_disable_override == "0":
+            os.environ.setdefault("NCCL_IB_HCA", "mlx5")
+            env_vars["NCCL_IB_HCA"] = os.environ["NCCL_IB_HCA"]
+    elif _ib_devices_present():
+        os.environ.setdefault("NCCL_IB_DISABLE", "0")  # Enable IB when detected.
+        os.environ.setdefault("NCCL_IB_HCA", "mlx5")  # Mellanox adapters
+        env_vars["NCCL_IB_DISABLE"] = "0"
+        env_vars["NCCL_IB_HCA"] = os.environ["NCCL_IB_HCA"]
+    else:
+        os.environ.setdefault("NCCL_IB_DISABLE", "1")
+        env_vars["NCCL_IB_DISABLE"] = "1"
 
     # 8. Socket NUMA affinity
     os.environ.setdefault("NCCL_SOCKET_NTHREADS", "4")

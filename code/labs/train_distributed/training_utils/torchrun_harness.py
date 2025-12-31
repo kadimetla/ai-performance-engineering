@@ -32,6 +32,7 @@ class TorchrunScriptBenchmark(VerificationPayloadMixin, BaseBenchmark):
         multi_gpu_required: bool = True,
         default_nproc_per_node: Optional[int] = None,
         default_iterations: Optional[int] = None,
+        measurement_timeout_seconds: Optional[int] = None,
         env: Optional[Dict[str, str]] = None,
         name: Optional[str] = None,
     ):
@@ -42,6 +43,7 @@ class TorchrunScriptBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._multi_gpu_required = multi_gpu_required
         self._default_nproc_per_node = default_nproc_per_node
         self._default_iterations = default_iterations
+        self._measurement_timeout_seconds = measurement_timeout_seconds
         self._env = dict(env) if env else {}
         self._target_label = target_label
         self.name = name or self._script_path.stem
@@ -157,6 +159,8 @@ class TorchrunScriptBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
         if self._default_iterations is not None:
             cfg.iterations = int(self._default_iterations)
+        if self._measurement_timeout_seconds is not None:
+            cfg.measurement_timeout_seconds = int(self._measurement_timeout_seconds)
         cfg.target_label = self._target_label
         return cfg
 

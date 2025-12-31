@@ -66,8 +66,9 @@ def main():
         ddp_model = DDP(
             model,
             device_ids=[local_rank] if device.type == "cuda" else None,
-            gradient_as_bucket_view=True,
+            gradient_as_bucket_view=False,
             find_unused_parameters=False,
+            bucket_cap_mb=1,
         )
 
     optimizer = torch.optim.AdamW(ddp_model.parameters(), lr=args.learning_rate)

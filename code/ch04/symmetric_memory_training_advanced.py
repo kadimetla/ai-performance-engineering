@@ -100,6 +100,7 @@ from core.optimization.symmetric_memory_patch import (
     maybe_create_symmetric_memory_handle,
     symmetric_memory_available as _symmetric_memory_available,
 )
+from core.benchmark.gpu_requirements import require_min_gpus
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
@@ -119,6 +120,8 @@ def symmetric_memory_available() -> bool:
 
 def init_distributed() -> Tuple[int, int, int]:
     """Initialize distributed process group."""
+    if torch.cuda.device_count() < 2:
+        require_min_gpus(2, script_name="symmetric_memory_training_advanced.py")
     setup_single_gpu_env()  # Auto-setup for single-GPU mode
     
     if not dist.is_initialized():

@@ -14,8 +14,8 @@ from core.harness.benchmark_harness import BenchmarkConfig
 
 _DEFAULT_KWARGS = dict(
     mode="p",
-    bytes_per_message=512,
-    ctas=64,
+    bytes_per_message=4096,
+    ctas=128,
     threads=256,
     iters=1000,
 )

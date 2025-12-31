@@ -109,8 +109,6 @@ def main():
         ddp_model = torch.compile(ddp_model, mode="max-autotune", fullgraph=True, dynamic=False)
 
     optimizer = _maybe_fused_adamw(ddp_model.parameters(), args.learning_rate)
-    grad_clip = 1.0
-    scaler = torch.cuda.amp.GradScaler(enabled=False)  # bf16 path does not need scaling
 
     num_steps = min(args.steps, len(dataloader))
     total_tokens = 0
@@ -133,12 +131,10 @@ def main():
             outputs = ddp_model(**batch)
             loss = outputs.loss / args.grad_accum
 
-        scaler.scale(loss).backward()
+        loss.backward()
 
         if micro_step == args.grad_accum - 1:
-            torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
         total_tokens += batch["input_ids"].numel()

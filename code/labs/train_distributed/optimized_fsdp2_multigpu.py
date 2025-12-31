@@ -1,22 +1,16 @@
-"""Optimized FSDP example with FlashAttention and optional FP8."""
+"""Optimized FSDP2 example with FlashAttention and optional FP8 (multi-GPU)."""
 
 from __future__ import annotations
 
 import argparse
 import os
-from functools import partial
-from pathlib import Path
 from contextlib import nullcontext
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import (
-    BackwardPrefetch,
-    FullyShardedDataParallel as FSDP,
-    MixedPrecision,
-    ShardingStrategy,
-)
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
+from torch.distributed.device_mesh import init_device_mesh
 from torch.utils.data import DataLoader, DistributedSampler
 
 try:
@@ -24,6 +18,7 @@ try:
 except Exception:  # pragma: no cover - defensive import
     prefer_sdpa_backends = None  # type: ignore
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 from labs.train_distributed.utils import (
     ThroughputTracker,
@@ -46,10 +41,11 @@ else:
 
 
 MODEL_ID = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+LOCAL_DATA_PATH = Path(__file__).parent / "data" / "tinystories_sample.jsonl"
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Optimized FSDP FP8 training")
+    parser = argparse.ArgumentParser(description="Optimized FSDP2 FP8 training")
     parser.add_argument("--steps", type=int, default=100, help="Optimizer steps to run")
     parser.add_argument("--sequence-length", type=int, default=4096)
     parser.add_argument("--micro-batch-size", type=int, default=2)
@@ -68,8 +64,45 @@ def _init_distributed() -> tuple[int, int, int]:
     return rank, world_size, local_rank
 
 
+def _build_dataloader(
+    seq_len: int,
+    micro_batch: int,
+    rank: int,
+    world_size: int,
+    *,
+    steps: int,
+    grad_accum: int,
+):
+    fast_mode = os.getenv("AISP_FSDP_FAST") == "1"
+    if fast_mode:
+        vocab_size = int(os.getenv("AISP_TINYSTORIES_VOCAB", "32000"))
+        num_samples = max(steps * grad_accum * micro_batch * world_size, 256)
+        input_ids = torch.randint(0, vocab_size, (num_samples, seq_len), dtype=torch.long)
+        labels = input_ids.clone()
 
-def _build_dataloader(seq_len: int, micro_batch: int, rank: int, world_size: int):
+        class SyntheticTokenDataset(torch.utils.data.Dataset):
+            def __init__(self, input_ids: torch.Tensor, labels: torch.Tensor):
+                self._input_ids = input_ids
+                self._labels = labels
+
+            def __len__(self) -> int:
+                return self._input_ids.size(0)
+
+            def __getitem__(self, idx: int):
+                return {"input_ids": self._input_ids[idx], "labels": self._labels[idx]}
+
+        dataset = SyntheticTokenDataset(input_ids, labels)
+        sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=micro_batch,
+            sampler=sampler,
+            num_workers=0,
+            pin_memory=True,
+            drop_last=False,
+        )
+        return dataloader, sampler
+
     packed_path = os.getenv("AISP_TINYSTORIES_PACKED_PATH")
     if packed_path:
         dataset = load_tinystories_packed(packed_path, seq_len, is_main_process=rank == 0)
@@ -81,38 +114,36 @@ def _build_dataloader(seq_len: int, micro_batch: int, rank: int, world_size: int
         dataset,
         batch_size=micro_batch,
         sampler=sampler,
-        num_workers=4,
+        num_workers=0,
         pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=4,
-        drop_last=True,
+        drop_last=False,
         collate_fn=create_collate_fn(),
     )
     return dataloader, sampler
 
 
-def _wrap_fsdp(model: torch.nn.Module) -> FSDP:
+def _apply_fsdp2(model: torch.nn.Module, mesh) -> torch.nn.Module:
     try:
         from transformers.models.llama.modeling_llama import LlamaDecoderLayer
     except ImportError as exc:
-        raise RuntimeError("_wrap_fsdp() requires the `transformers` package") from exc
-    auto_wrap = partial(transformer_auto_wrap_policy, transformer_layer_cls={LlamaDecoderLayer})
-    mp_policy = MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
-    return FSDP(
-        model,
-        auto_wrap_policy=auto_wrap,
-        sharding_strategy=ShardingStrategy.FULL_SHARD,
-        mixed_precision=mp_policy,
-        use_orig_params=True,
-        forward_prefetch=True,
-        backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
-        limit_all_gathers=True,
-        device_id=torch.cuda.current_device(),
-        sync_module_states=False,
+        raise RuntimeError("_apply_fsdp2() requires the `transformers` package") from exc
+    mp_policy = MixedPrecisionPolicy(
+        param_dtype=torch.bfloat16,
+        reduce_dtype=torch.bfloat16,
+        output_dtype=torch.bfloat16,
     )
+    for module in model.modules():
+        if module is model:
+            continue
+        if isinstance(module, LlamaDecoderLayer):
+            fully_shard(module, mesh=mesh, mp_policy=mp_policy, reshard_after_forward=False)
+    fully_shard(model, mesh=mesh, mp_policy=mp_policy, reshard_after_forward=False)
+    return model
 
 
 def _fused_adamw(params, lr, *, allow_fused: bool) -> torch.optim.Optimizer:
+    if os.getenv("AISP_FSDP_FAST") == "1":
+        return torch.optim.AdamW(params, lr=lr, betas=(0.9, 0.95), weight_decay=0.1, fused=False)
     if not allow_fused:
         return torch.optim.AdamW(params, lr=lr, betas=(0.9, 0.95), weight_decay=0.1, fused=False)
     try:
@@ -135,10 +166,11 @@ def _assert_torchao_available():
 
 
 def main():
+    require_min_gpus(2, script_name="optimized_fsdp2_multigpu.py")
     try:
         from transformers import AutoConfig, AutoModelForCausalLM
     except ImportError as exc:
-        raise RuntimeError("optimized_fsdp requires the `transformers` package") from exc
+        raise RuntimeError("optimized_fsdp2_multigpu requires the `transformers` package") from exc
 
     args = parse_args()
     fp8_enabled = os.getenv("AISP_FSDP_DISABLE_FP8") != "1"
@@ -147,37 +179,81 @@ def main():
 
     rank, world_size, local_rank = _init_distributed()
 
-    dataloader, sampler = _build_dataloader(args.sequence_length, args.micro_batch_size, rank, world_size)
+    dataloader, sampler = _build_dataloader(
+        args.sequence_length,
+        args.micro_batch_size,
+        rank,
+        world_size,
+        steps=args.steps,
+        grad_accum=args.grad_accum,
+    )
+    if rank == 0:
+        print("[optimized_fsdp2_multigpu] dataloader ready", flush=True)
 
-    config_path = os.getenv("AISP_TINYSTORIES_CONFIG_PATH")
-    if config_path:
-        config = AutoConfig.from_pretrained(config_path)
-        config.use_cache = False
-        config.attn_implementation = "flash_attention_2"
-    else:
-        config = AutoConfig.from_pretrained(
-            MODEL_ID,
+    fast_mode = os.getenv("AISP_FSDP_FAST") == "1"
+    if fast_mode:
+        from transformers import LlamaConfig
+
+        config = LlamaConfig(
+            vocab_size=int(os.getenv("AISP_TINYSTORIES_VOCAB", "32000")),
+            hidden_size=1024,
+            intermediate_size=4096,
+            num_hidden_layers=4,
+            num_attention_heads=16,
+            num_key_value_heads=4,
+            max_position_embeddings=max(args.sequence_length, 2048),
+            rms_norm_eps=1e-5,
             use_cache=False,
-            attn_implementation="flash_attention_2",
         )
+    else:
+        config_path = os.getenv("AISP_TINYSTORIES_CONFIG_PATH")
+        if config_path:
+            config = AutoConfig.from_pretrained(config_path)
+            config.use_cache = False
+            config.attn_implementation = "flash_attention_2"
+        else:
+            config = AutoConfig.from_pretrained(
+                MODEL_ID,
+                use_cache=False,
+                attn_implementation="flash_attention_2",
+            )
+    override_layers = os.getenv("AISP_TINYSTORIES_LAYERS")
+    if override_layers:
+        layers = int(override_layers)
+        if layers < 1 or layers > config.num_hidden_layers:
+            raise ValueError(
+                f"AISP_TINYSTORIES_LAYERS must be between 1 and {config.num_hidden_layers}, got {layers}."
+            )
+        config.num_hidden_layers = layers
+    if getattr(config, "max_position_embeddings", 0) < args.sequence_length:
+        config.max_position_embeddings = args.sequence_length
+
     config.gradient_checkpointing = False
     model = AutoModelForCausalLM.from_config(
         config,
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )
+    if rank == 0:
+        print("[optimized_fsdp2_multigpu] model instantiated", flush=True)
 
     model = model.to(torch.cuda.current_device(), dtype=torch.bfloat16)
     if fp8_enabled:
         fp8_recipe = Float8LinearConfig(enable_fsdp_float8_all_gather=True)
         model = convert_to_float8_training(model, config=fp8_recipe)
     elif rank == 0:
-        print("[optimized_fsdp] FP8 disabled via AISP_FSDP_DISABLE_FP8=1", flush=True)
+        print("[optimized_fsdp2_multigpu] FP8 disabled via AISP_FSDP_DISABLE_FP8=1", flush=True)
 
-    fsdp_model = _wrap_fsdp(model)
-    optimizer = _fused_adamw(fsdp_model.parameters(), args.learning_rate, allow_fused=not fp8_enabled)
+    mesh = init_device_mesh("cuda", (world_size,))
+    model = _apply_fsdp2(model, mesh)
+    if rank == 0:
+        print("[optimized_fsdp2_multigpu] fsdp2 applied", flush=True)
 
-    flop_per_token = get_model_flops_per_token(fsdp_model.module.config, args.sequence_length)
+    optimizer = _fused_adamw(model.parameters(), args.learning_rate, allow_fused=not fp8_enabled)
+    if rank == 0:
+        print("[optimized_fsdp2_multigpu] optimizer ready", flush=True)
+
+    flop_per_token = get_model_flops_per_token(model.config, args.sequence_length)
     tracker = ThroughputTracker(warmup_steps=10)
 
     total_updates = args.steps
@@ -192,7 +268,7 @@ def main():
             batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()}
             sdpa_ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
             with sdpa_ctx, torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                outputs = fsdp_model(**batch)
+                outputs = model(**batch)
                 loss = outputs.loss / args.grad_accum
 
             loss.backward()
@@ -214,7 +290,7 @@ def main():
             ):
                 metrics.update(gpu_memory_usage(local_rank))
                 msg = (
-                    f"[optimized_fsdp] step {optimizer_step}/{total_updates} "
+                    f"[optimized_fsdp2_multigpu] step {optimizer_step}/{total_updates} "
                     f"loss={loss_value:.4f}" + ThroughputTracker.format(metrics, include_memory=True)
                 )
                 print(msg, flush=True)
@@ -226,7 +302,7 @@ def main():
 
     dist.barrier()
     if is_main:
-        print("[optimized_fsdp] training completed", flush=True)
+        print("[optimized_fsdp2_multigpu] training completed", flush=True)
 
     dist.destroy_process_group()
 
@@ -237,37 +313,37 @@ if __name__ == "__main__":
 
 def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
-    local_data_path = Path(__file__).parent / "data" / "tinystories_sample.jsonl"
     # Scale up by switching to a larger config (ex: tinyllama_micro_config.json)
     # and matching it with a packed dataset at the desired sequence length.
-    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq16.jsonl"
-    config_path = Path(__file__).parent / "data" / "tinyllama_min_config.json"
+    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq1024.jsonl"
+    config_path = Path(__file__).parent / "data" / "tinyllama_bench_config.json"
     return TorchrunScriptBenchmark(
-        script_path=Path(__file__).parent / "train_fsdp.py",
+        script_path=Path(__file__).parent / "train_fsdp2.py",
         base_args=[
             "--mode",
             "optimized",
             "--variant",
-            "single",
+            "multigpu",
             "--sequence-length",
-            "16",
+            "1024",
             "--micro-batch-size",
             "1",
             "--grad-accum",
             "1",
         ],
         config_arg_map={"iterations": "--steps"},
-        target_label="labs/train_distributed:fsdp",
-        default_nproc_per_node=1,
-        multi_gpu_required=False,
-        default_iterations=10,
+        multi_gpu_required=True,
+        target_label="labs/train_distributed:fsdp2_multigpu",
+        default_nproc_per_node=None,
+        default_iterations=200,
+        measurement_timeout_seconds=900,
         env={
-            "AISP_TINYSTORIES_LOCAL_PATH": str(local_data_path),
+            "AISP_TINYSTORIES_LOCAL_PATH": str(LOCAL_DATA_PATH),
             "AISP_TINYSTORIES_PACKED_PATH": str(packed_data_path),
             "AISP_TINYSTORIES_CONFIG_PATH": str(config_path),
-            "AISP_TINYSTORIES_LAYERS": "1",
+            "AISP_TINYSTORIES_LAYERS": "2",
             "AISP_FSDP_DISABLE_FP8": "1",
             "TOKENIZERS_PARALLELISM": "false",
         },
-        name="optimized_fsdp",
+        name="optimized_fsdp2_multigpu",
     )

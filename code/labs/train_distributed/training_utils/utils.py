@@ -127,11 +127,12 @@ def get_dataset():
     return dataset
 
 
-def make_collate_fn(tokenizer):
+def make_collate_fn(tokenizer, max_length: int | None = None):
     def collate(batch):
         return tokenizer.pad(
             batch,
-            padding="longest",
+            padding="max_length" if max_length is not None else "longest",
+            max_length=max_length,
             pad_to_multiple_of=8,
             return_tensors="pt",
         )
@@ -149,6 +150,7 @@ def build_dataloader(
     prefetch_factor: int | None = 2,
     pin_memory: bool = True,
     distributed: bool = False,
+    max_length: int | None = None,
 ):
     sampler = DistributedSampler(dataset, shuffle=shuffle) if distributed else None
     return DataLoader(
@@ -161,7 +163,7 @@ def build_dataloader(
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
         persistent_workers=num_workers > 0,
-        collate_fn=make_collate_fn(tokenizer),
+        collate_fn=make_collate_fn(tokenizer, max_length=max_length),
     )
 
 

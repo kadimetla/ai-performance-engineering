@@ -1,4 +1,4 @@
-"""Baseline FSDP2 example using native torchrun."""
+"""Baseline FSDP example using native torchrun."""
 
 from __future__ import annotations
 
@@ -18,12 +18,14 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.utils.data import DataLoader, DistributedSampler
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 from labs.train_distributed.utils import (
     ThroughputTracker,
     create_collate_fn,
     get_model_flops_per_token,
     gpu_memory_usage,
+    load_tinystories_packed,
     load_tinystories,
     setup_tokenizer,
 )
@@ -32,7 +34,7 @@ MODEL_ID = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Baseline FSDP2 BF16 training")
+    parser = argparse.ArgumentParser(description="Baseline FSDP BF16 training")
     parser.add_argument("--steps", type=int, default=100, help="Number of optimizer steps to run")
     parser.add_argument("--sequence-length", type=int, default=4096)
     parser.add_argument("--micro-batch-size", type=int, default=1, help="Per-rank microbatch size")
@@ -91,8 +93,12 @@ def _build_dataloader(
         )
         return dataloader, sampler
 
-    tokenizer = setup_tokenizer(MODEL_ID)
-    dataset = load_tinystories(tokenizer, seq_len, is_main_process=rank == 0)
+    packed_path = os.getenv("AISP_TINYSTORIES_PACKED_PATH")
+    if packed_path:
+        dataset = load_tinystories_packed(packed_path, seq_len, is_main_process=rank == 0)
+    else:
+        tokenizer = setup_tokenizer(MODEL_ID)
+        dataset = load_tinystories(tokenizer, seq_len, is_main_process=rank == 0)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
     dataloader = DataLoader(
         dataset,
@@ -128,6 +134,7 @@ def _wrap_fsdp(model: torch.nn.Module) -> FSDP:
 
 
 def main():
+    require_min_gpus(2, script_name="baseline_fsdp_multigpu.py")
     try:
         from transformers import AutoConfig, AutoModelForCausalLM
     except ImportError as exc:
@@ -163,7 +170,13 @@ def main():
             use_cache=False,
         )
     else:
-        config = AutoConfig.from_pretrained(MODEL_ID, use_cache=False, attn_implementation="eager")
+        config_path = os.getenv("AISP_TINYSTORIES_CONFIG_PATH")
+        if config_path:
+            config = AutoConfig.from_pretrained(config_path)
+            config.use_cache = False
+            config.attn_implementation = "eager"
+        else:
+            config = AutoConfig.from_pretrained(MODEL_ID, use_cache=False, attn_implementation="eager")
     override_layers = os.getenv("AISP_TINYSTORIES_LAYERS")
     if override_layers:
         layers = int(override_layers)
@@ -243,13 +256,20 @@ if __name__ == "__main__":
 
 def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
+    local_data_path = Path(__file__).parent / "data" / "tinystories_sample.jsonl"
+    # Scale up by switching to a larger config (ex: tinyllama_micro_config.json)
+    # and matching it with a packed dataset at the desired sequence length.
+    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq1024.jsonl"
+    config_path = Path(__file__).parent / "data" / "tinyllama_bench_config.json"
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "train_fsdp.py",
         base_args=[
             "--mode",
             "baseline",
+            "--variant",
+            "multigpu",
             "--sequence-length",
-            "256",
+            "1024",
             "--micro-batch-size",
             "1",
             "--grad-accum",
@@ -259,10 +279,13 @@ def get_benchmark():
         multi_gpu_required=True,
         target_label="labs/train_distributed:fsdp_multigpu",
         default_nproc_per_node=None,
-        default_iterations=5,
+        default_iterations=200,
+        measurement_timeout_seconds=900,
         env={
-            "AISP_TINYSTORIES_SPLIT": "train[:2000]",
-            "AISP_TINYSTORIES_LAYERS": "4",
+            "AISP_TINYSTORIES_LOCAL_PATH": str(local_data_path),
+            "AISP_TINYSTORIES_PACKED_PATH": str(packed_data_path),
+            "AISP_TINYSTORIES_CONFIG_PATH": str(config_path),
+            "AISP_TINYSTORIES_LAYERS": "2",
             "TOKENIZERS_PARALLELISM": "false",
         },
         name="baseline_fsdp_multigpu",

@@ -54,14 +54,30 @@ def parse_args():
         action="store_true",
         help="Simulate gradient communication on a single GPU.",
     )
+    parser.add_argument(
+        "--naive-allreduce",
+        action="store_true",
+        help="Use per-parameter all-reduce instead of DDP bucketed communication.",
+    )
+    parser.add_argument(
+        "--naive-allreduce-sync",
+        action="store_true",
+        help="Synchronize after each naive all-reduce to surface sync overhead.",
+    )
+    parser.add_argument(
+        "--int8-local-scale",
+        action="store_true",
+        help="Use local max for INT8 scaling (skip global max reduce).",
+    )
     return parser.parse_args()
 
 
 class _Int8AllReduceState:
-    def __init__(self, process_group: dist.ProcessGroup | None):
+    def __init__(self, process_group: dist.ProcessGroup | None, *, use_local_scale: bool):
         self.process_group = process_group
         self.world_size = dist.get_world_size(process_group) if dist.is_initialized() else 1
         self.limit = max(1, 127 // max(1, self.world_size))
+        self.use_local_scale = use_local_scale
 
 
 def _int8_allreduce_hook(
@@ -74,15 +90,16 @@ def _int8_allreduce_hook(
         return fut
 
     local_max = tensor.abs().max()
-    dist.all_reduce(local_max, op=dist.ReduceOp.MAX, group=state.process_group)
+    if not state.use_local_scale:
+        dist.all_reduce(local_max, op=dist.ReduceOp.MAX, group=state.process_group)
     # Scale to keep the int8 sum in-range across all ranks.
-    scale = local_max / float(state.limit)
+    scale = (local_max / float(state.limit)).to(dtype=tensor.dtype)
     scale = torch.where(scale == 0, torch.ones_like(scale), scale)
     quant = torch.clamp((tensor / scale).round(), -state.limit, state.limit).to(torch.int8)
     dist.all_reduce(quant, op=dist.ReduceOp.SUM, group=state.process_group)
-    dequant = quant.float().mul(scale / state.world_size)
-    if dequant.dtype != tensor.dtype:
-        dequant = dequant.to(dtype=tensor.dtype)
+    # Keep dequant in tensor dtype to reduce temporary memory overhead.
+    dequant_scale = (scale / state.world_size).to(dtype=tensor.dtype)
+    dequant = quant.to(dtype=tensor.dtype).mul(dequant_scale)
 
     fut = torch.futures.Future()
     fut.set_result(dequant)
@@ -170,25 +187,34 @@ def main():
             flat[::stride].copy_(cpu_buf.to(device))
         torch.cuda.synchronize(device)
 
-    ddp_model = DDP(
-        model,
-        device_ids=[local_rank] if device.type == "cuda" else None,
-        gradient_as_bucket_view=not args.disable_bucket_view,
-        find_unused_parameters=False,
-        bucket_cap_mb=args.bucket_cap_mb,
-    )
+    if args.naive_allreduce and dist.is_initialized() and world_size < 2:
+        raise RuntimeError("--naive-allreduce requires >=2 GPUs")
 
-    if args.compression == "int8":
-        state = _Int8AllReduceState(dist.group.WORLD if dist.is_initialized() else None)
-        ddp_model.register_comm_hook(state, _int8_allreduce_hook)
-    elif args.compression == "powersgd":
-        state = powerSGD.PowerSGDState(
-            process_group=dist.group.WORLD,
-            matrix_approximation_rank=args.powersgd_rank,
-            start_powerSGD_iter=2,
-            min_compression_rate=1,
+    if args.naive_allreduce:
+        ddp_model = model
+    else:
+        ddp_model = DDP(
+            model,
+            device_ids=[local_rank] if device.type == "cuda" else None,
+            gradient_as_bucket_view=not args.disable_bucket_view,
+            find_unused_parameters=False,
+            bucket_cap_mb=args.bucket_cap_mb,
         )
-        ddp_model.register_comm_hook(state, powerSGD.powerSGD_hook)
+
+        if args.compression == "int8":
+            state = _Int8AllReduceState(
+                dist.group.WORLD if dist.is_initialized() else None,
+                use_local_scale=args.int8_local_scale,
+            )
+            ddp_model.register_comm_hook(state, _int8_allreduce_hook)
+        elif args.compression == "powersgd":
+            state = powerSGD.PowerSGDState(
+                process_group=dist.group.WORLD,
+                matrix_approximation_rank=args.powersgd_rank,
+                start_powerSGD_iter=2,
+                min_compression_rate=1,
+            )
+            ddp_model.register_comm_hook(state, powerSGD.powerSGD_hook)
 
     optimizer = torch.optim.AdamW(ddp_model.parameters(), lr=args.learning_rate)
 
@@ -208,6 +234,14 @@ def main():
         if extra_param is not None:
             loss = loss + extra_param.sum() * 0.0
         loss.backward()
+        if args.naive_allreduce and dist.is_initialized() and world_size > 1:
+            for param in ddp_model.parameters():
+                if param.grad is None:
+                    continue
+                dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+                param.grad.div_(world_size)
+                if args.naive_allreduce_sync and device.type == "cuda":
+                    torch.cuda.synchronize(device)
         if comm_buffer is not None:
             _simulate_single_gpu_comm(comm_buffer)
         optimizer.step()
