@@ -3,21 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import math
 import os
 from time import perf_counter
 from contextlib import nullcontext
 
 import torch
-import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from pathlib import Path
-
-try:
-    from arch_config import prefer_sdpa_backends  # type: ignore
-except Exception:  # pragma: no cover - defensive
-    prefer_sdpa_backends = None  # type: ignore
 
 from labs.train_distributed.training_utils.utils import (
     build_dataloader,
@@ -74,6 +67,13 @@ def main():
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     is_main = rank == 0
+    use_ddp = world_size > 1
+    torch.backends.cuda.matmul.allow_tf32 = True
+    try:
+        torch.set_float32_matmul_precision("high")
+    except AttributeError:
+        pass
+    use_ddp = world_size > 1
     tokenizer = build_tokenizer()
     dataset = get_dataset()["train"]
 
@@ -83,7 +83,7 @@ def main():
         batch_size=args.batch_size,
         shuffle=True,
         drop_last=True,
-        distributed=True,
+        distributed=use_ddp,
         num_workers=4,
         prefetch_factor=4,
         pin_memory=True,
@@ -93,21 +93,20 @@ def main():
     model.to(device)
     model.train()
 
-    ddp_model = DDP(
-        model,
-        device_ids=[local_rank],
-        static_graph=True,
-        bucket_cap_mb=50,
-        gradient_as_bucket_view=True,
-    )
+    ddp_model = model
+    if use_ddp:
+        ddp_model = DDP(
+            model,
+            device_ids=[local_rank],
+            static_graph=True,
+            bucket_cap_mb=50,
+            gradient_as_bucket_view=True,
+        )
 
     if args.compile:
         ddp_model = torch.compile(ddp_model, mode="max-autotune", fullgraph=True, dynamic=False)
 
     optimizer = _maybe_fused_adamw(ddp_model.parameters(), args.learning_rate)
-    grad_clip = 1.0
-    scaler = torch.cuda.amp.GradScaler(enabled=False)  # bf16 path does not need scaling
-
     num_steps = min(args.steps, len(dataloader))
     total_tokens = 0
     start_time = perf_counter()
@@ -117,19 +116,20 @@ def main():
             break
 
         micro_step = step % args.grad_accum
-        sdpa_ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
-        with sdpa_ctx, torch.cuda.amp.autocast(dtype=torch.bfloat16):
+        sync_ctx = (
+            ddp_model.no_sync()
+            if use_ddp and args.grad_accum > 1 and micro_step != args.grad_accum - 1
+            else nullcontext()
+        )
+        with sync_ctx:
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             batch["labels"] = batch["input_ids"].clone()
             outputs = ddp_model(**batch)
             loss = outputs.loss / args.grad_accum
-
-        scaler.scale(loss).backward()
+        loss.backward()
 
         if micro_step == args.grad_accum - 1:
-            torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
         total_tokens += batch["input_ids"].numel()
@@ -163,7 +163,16 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "ddp.py",
-        base_args=["--mode", "optimized"],
+        base_args=[
+            "--mode",
+            "optimized",
+            "--variant",
+            "single",
+            "--batch-size",
+            "16",
+            "--grad-accum",
+            "1",
+        ],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:ddp",
         default_nproc_per_node=1,

@@ -15,6 +15,7 @@ import torch.nn as nn
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.memory import print_memory_stats
 from labs.train_distributed.training_utils.utils import get
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
@@ -109,6 +110,7 @@ _reduce_scatter_allgather_hook.__annotations__["return"] = torch.futures.Future[
 
 
 def main():
+    require_min_gpus(2, script_name="optimized_zero2_multigpu.py")
     args = parse_args()
     try:
         local_rank = get("lrank")
@@ -222,7 +224,7 @@ def get_benchmark():
             "--grad-accum",
             "1",
             "--extra-grad-mb",
-            "2048",
+            "8192",
         ],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,

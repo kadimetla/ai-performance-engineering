@@ -148,6 +148,12 @@ def add_pipeline_args(parser) -> None:
         default=None,
         help="Microbatch size (defaults to batch size for baseline scripts).",
     )
+    parser.add_argument(
+        "--device-ids",
+        type=str,
+        default=None,
+        help="Comma-separated CUDA device IDs for stages (repeat IDs to simulate multi-stage on one GPU).",
+    )
     parser.add_argument("--hidden-dim", type=int, default=500, help="Toy model hidden dimension.")
     parser.add_argument("--depth", type=int, default=6, help="Number of linear+ReLU blocks per stage.")
     parser.add_argument("--learning-rate", type=float, default=1e-4, help="Adam learning rate.")
@@ -164,6 +170,16 @@ def add_pipeline_args(parser) -> None:
         default=None,
         help="Max microbatches to keep inflight on stage0 for DualPipe demos.",
     )
+
+
+def parse_device_ids(raw: Optional[str]) -> Optional[List[int]]:
+    """Parse comma-separated CUDA device IDs from CLI."""
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    return [int(part) for part in raw.split(",") if part.strip()]
 
 
 def resolve_n_stages(n_stages: Optional[int]) -> int:
@@ -204,16 +220,19 @@ class PipelineExperiment:
         if not torch.cuda.is_available():
             raise RuntimeError("Pipeline demos require CUDA GPUs.")
         available = torch.cuda.device_count()
-        if config.n_stages > available:
-            raise RuntimeError(
-                f"Need {config.n_stages} CUDA devices but only {available} detected. "
-                "Set CUDA_VISIBLE_DEVICES or lower --n_stages."
-            )
-        self.devices = (
-            [f"cuda:{idx}" for idx in range(config.n_stages)]
-            if config.device_ids is None
-            else [f"cuda:{dev}" for dev in config.device_ids]
-        )
+        if config.device_ids is None:
+            if config.n_stages > available:
+                raise RuntimeError(
+                    f"Need {config.n_stages} CUDA devices but only {available} detected. "
+                    "Set CUDA_VISIBLE_DEVICES or lower --n_stages."
+                )
+            self.devices = [f"cuda:{idx}" for idx in range(config.n_stages)]
+        else:
+            if any(dev < 0 or dev >= available for dev in config.device_ids):
+                raise RuntimeError(
+                    f"device_ids must reference visible CUDA devices (0-{available - 1})."
+                )
+            self.devices = [f"cuda:{dev}" for dev in config.device_ids]
         if len(self.devices) < config.n_stages:
             raise ValueError("device_ids must include one entry per stage.")
 
@@ -369,11 +388,15 @@ class PipelineExperiment:
 
         next_micro = 0
         completed = 0
+        pending_fwd: List[Deque[Tuple[int, Tensor]]] = [deque() for _ in range(cfg.n_stages)]
+        pending_bwd: List[Deque[Tuple[int, Tensor]]] = [deque() for _ in range(cfg.n_stages)]
 
         while completed < n_micro:
             telemetry.start_tick()
-            pending_fwd: List[Deque[Tuple[int, Tensor]]] = [deque() for _ in range(cfg.n_stages)]
-            pending_bwd: List[Deque[Tuple[int, Tensor]]] = [deque() for _ in range(cfg.n_stages)]
+            for queue in pending_fwd:
+                queue.clear()
+            for queue in pending_bwd:
+                queue.clear()
             if next_micro < n_micro:
                 fwd_queues[0].append((next_micro, micro_ins[next_micro]))
                 next_micro += 1
@@ -420,12 +443,14 @@ class PipelineExperiment:
                         completed += 1
 
             for stage_id in range(1, cfg.n_stages):
-                while pending_fwd[stage_id]:
-                    fwd_queues[stage_id].append(pending_fwd[stage_id].popleft())
+                if pending_fwd[stage_id]:
+                    fwd_queues[stage_id].extend(pending_fwd[stage_id])
+                    pending_fwd[stage_id].clear()
 
             for stage_id in range(cfg.n_stages):
-                while pending_bwd[stage_id]:
-                    bwd_queues[stage_id].append(pending_bwd[stage_id].popleft())
+                if pending_bwd[stage_id]:
+                    bwd_queues[stage_id].extend(pending_bwd[stage_id])
+                    pending_bwd[stage_id].clear()
 
             telemetry.end_tick()
 

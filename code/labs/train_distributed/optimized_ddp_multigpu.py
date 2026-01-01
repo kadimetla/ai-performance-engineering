@@ -14,6 +14,8 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from pathlib import Path
 
+from core.benchmark.gpu_requirements import require_min_gpus
+
 try:
     from arch_config import prefer_sdpa_backends  # type: ignore
 except Exception:  # pragma: no cover - defensive
@@ -57,6 +59,7 @@ def _maybe_fused_adamw(params, lr):
 
 
 def main():
+    require_min_gpus(2, script_name="optimized_ddp_multigpu.py")
     args = parse_args()
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     if not torch.cuda.is_available():
@@ -168,7 +171,16 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "ddp.py",
-        base_args=["--mode", "optimized", "--batch-size", "16", "--grad-accum", "1"],
+        base_args=[
+            "--mode",
+            "optimized",
+            "--variant",
+            "multigpu",
+            "--batch-size",
+            "16",
+            "--grad-accum",
+            "1",
+        ],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,
         target_label="labs/train_distributed:ddp_multigpu",

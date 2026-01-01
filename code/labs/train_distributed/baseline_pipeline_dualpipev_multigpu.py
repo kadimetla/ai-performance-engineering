@@ -8,6 +8,7 @@ from time import perf_counter
 
 import torch
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.pipeline import (
     PipelineConfig,
     PipelineExperiment,
@@ -15,6 +16,7 @@ from labs.train_distributed.pipeline import (
     add_pipeline_args,
     format_telemetry,
     resolve_n_stages,
+    parse_device_ids,
 )
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
@@ -33,6 +35,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    device_ids = parse_device_ids(args.device_ids)
+    require_min_gpus(2, script_name="baseline_pipeline_dualpipev_multigpu.py")
     stage_count = resolve_n_stages(args.n_stages)
     dual_window = args.dual_window or max(stage_count, args.dual_window_default)
 
@@ -46,6 +50,7 @@ def main():
         learning_rate=args.learning_rate,
         non_blocking=False,
         dual_window=dual_window,
+        device_ids=device_ids,
         seed=args.seed,
     )
 
@@ -86,7 +91,7 @@ if __name__ == "__main__":
 
 def get_benchmark():
     return TorchrunScriptBenchmark(
-        script_path=Path(__file__).parent / "pipeline_dualpipev.py",
+        script_path=Path(__file__).parent / "pipeline_dualpipev_multigpu.py",
         base_args=["--mode", "baseline"],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:dualpipev_multigpu_2stages",

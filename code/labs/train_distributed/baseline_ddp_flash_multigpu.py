@@ -7,6 +7,7 @@ import os
 from time import perf_counter
 from pathlib import Path
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
 
@@ -20,6 +21,7 @@ def parse_args():
 
 
 def main():
+    require_min_gpus(2, script_name="baseline_ddp_flash_multigpu.py")
     import torch
     import torch.distributed as dist
     from torch.nn.parallel import DistributedDataParallel as DDP
@@ -118,7 +120,16 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "ddp.py",
-        base_args=["--mode", "baseline_flash", "--batch-size", "16", "--max-length", "1024"],
+        base_args=[
+            "--mode",
+            "baseline_flash",
+            "--variant",
+            "multigpu",
+            "--batch-size",
+            "16",
+            "--max-length",
+            "1024",
+        ],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,
         target_label="labs/train_distributed:ddp_flash_multigpu",

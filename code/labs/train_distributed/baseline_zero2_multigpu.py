@@ -11,6 +11,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.utils import get
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
@@ -39,6 +40,7 @@ def _build_model(hidden_size: int, device: torch.device) -> nn.Sequential:
 
 
 def main():
+    require_min_gpus(2, script_name="baseline_zero2_multigpu.py")
     args = parse_args()
     local_rank = get("lrank")
     torch.cuda.set_device(local_rank)
@@ -126,7 +128,7 @@ def get_benchmark():
             "--hidden-size",
             "10000",
             "--extra-grad-mb",
-            "2048",
+            "8192",
         ],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,

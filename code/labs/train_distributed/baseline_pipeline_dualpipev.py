@@ -15,6 +15,7 @@ from labs.train_distributed.pipeline import (
     add_pipeline_args,
     format_telemetry,
     resolve_n_stages,
+    parse_device_ids,
 )
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
@@ -33,6 +34,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    device_ids = parse_device_ids(args.device_ids)
     stage_count = resolve_n_stages(args.n_stages)
     dual_window = args.dual_window or max(stage_count, args.dual_window_default)
 
@@ -46,6 +48,7 @@ def main():
         learning_rate=args.learning_rate,
         non_blocking=False,
         dual_window=dual_window,
+        device_ids=device_ids,
         seed=args.seed,
     )
 
@@ -87,7 +90,24 @@ if __name__ == "__main__":
 def get_benchmark():
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "pipeline_dualpipev.py",
-        base_args=["--mode", "baseline"],
+        base_args=[
+            "--mode",
+            "baseline",
+            "--n-stages",
+            "2",
+            "--device-ids",
+            "0,0",
+            "--batch-size",
+            "256",
+            "--micro-batch-size",
+            "16",
+            "--dual-window",
+            "2",
+            "--hidden-dim",
+            "2048",
+            "--depth",
+            "12",
+        ],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:dualpipev_2stages",
         default_nproc_per_node=1,

@@ -1,4 +1,4 @@
-"""Optimized 1F1B demo with deeper microbatching and async transfers."""
+"""Optimized 1F1B demo with tuned micro-batching and async transfers."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from labs.train_distributed.pipeline import (
     add_pipeline_args,
     format_telemetry,
     resolve_n_stages,
+    parse_device_ids,
 )
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
@@ -32,6 +33,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    device_ids = parse_device_ids(args.device_ids)
     stage_count = resolve_n_stages(args.n_stages)
     micro = args.micro_batch_size
     if micro is None:
@@ -46,6 +48,7 @@ def main():
         depth=args.depth,
         learning_rate=args.learning_rate * 2,
         non_blocking=True,
+        device_ids=device_ids,
         seed=args.seed,
     )
 
@@ -87,7 +90,22 @@ if __name__ == "__main__":
 def get_benchmark():
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "pipeline_1f1b.py",
-        base_args=["--mode", "optimized"],
+        base_args=[
+            "--mode",
+            "optimized",
+            "--n-stages",
+            "2",
+            "--device-ids",
+            "0,0",
+            "--batch-size",
+            "256",
+            "--micro-batch-size",
+            "64",
+            "--hidden-dim",
+            "2048",
+            "--depth",
+            "12",
+        ],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:1f1b_2stages",
         default_nproc_per_node=1,

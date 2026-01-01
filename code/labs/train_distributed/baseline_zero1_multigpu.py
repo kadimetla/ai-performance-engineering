@@ -12,6 +12,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from torch.optim import Adam, Optimizer
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.memory import print_memory_stats
 from labs.train_distributed.training_utils.utils import get
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
@@ -133,12 +134,11 @@ def run_training(model, optimizer, batch_size: int, device, steps: int, label: s
 
 
 def main():
+    require_min_gpus(2, script_name="baseline_zero1_multigpu.py")
     args = parse_args()
     local_rank = get("lrank")
     torch.cuda.set_device(local_rank)
     dist.init_process_group("nccl", device_id=local_rank)
-    if get("ws") < 2:
-        print("Warning: baseline ZeRO-1 demo is running on a single GPU; sharding benefits require world_size>=2.")
     rank = get("rank")
     device = torch.device(f"cuda:{local_rank}")
     # Baseline: full optimizer state on every rank.

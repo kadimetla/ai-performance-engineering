@@ -1,4 +1,4 @@
-"""Dispatcher for baseline vs optimized 1F1B demos (single-GPU simulation)."""
+"""Dispatcher for baseline vs optimized DualPipeV demos."""
 
 from __future__ import annotations
 
@@ -10,12 +10,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import labs.train_distributed.baseline_pipeline_1f1b as baseline_run
-import labs.train_distributed.optimized_pipeline_1f1b as optimized_run
+from core.benchmark.gpu_requirements import require_min_gpus
+
+import labs.train_distributed.baseline_pipeline_dualpipev_multigpu as baseline_run
+import labs.train_distributed.optimized_pipeline_dualpipev_multigpu as optimized_run
 
 
 def main():
-    parser = argparse.ArgumentParser(description="1F1B toy pipeline (single-GPU simulation).")
+    require_min_gpus(2, script_name="pipeline_dualpipev_multigpu.py")
+    parser = argparse.ArgumentParser(description="DualPipeV toy pipeline.")
     parser.add_argument("--mode", choices=["baseline", "optimized"], default="optimized")
     args, remaining = parser.parse_known_args()
 

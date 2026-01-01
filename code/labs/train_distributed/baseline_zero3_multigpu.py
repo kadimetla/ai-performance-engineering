@@ -11,6 +11,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from torch.optim import Adam, Optimizer
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.memory import print_memory_stats
 from labs.train_distributed.training_utils.utils import get
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
@@ -169,6 +170,7 @@ def train(model, optimizer, batch_size, device, steps, label, shard_map=None):
 
 
 def main():
+    require_min_gpus(2, script_name="baseline_zero3_multigpu.py")
     args = parse_args()
     local_rank = get("lrank")
     torch.cuda.set_device(local_rank)

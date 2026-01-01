@@ -17,6 +17,7 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.wrap import lambda_auto_wrap_policy
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.memory import print_memory_stats
 from labs.train_distributed.training_utils.utils import get
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
@@ -55,6 +56,7 @@ def _build_model(hidden_size: int):
 
 
 def main():
+    require_min_gpus(2, script_name="optimized_zero3_multigpu.py")
     args = parse_args()
     local_rank = get("lrank")
     torch.cuda.set_device(local_rank)

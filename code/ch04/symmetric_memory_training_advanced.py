@@ -118,9 +118,9 @@ def symmetric_memory_available() -> bool:
     return _symmetric_memory_available()
 
 
-def init_distributed() -> Tuple[int, int, int]:
+def init_distributed(allow_single_gpu: bool = False) -> Tuple[int, int, int]:
     """Initialize distributed process group."""
-    if torch.cuda.device_count() < 2:
+    if torch.cuda.device_count() < 2 and not allow_single_gpu:
         require_min_gpus(2, script_name="symmetric_memory_training_advanced.py")
     setup_single_gpu_env()  # Auto-setup for single-GPU mode
     
@@ -330,7 +330,7 @@ class AsyncGradientServer:
         return result
 
 
-def demo_async_gradient_server() -> None:
+def demo_async_gradient_server(*, allow_single_gpu: bool = False) -> None:
     """
     Demonstrate async gradient aggregation server.
     
@@ -339,7 +339,7 @@ def demo_async_gradient_server() -> None:
     - When using multiple gradient accumulation steps
     - Pipeline parallel training with frequent synchronization
     """
-    rank, world_size, device = init_distributed()
+    rank, world_size, device = init_distributed(allow_single_gpu=allow_single_gpu)
     
     # Create a simple model
     model = nn.Sequential(
@@ -528,7 +528,7 @@ class LockFreeGradientAccumulator:
             return temp / self.world_size
 
 
-def demo_lockfree_accumulation() -> None:
+def demo_lockfree_accumulation(*, allow_single_gpu: bool = False) -> None:
     """
     Demonstrate lock-free gradient accumulation.
     
@@ -537,7 +537,7 @@ def demo_lockfree_accumulation() -> None:
     - Asynchronous training (different ranks progress at different rates)
     - Want to minimize synchronization overhead
     """
-    rank, world_size, device = init_distributed()
+    rank, world_size, device = init_distributed(allow_single_gpu=allow_single_gpu)
     
     # Create model
     model = nn.Linear(8192, 8192, device=device)
@@ -659,6 +659,7 @@ def demo_custom_optimizer(
     output_dim: int,
     sync_interval: int,
     num_layers: int,
+    allow_single_gpu: bool = False,
 ) -> None:
     """
     Demonstrate custom optimizer with symmetric memory.
@@ -668,7 +669,7 @@ def demo_custom_optimizer(
     - Want to eliminate broadcast overhead
     - Implementing custom update patterns (MoE, sparse updates, etc.)
     """
-    rank, world_size, device = init_distributed()
+    rank, world_size, device = init_distributed(allow_single_gpu=allow_single_gpu)
     
     # Create model with multiple small parameter groups to amplify broadcast overhead.
     depth = max(1, int(num_layers))
@@ -783,7 +784,7 @@ class ZeROStyleSymmetricMemoryTrainer:
         return loss
 
 
-def demo_zero_style_sharding() -> None:
+def demo_zero_style_sharding(*, allow_single_gpu: bool = False) -> None:
     """
     Demonstrate ZeRO-style optimizer state sharding with symmetric memory.
     
@@ -792,7 +793,7 @@ def demo_zero_style_sharding() -> None:
     - When memory is constrained
     - Want benefits of FSDP + symmetric memory for optimizer states
     """
-    rank, world_size, device = init_distributed()
+    rank, world_size, device = init_distributed(allow_single_gpu=allow_single_gpu)
     
     # Create model
     model = nn.Sequential(
@@ -840,6 +841,11 @@ def main() -> None:
         action="store_true",
         help="Force disable symmetric memory and use fallback paths (baseline comparison).",
     )
+    parser.add_argument(
+        "--allow-single-gpu",
+        action="store_true",
+        help="Allow running on a single GPU (uses fallback paths when symmetric memory is unavailable).",
+    )
     parser.add_argument("--steps", type=int, default=20, help="Training steps per demo.")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for optimizer demo.")
     parser.add_argument("--hidden-dim", type=int, default=4096, help="Hidden dimension for optimizer demo.")
@@ -861,12 +867,12 @@ def main() -> None:
     if args.disable_symmetric:
         os.environ["SYMMETRIC_MEMORY_DISABLED"] = "1"
     
-    init_distributed()
+    init_distributed(allow_single_gpu=args.allow_single_gpu)
     
     if args.demo == "async_grad":
-        demo_async_gradient_server()
+        demo_async_gradient_server(allow_single_gpu=args.allow_single_gpu)
     elif args.demo == "lockfree":
-        demo_lockfree_accumulation()
+        demo_lockfree_accumulation(allow_single_gpu=args.allow_single_gpu)
     elif args.demo == "optimizer":
         demo_custom_optimizer(
             steps=args.steps,
@@ -875,9 +881,10 @@ def main() -> None:
             output_dim=args.output_dim,
             sync_interval=args.sync_interval,
             num_layers=args.optimizer_layers,
+            allow_single_gpu=args.allow_single_gpu,
         )
     elif args.demo == "zero":
-        demo_zero_style_sharding()
+        demo_zero_style_sharding(allow_single_gpu=args.allow_single_gpu)
     
     dist.barrier()
     if dist.get_rank() == 0:

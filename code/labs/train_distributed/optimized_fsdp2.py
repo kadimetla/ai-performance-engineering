@@ -152,6 +152,14 @@ def main():
             use_cache=False,
             attn_implementation="flash_attention_2",
         )
+    override_layers = os.getenv("AISP_TINYSTORIES_LAYERS")
+    if override_layers:
+        layers = int(override_layers)
+        if layers < 1 or layers > config.num_hidden_layers:
+            raise ValueError(
+                f"AISP_TINYSTORIES_LAYERS must be between 1 and {config.num_hidden_layers}, got {layers}."
+            )
+        config.num_hidden_layers = layers
     config.gradient_checkpointing = False
     model = AutoModelForCausalLM.from_config(
         config,
@@ -237,10 +245,10 @@ if __name__ == "__main__":
 
 def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
-    # Scale up by switching to a larger config (ex: tinyllama_micro_config.json)
+    # Scale up by switching to a larger config (ex: tinyllama_config.json)
     # and matching it with a packed dataset at the desired sequence length.
-    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq16.jsonl"
-    config_path = Path(__file__).parent / "data" / "tinyllama_min_config.json"
+    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq256.jsonl"
+    config_path = Path(__file__).parent / "data" / "tinyllama_config.json"
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "train_fsdp2.py",
         base_args=[
@@ -249,9 +257,9 @@ def get_benchmark():
             "--variant",
             "single",
             "--sequence-length",
-            "16",
+            "256",
             "--micro-batch-size",
-            "1",
+            "4",
             "--grad-accum",
             "1",
         ],
@@ -264,8 +272,7 @@ def get_benchmark():
             "AISP_TINYSTORIES_LOCAL_PATH": str(LOCAL_DATA_PATH),
             "AISP_TINYSTORIES_PACKED_PATH": str(packed_data_path),
             "AISP_TINYSTORIES_CONFIG_PATH": str(config_path),
-            "AISP_TINYSTORIES_LAYERS": "1",
-            "AISP_FSDP_DISABLE_FP8": "1",
+            "AISP_TINYSTORIES_LAYERS": "4",
             "TOKENIZERS_PARALLELISM": "false",
         },
         name="optimized_fsdp2",

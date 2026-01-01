@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.training_utils.utils import (
     build_dataloader,
     build_text_model_flash,
@@ -51,6 +52,7 @@ def _maybe_fused_adamw(params, lr):
 
 
 def main():
+    require_min_gpus(2, script_name="optimized_ddp_flash_multigpu.py")
     args = parse_args()
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     if not torch.cuda.is_available():
@@ -159,6 +161,8 @@ def get_benchmark():
         base_args=[
             "--mode",
             "optimized_flash",
+            "--variant",
+            "multigpu",
             "--batch-size",
             "16",
             "--grad-accum",

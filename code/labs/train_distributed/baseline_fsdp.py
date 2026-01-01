@@ -112,6 +112,14 @@ def main():
         config.attn_implementation = "eager"
     else:
         config = AutoConfig.from_pretrained(MODEL_ID, use_cache=False, attn_implementation="eager")
+    override_layers = os.getenv("AISP_TINYSTORIES_LAYERS")
+    if override_layers:
+        layers = int(override_layers)
+        if layers < 1 or layers > config.num_hidden_layers:
+            raise ValueError(
+                f"AISP_TINYSTORIES_LAYERS must be between 1 and {config.num_hidden_layers}, got {layers}."
+            )
+        config.num_hidden_layers = layers
     model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16, attn_implementation="eager")
     fsdp_model = _wrap_fsdp(model)
     optimizer = torch.optim.AdamW(fsdp_model.parameters(), lr=args.learning_rate, betas=(0.9, 0.95), weight_decay=0.1)
@@ -176,10 +184,10 @@ if __name__ == "__main__":
 def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     local_data_path = Path(__file__).parent / "data" / "tinystories_sample.jsonl"
-    # Scale up by switching to a larger config (ex: tinyllama_micro_config.json)
+    # Scale up by switching to a larger config (ex: tinyllama_config.json)
     # and matching it with a packed dataset at the desired sequence length.
-    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq16.jsonl"
-    config_path = Path(__file__).parent / "data" / "tinyllama_min_config.json"
+    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq256.jsonl"
+    config_path = Path(__file__).parent / "data" / "tinyllama_config.json"
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "train_fsdp.py",
         base_args=[
@@ -188,9 +196,9 @@ def get_benchmark():
             "--variant",
             "single",
             "--sequence-length",
-            "16",
+            "256",
             "--micro-batch-size",
-            "1",
+            "4",
             "--grad-accum",
             "1",
         ],
@@ -203,7 +211,7 @@ def get_benchmark():
             "AISP_TINYSTORIES_LOCAL_PATH": str(local_data_path),
             "AISP_TINYSTORIES_PACKED_PATH": str(packed_data_path),
             "AISP_TINYSTORIES_CONFIG_PATH": str(config_path),
-            "AISP_TINYSTORIES_LAYERS": "1",
+            "AISP_TINYSTORIES_LAYERS": "4",
             "TOKENIZERS_PARALLELISM": "false",
         },
         name="baseline_fsdp",

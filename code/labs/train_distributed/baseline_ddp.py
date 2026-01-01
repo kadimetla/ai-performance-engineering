@@ -53,11 +53,12 @@ def main():
         shuffle=True,
         drop_last=True,
         distributed=dist.is_initialized() and dist.get_world_size() > 1,
-        num_workers=2,
-        prefetch_factor=2,
+        num_workers=0,
+        prefetch_factor=None,
+        pin_memory=False,
     )
 
-    model = build_text_model()
+    model = build_text_model(dtype=torch.float32)
     model.to(device)
     model.train()
 
@@ -115,7 +116,7 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "ddp.py",
-        base_args=["--mode", "baseline"],
+        base_args=["--mode", "baseline", "--variant", "single", "--batch-size", "16"],
         config_arg_map={"iterations": "--steps"},
         target_label="labs/train_distributed:ddp",
         default_nproc_per_node=1,

@@ -1,4 +1,4 @@
-"""Baseline 1F1B demo with limited overlap to highlight idle bubbles."""
+"""Optimized schedule comparison: GPipe vs DualPipe (DualPipe with tuned micro-batches)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from time import perf_counter
 
 import torch
 
+from core.benchmark.gpu_requirements import require_min_gpus
 from labs.train_distributed.pipeline import (
     PipelineConfig,
     PipelineExperiment,
@@ -19,31 +20,44 @@ from labs.train_distributed.pipeline import (
 )
 from labs.train_distributed.training_utils.torchrun_harness import TorchrunScriptBenchmark
 
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Baseline 1F1B pipeline.")
+    parser = argparse.ArgumentParser(description="Optimized DualPipe schedule comparison.")
     add_pipeline_args(parser)
+    parser.set_defaults(batch_size=256, hidden_dim=2048, depth=12)
     return parser.parse_args()
+
+
+def _resolve_microbatch(args: argparse.Namespace, stage_count: int) -> int:
+    if args.micro_batch_size is not None:
+        return args.micro_batch_size
+    micro = max(1, args.batch_size // max(1, stage_count * 4))
+    if args.batch_size % micro != 0:
+        micro = args.batch_size
+    return micro
 
 
 def main():
     args = parse_args()
     device_ids = parse_device_ids(args.device_ids)
+    require_min_gpus(2, script_name="optimized_pipeline_gpipe_to_dualpipe_multigpu.py")
     stage_count = resolve_n_stages(args.n_stages)
-    default_micro = args.micro_batch_size
-    if default_micro is None:
-        default_micro = max(args.batch_size // 2, stage_count)
+    micro = _resolve_microbatch(args, stage_count)
+    dual_window = args.dual_window or 2
 
     config = PipelineConfig(
-        schedule="1f1b",
+        schedule="dualpipe",
         n_stages=stage_count,
         batch_size=args.batch_size,
-        micro_batch_size=default_micro,
+        micro_batch_size=micro,
         hidden_dim=args.hidden_dim,
         depth=args.depth,
         learning_rate=args.learning_rate,
-        non_blocking=False,
+        non_blocking=True,
+        dtype=torch.float32,
         device_ids=device_ids,
         seed=args.seed,
+        dual_window=dual_window,
     )
 
     experiment = PipelineExperiment(config)
@@ -52,7 +66,7 @@ def main():
     start = perf_counter()
 
     for step in range(args.steps):
-        inputs = torch.randn(config.batch_size, config.input_dim)
+        inputs = torch.randn(config.batch_size, config.input_dim, dtype=config.dtype)
         targets = torch.randn_like(inputs)
         loss, telemetry = experiment.run_batch(inputs, targets)
         cumulative.merge(telemetry)
@@ -60,8 +74,8 @@ def main():
 
         if step % args.log_every == 0:
             print(
-                f"[baseline-1f1b] step {step + 1}/{args.steps} loss={loss:.4f} "
-                f"micro_batch={config.micro_batch_size}"
+                f"[optimized-dualpipe-compare] step {step + 1}/{args.steps} "
+                f"loss={loss:.4f} micro_batch={config.micro_batch_size}"
             )
 
     torch.cuda.synchronize()
@@ -71,10 +85,10 @@ def main():
     avg_loss = total_loss / max(1, args.steps)
 
     print(
-        f"[baseline-1f1b] done in {elapsed:.2f}s | avg_loss={avg_loss:.4f} | "
+        f"[optimized-dualpipe-compare] done in {elapsed:.2f}s | avg_loss={avg_loss:.4f} | "
         f"elements/s={elems_per_sec:,.0f}"
     )
-    print(format_telemetry("baseline-1f1b", cumulative))
+    print(format_telemetry("optimized-dualpipe-compare", cumulative))
 
 
 if __name__ == "__main__":
@@ -83,26 +97,25 @@ if __name__ == "__main__":
 
 def get_benchmark():
     return TorchrunScriptBenchmark(
-        script_path=Path(__file__).parent / "pipeline_1f1b.py",
+        script_path=Path(__file__).parent / "pipeline_gpipe_to_dualpipe_multigpu.py",
         base_args=[
             "--mode",
-            "baseline",
-            "--n-stages",
-            "2",
-            "--device-ids",
-            "0,0",
+            "optimized",
             "--batch-size",
-            "256",
+            "1024",
             "--micro-batch-size",
-            "16",
+            "128",
+            "--dual-window",
+            "4",
             "--hidden-dim",
             "2048",
             "--depth",
             "12",
         ],
         config_arg_map={"iterations": "--steps"},
-        target_label="labs/train_distributed:1f1b_2stages",
-        default_nproc_per_node=1,
-        multi_gpu_required=False,
-        name="baseline_pipeline_1f1b_2stages",
+        target_label="labs/train_distributed:pipeline_gpipe_to_dualpipe_multigpu_2stages",
+        default_nproc_per_node=None,
+        default_iterations=6,
+        multi_gpu_required=True,
+        name="optimized_pipeline_gpipe_to_dualpipe_multigpu_2stages",
     )
