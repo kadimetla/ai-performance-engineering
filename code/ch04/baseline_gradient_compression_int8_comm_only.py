@@ -1,4 +1,4 @@
-"""Optimized INT8 gradient all-reduce (preallocated full-buffer compression)."""
+"""Baseline FP32 gradient all-reduce (communication-only INT8 compression)."""
 
 from __future__ import annotations
 
@@ -12,14 +12,12 @@ from ch04.gradient_compression_common import (
 
 def get_benchmark() -> BaseBenchmark:
     bench = GradientCompressionBenchmark(
-        compression="int8",
-        equivalence_group="ch04_gradient_compression_int8",
+        compression="none",
+        equivalence_group="ch04_gradient_compression_int8_comm_only",
         output_tolerance=(1e-1, 1e-1),
         tensor_size_mb=1024,
         multi_gpu=False,
         simulate_single_gpu_transfer=True,
-        use_prealloc_buffers=True,
-        bucket_mb=0,
     )
     return attach_benchmark_metadata(bench, __file__)
 

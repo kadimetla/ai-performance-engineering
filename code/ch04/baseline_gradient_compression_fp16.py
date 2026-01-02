@@ -1,4 +1,4 @@
-"""Baseline FP32 gradient all-reduce (no compression)."""
+"""Baseline FP16 gradient all-reduce (naive compression, small buckets)."""
 
 from __future__ import annotations
 
@@ -12,12 +12,14 @@ from ch04.gradient_compression_common import (
 
 def get_benchmark() -> BaseBenchmark:
     bench = GradientCompressionBenchmark(
-        compression="none",
+        compression="fp16",
         equivalence_group="ch04_gradient_compression_fp16",
         output_tolerance=(1e-3, 1e-2),
-        tensor_size_mb=4096,
+        tensor_size_mb=1024,
         multi_gpu=False,
         simulate_single_gpu_transfer=True,
+        use_prealloc_buffers=False,
+        bucket_mb=16,
     )
     return attach_benchmark_metadata(bench, __file__)
 

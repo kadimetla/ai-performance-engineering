@@ -29,6 +29,9 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         tensor_size_mb: int = 128,
         multi_gpu: bool = True,
         simulate_single_gpu_transfer: bool = False,
+        comm_only: bool = False,
+        use_prealloc_buffers: bool = True,
+        bucket_mb: Optional[int] = None,
     ) -> None:
         super().__init__()
         self.multi_gpu_required = bool(multi_gpu)
@@ -39,6 +42,9 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.tensor_size_mb = tensor_size_mb
         self.multi_gpu = bool(multi_gpu)
         self.simulate_single_gpu_transfer = bool(simulate_single_gpu_transfer)
+        self.comm_only = bool(comm_only)
+        self.use_prealloc_buffers = bool(use_prealloc_buffers)
+        self.bucket_mb = int(bucket_mb) if bucket_mb else 0
         self.world_size = 0
         self.devices: List[torch.device] = []
         self.inputs: List[torch.Tensor] = []
@@ -55,6 +61,7 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._int8_max_vals: List[torch.Tensor] = []
         self._int8_scales: List[torch.Tensor] = []
         self._int8_output_fp32: Optional[torch.Tensor] = None
+        self._bucket_slices: List[slice] = []
         tokens = float(tensor_size_mb * 1024 * 1024)
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -83,6 +90,7 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             torch.randn(numel, device=device, dtype=torch.float32) for device in self.devices
         ]
         self._verify_input = self.inputs[0]
+        self._bucket_slices = self._build_bucket_slices()
         if not self.multi_gpu and self.simulate_single_gpu_transfer:
             self._fp32_buffers = [torch.empty_like(t) for t in self.inputs]
             self._fp32_outputs = [torch.empty_like(t) for t in self.inputs]
@@ -105,6 +113,13 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 torch.empty((), device=t.device, dtype=torch.float32) for t in self.inputs
             ]
             self._int8_output_fp32 = torch.empty_like(self.inputs[0])
+        if self.comm_only and self.compression == "fp16":
+            if not self._fp16_buffers:
+                raise RuntimeError("FP16 buffers not initialized for comm-only mode")
+            for src, buf in zip(self.inputs, self._fp16_buffers):
+                buf.copy_(src)
+        if self.comm_only and self.compression == "int8":
+            self._prepare_int8_buffers()
         self._synchronize_all()
 
     def benchmark_fn(self) -> None:
@@ -126,34 +141,46 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                     else:
                         self.output = self.inputs[0].clone()
             elif self.compression == "fp16":
-                if not self._fp16_buffers:
-                    raise RuntimeError("FP16 buffers not initialized")
-                for src, buf in zip(self.inputs, self._fp16_buffers):
-                    buf.copy_(src)
-                if self.multi_gpu:
-                    torch.cuda.nccl.all_reduce(self._fp16_buffers, outputs=self._fp16_outputs)
-                    reduced = self._fp16_outputs[0]
-                else:
-                    if self.simulate_single_gpu_transfer:
-                        if not self._fp16_outputs:
-                            raise RuntimeError("FP16 output buffers not initialized")
-                        self._fp16_outputs[0].copy_(self._fp16_buffers[0])
+                if self.comm_only or self.use_prealloc_buffers:
+                    if not self._fp16_buffers:
+                        raise RuntimeError("FP16 buffers not initialized")
+                    if not self.comm_only:
+                        for src, buf in zip(self.inputs, self._fp16_buffers):
+                            buf.copy_(src)
+                    if self.multi_gpu:
+                        torch.cuda.nccl.all_reduce(self._fp16_buffers, outputs=self._fp16_outputs)
                         reduced = self._fp16_outputs[0]
                     else:
-                        reduced = self._fp16_buffers[0]
-                if self._fp16_output_fp32 is None:
-                    raise RuntimeError("FP16 output buffer not initialized")
-                self._fp16_output_fp32.copy_(reduced)
-                self.output = self._fp16_output_fp32
+                        if self.simulate_single_gpu_transfer:
+                            if not self._fp16_outputs:
+                                raise RuntimeError("FP16 output buffers not initialized")
+                            self._fp16_outputs[0].copy_(self._fp16_buffers[0])
+                            reduced = self._fp16_outputs[0]
+                        else:
+                            reduced = self._fp16_buffers[0]
+                    if self.comm_only:
+                        self.output = reduced
+                    else:
+                        if self._fp16_output_fp32 is None:
+                            raise RuntimeError("FP16 output buffer not initialized")
+                        self._fp16_output_fp32.copy_(reduced)
+                        self.output = self._fp16_output_fp32
+                else:
+                    self.output = self._fp16_all_reduce_naive()
             elif self.compression == "int8":
-                self.output = self._int8_all_reduce()
+                if self.comm_only:
+                    self.output = self._int8_all_reduce(prequantized=True, dequantize=False)
+                elif self.use_prealloc_buffers:
+                    self.output = self._int8_all_reduce(prequantized=False, dequantize=True)
+                else:
+                    self.output = self._int8_all_reduce_naive()
             else:
                 raise ValueError(f"Unknown compression mode: {self.compression}")
         self._synchronize_all()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
-    def _int8_all_reduce(self) -> torch.Tensor:
+    def _prepare_int8_buffers(self) -> None:
         if not self._int8_buffers or not self._int8_float_buffers:
             raise RuntimeError("INT8 buffers not initialized")
         for src, max_buf in zip(self.inputs, self._int8_max_vals):
@@ -176,6 +203,53 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             float_buf.round_()
             float_buf.clamp_(-limit, limit)
             self._int8_buffers[idx].copy_(float_buf.to(torch.int8))
+
+    def _build_bucket_slices(self) -> List[slice]:
+        if not self.inputs:
+            return [slice(None)]
+        if self.bucket_mb <= 0:
+            return [slice(None)]
+        numel = self.inputs[0].numel()
+        bucket_elems = max(1, (self.bucket_mb * 1024 * 1024) // 4)
+        if bucket_elems >= numel:
+            return [slice(None)]
+        slices = []
+        for start in range(0, numel, bucket_elems):
+            end = min(start + bucket_elems, numel)
+            slices.append(slice(start, end))
+        return slices
+
+    def _fp16_all_reduce_naive(self) -> torch.Tensor:
+        fp16_buffers = [src.to(torch.float16) for src in self.inputs]
+        if self.multi_gpu:
+            fp16_outputs = [torch.empty_like(t) for t in fp16_buffers]
+            if len(self._bucket_slices) > 1:
+                for sl in self._bucket_slices:
+                    bucket_inputs = [buf[sl] for buf in fp16_buffers]
+                    bucket_outputs = [out[sl] for out in fp16_outputs]
+                    torch.cuda.nccl.all_reduce(bucket_inputs, outputs=bucket_outputs)
+            else:
+                torch.cuda.nccl.all_reduce(fp16_buffers, outputs=fp16_outputs)
+            reduced = fp16_outputs[0]
+        else:
+            if self.simulate_single_gpu_transfer:
+                reduced = torch.empty_like(fp16_buffers[0])
+                for sl in self._bucket_slices:
+                    reduced[sl].copy_(fp16_buffers[0][sl])
+            else:
+                reduced = fp16_buffers[0]
+        return reduced.float()
+
+    def _int8_all_reduce(
+        self,
+        *,
+        prequantized: bool = False,
+        dequantize: bool = True,
+    ) -> torch.Tensor:
+        if not self._int8_buffers or not self._int8_float_buffers:
+            raise RuntimeError("INT8 buffers not initialized")
+        if not prequantized:
+            self._prepare_int8_buffers()
         if self.multi_gpu:
             torch.cuda.nccl.all_reduce(self._int8_buffers, outputs=self._int8_outputs)
             reduced = self._int8_outputs[0]
@@ -187,11 +261,58 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 reduced = self._int8_outputs[0]
             else:
                 reduced = self._int8_buffers[0]
+        if not dequantize:
+            return reduced
         if self._int8_output_fp32 is None:
             raise RuntimeError("INT8 output buffer not initialized")
         self._int8_output_fp32.copy_(reduced.float())
         self._int8_output_fp32.mul_(self._int8_scales[0])
         return self._int8_output_fp32
+
+    def _int8_all_reduce_naive(self) -> torch.Tensor:
+        int8_buffers: List[torch.Tensor] = []
+        int8_outputs: List[torch.Tensor] = []
+        scales: List[torch.Tensor] = []
+        max_vals: List[torch.Tensor] = []
+        if self.multi_gpu:
+            limit = max(1, 127 // self.world_size)
+        else:
+            limit = 127
+        for src in self.inputs:
+            max_vals.append(src.abs().max())
+        if self.multi_gpu:
+            torch.cuda.nccl.all_reduce(max_vals, op=2)
+        for src, max_val in zip(self.inputs, max_vals):
+            scale = max_val / float(limit)
+            if scale.item() == 0:
+                scale = torch.tensor(1.0, device=src.device, dtype=torch.float32)
+            scales.append(scale)
+            int8_buffers.append(torch.empty_like(src, dtype=torch.int8))
+        for idx, src in enumerate(self.inputs):
+            scale = scales[idx]
+            for sl in self._bucket_slices:
+                float_buf = src[sl] / scale
+                float_buf = float_buf.round()
+                float_buf = float_buf.clamp(-limit, limit)
+                int8_buffers[idx][sl].copy_(float_buf.to(torch.int8))
+        if self.multi_gpu:
+            int8_outputs = [torch.empty_like(t) for t in int8_buffers]
+            if len(self._bucket_slices) > 1:
+                for sl in self._bucket_slices:
+                    bucket_inputs = [buf[sl] for buf in int8_buffers]
+                    bucket_outputs = [out[sl] for out in int8_outputs]
+                    torch.cuda.nccl.all_reduce(bucket_inputs, outputs=bucket_outputs)
+            else:
+                torch.cuda.nccl.all_reduce(int8_buffers, outputs=int8_outputs)
+            reduced = int8_outputs[0]
+        else:
+            if self.simulate_single_gpu_transfer:
+                reduced = torch.empty_like(int8_buffers[0])
+                for sl in self._bucket_slices:
+                    reduced[sl].copy_(int8_buffers[0][sl])
+            else:
+                reduced = int8_buffers[0]
+        return reduced.float() * scales[0]
 
     def capture_verification_payload(self) -> None:
         if self._verify_input is None or self.output is None:
@@ -202,9 +323,24 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             "fp8": False,
             "tf32": torch.backends.cuda.matmul.allow_tf32,
         }
+        output = self.output
+        if self.comm_only and output is not None:
+            if self.compression == "fp16":
+                if self._fp16_output_fp32 is None:
+                    raise RuntimeError("FP16 output buffer not initialized")
+                self._fp16_output_fp32.copy_(output)
+                output = self._fp16_output_fp32
+            elif self.compression == "int8":
+                if self._int8_output_fp32 is None:
+                    raise RuntimeError("INT8 output buffer not initialized")
+                if not self._int8_scales:
+                    raise RuntimeError("INT8 scales not initialized")
+                self._int8_output_fp32.copy_(output.float())
+                self._int8_output_fp32.mul_(self._int8_scales[0])
+                output = self._int8_output_fp32
         self._set_verification_payload(
             inputs={"input": self._verify_input},
-            output=self.output.detach().clone(),
+            output=output.detach().clone(),
             batch_size=int(self._verify_input.shape[0]),
             parameter_count=0,
             precision_flags=precision_flags,
@@ -231,6 +367,7 @@ class GradientCompressionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._int8_max_vals = []
         self._int8_scales = []
         self._int8_output_fp32 = None
+        self._bucket_slices = []
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

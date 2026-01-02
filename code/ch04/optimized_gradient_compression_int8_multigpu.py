@@ -1,4 +1,4 @@
-"""Optimized INT8 compressed gradient all-reduce (multi-GPU)."""
+"""Optimized INT8 gradient all-reduce (preallocated full-buffer compression, multi-GPU)."""
 
 from __future__ import annotations
 
@@ -15,8 +15,10 @@ def get_benchmark() -> BaseBenchmark:
         compression="int8",
         equivalence_group="ch04_gradient_compression_int8",
         output_tolerance=(1e-1, 1e-1),
-        tensor_size_mb=8192,
+        tensor_size_mb=1024,
         multi_gpu=True,
+        use_prealloc_buffers=True,
+        bucket_mb=0,
     )
     return attach_benchmark_metadata(bench, __file__)
 
