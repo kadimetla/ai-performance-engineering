@@ -90,15 +90,18 @@ def _run_worker(iters: int, warmup: int, batch: int, hidden: int) -> None:
     def _step() -> None:
         with torch.no_grad():
             comm_out = comm_block(inputs)
-            comm_stream.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(comm_stream):
-                reduced = functional_all_reduce(
-                    comm_out,
-                    reduceOp="avg",
-                    group=dist.group.WORLD,
-                )
+            if world_size > 1:
+                comm_stream.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(comm_stream):
+                    reduced = functional_all_reduce(
+                        comm_out,
+                        reduceOp="avg",
+                        group=dist.group.WORLD,
+                    )
+                torch.cuda.current_stream().wait_stream(comm_stream)
+            else:
+                reduced = comm_out
             aux_out = aux_block(inputs)
-            torch.cuda.current_stream().wait_stream(comm_stream)
             _ = reduced + aux_out
 
     for _ in range(max(warmup, 0)):

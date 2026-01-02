@@ -9,9 +9,9 @@ from ch04.single_gpu_transfer_common import SingleGPUTransferBenchmark, attach_b
 
 def get_benchmark() -> BaseBenchmark:
     bench = SingleGPUTransferBenchmark(
-        size_mb=128,
-        inner_iterations=30,
-        num_chunks=2,
+        size_mb=256,
+        inner_iterations=36,
+        num_chunks=8,
         use_streams=False,
         sync_per_chunk=True,
         collective_type="nvshmem_vs_nccl",

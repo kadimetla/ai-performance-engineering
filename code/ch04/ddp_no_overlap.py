@@ -77,6 +77,7 @@ class BaselineNoOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.data = None
         self.target = None
         self.output = None
+        self._host_buffer = None
         self.rank = 0
         self.world_size = 1
         self.initialized = False
@@ -109,6 +110,7 @@ class BaselineNoOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         self.data = torch.randn(self.batch_size, self.hidden_size, device=self.device)
         self.target = torch.randn(self.batch_size, 1, device=self.device)
+        self._host_buffer = torch.empty_like(self.data, device="cpu")
         print("[baseline_no_overlap] data allocated", flush=True)
         torch.cuda.synchronize(self.device)
         print("[baseline_no_overlap] setup done", flush=True)
@@ -124,6 +126,9 @@ class BaselineNoOverlapBenchmark(VerificationPayloadMixin, BaseBenchmark):
             output = self.model(self.data)
             loss = nn.functional.mse_loss(output, self.target)
             loss.backward()
+            self._host_buffer.copy_(self.data, non_blocking=False)
+            self.data.copy_(self._host_buffer, non_blocking=False)
+            torch.cuda.synchronize(self.device)
             self.optimizer.step()
             self.optimizer.zero_grad()
         self.output = output.detach()

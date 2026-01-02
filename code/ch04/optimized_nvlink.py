@@ -1,4 +1,4 @@
-"""optimized_nvlink.py - Single-GPU optimized transfer using non-blocking copy."""
+"""optimized_nvlink.py - Single-GPU optimized transfer using pinned host staging."""
 
 from __future__ import annotations
 
@@ -30,8 +30,9 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.data_gpu0 = None
         self.data_gpu1 = None
+        self.host_buffer = None
         self.output: Optional[torch.Tensor] = None
-        self.N = 10_000_000
+        self.N = 20_000_000
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.N),
@@ -46,12 +47,14 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.manual_seed_all(42)
         self.data_gpu0 = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.data_gpu1 = torch.empty_like(self.data_gpu0)
+        self.host_buffer = torch.empty(self.N, device="cpu", dtype=torch.float32, pin_memory=True)
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
         """Benchmark: NVLink-optimized communication."""
         with self._nvtx_range("optimized_nvlink"):
-            self.data_gpu1.copy_(self.data_gpu0, non_blocking=True)
+            self.host_buffer.copy_(self.data_gpu0, non_blocking=True)
+            self.data_gpu1.copy_(self.host_buffer, non_blocking=True)
             torch.cuda.synchronize()
 
     def capture_verification_payload(self) -> None:
@@ -77,6 +80,7 @@ class OptimizedNVLinkBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Teardown: Clean up resources."""
         self.data_gpu0 = None
         self.data_gpu1 = None
+        self.host_buffer = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

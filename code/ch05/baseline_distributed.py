@@ -1,4 +1,4 @@
-"""baseline_distributed.py - Baseline without distributed operations in storage I/O context."""
+"""baseline_distributed.py - Baseline with host-staged reduction in storage I/O context."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, Workl
 
 
 class BaselineDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Single-GPU sum to contrast with distributed aggregation."""
+    """Host-staged sum to contrast with on-device aggregation."""
     
     def __init__(self):
         super().__init__()
@@ -34,7 +34,8 @@ class BaselineDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Benchmark: Single-node operations."""
         assert self.data is not None
         with self._nvtx_range("baseline_distributed"):
-            result = self.data.sum()
+            cpu_result = self.data.cpu().sum()
+            result = cpu_result.to(self.device)
             _ = result
             self._synchronize()
         self.output = result.detach().clone()

@@ -112,12 +112,16 @@ def _run_worker(
         x = inputs
         for layer_idx in range(num_layers):
             local_out = shard_layers[layer_idx](x)
-            comm_stream.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(comm_stream):
-                work = dist.all_gather(gather_list, local_out, async_op=True)
-            aux_out = aux_layers[layer_idx](x)
-            work.wait()
-            full_out = torch.cat(gather_list, dim=-1)
+            if world_size > 1:
+                comm_stream.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(comm_stream):
+                    work = dist.all_gather(gather_list, local_out, async_op=True)
+                aux_out = aux_layers[layer_idx](x)
+                work.wait()
+                full_out = torch.cat(gather_list, dim=-1)
+            else:
+                aux_out = aux_layers[layer_idx](x)
+                full_out = local_out
             proj_out = proj_layers[layer_idx](full_out)
             x = proj_out + aux_out
 

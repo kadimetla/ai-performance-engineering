@@ -35,7 +35,7 @@ def get_benchmark() -> BaseBenchmark:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--iters", type=int, default=4)
-    parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("--warmup", type=int, default=5)
     return parser.parse_args()
 
 

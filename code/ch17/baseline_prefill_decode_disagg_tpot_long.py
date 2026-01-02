@@ -8,8 +8,10 @@ from ch17.prefill_decode_disagg_multigpu_common import PrefillDecodeConfig
 from ch17.prefill_decode_disagg_single_common import PrefillDecodeSingleGPUBenchmark, attach_benchmark_metadata
 
 TPOT_LONG_CONFIG = PrefillDecodeConfig(
-    context_window=512,
+    context_window=2048,
     decode_tokens=1024,
+    requests_per_rank=16,
+    num_layers=2,
 )
 
 

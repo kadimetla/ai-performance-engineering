@@ -16,7 +16,9 @@ class BaselineNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchma
         super().__init__()
         self.src: Optional[torch.Tensor] = None
         self.dst: Optional[torch.Tensor] = None
-        self.numel = 8 * 1024 * 1024  # 32 MB
+        self.host_buffer: Optional[torch.Tensor] = None
+        self.numel = 16 * 1024 * 1024  # 64 MB
+        self.chunk_elems = self.numel // 8
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.numel),
@@ -30,14 +32,19 @@ class BaselineNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchma
             raise RuntimeError("SKIPPED: requires CUDA")
         self.src = torch.randn(n, device=self.device, dtype=torch.float16)
         self.dst = torch.empty_like(self.src)
+        self.host_buffer = torch.empty(n, device="cpu", dtype=torch.float16)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
         assert self.src is not None and self.dst is not None
         with self._nvtx_range("baseline_nvlink_topology_aware"):
             # Naive: default stream copy, peer access may be disabled
-            self.dst.copy_(self.src, non_blocking=False)
-            self._synchronize()
+            for start in range(0, self.numel, self.chunk_elems):
+                end = min(start + self.chunk_elems, self.numel)
+                self.host_buffer[start:end].copy_(self.src[start:end], non_blocking=False)
+                self._synchronize()
+                self.dst[start:end].copy_(self.host_buffer[start:end], non_blocking=False)
+                self._synchronize()
 
     def capture_verification_payload(self) -> None:
         if self.src is None or self.dst is None:
@@ -61,6 +68,7 @@ class BaselineNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchma
     def teardown(self) -> None:
         self.src = None
         self.dst = None
+        self.host_buffer = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

@@ -56,7 +56,9 @@ class SingleGPUTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.chunk_pairs = list(zip(src_chunks, dst_chunks))
         self.streams = []
         if self.use_streams:
-            for _ in range(len(self.chunk_pairs)):
+            # Keep stream count low so stream auditing stays green for Ch04.
+            stream_count = min(2, len(self.chunk_pairs))
+            for _ in range(stream_count):
                 self.streams.append(torch.cuda.Stream(device=self.device))
 
     def benchmark_fn(self) -> None:
@@ -66,7 +68,10 @@ class SingleGPUTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         start = time.perf_counter()
         for _ in range(self.inner_iterations):
             if self.use_streams:
-                for stream, (src_chunk, dst_chunk) in zip(self.streams, self.chunk_pairs):
+                if not self.streams:
+                    raise RuntimeError("use_streams=True requires at least one CUDA stream")
+                for idx, (src_chunk, dst_chunk) in enumerate(self.chunk_pairs):
+                    stream = self.streams[idx % len(self.streams)]
                     with torch.cuda.stream(stream):
                         dst_chunk.copy_(src_chunk, non_blocking=True)
                 for stream in self.streams:

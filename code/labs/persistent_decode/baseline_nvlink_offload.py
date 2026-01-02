@@ -24,12 +24,12 @@ def get_benchmark() -> NvlinkOffloadBenchmark:
         use_pinned=False,
         non_blocking=False,
         use_copy_stream=False,
-        batch_size=2,
-        num_layers=2,
-        num_heads=8,
+        batch_size=4,
+        num_layers=4,
+        num_heads=16,
         head_dim=64,
         max_seq_len=4096,
-        chunk_tokens=1024,
+        chunk_tokens=4096,
     )
     return NvlinkOffloadBenchmark(cfg, label="nvlink_offload_baseline")
 

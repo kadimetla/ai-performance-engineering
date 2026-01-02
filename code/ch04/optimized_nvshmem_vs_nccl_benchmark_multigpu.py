@@ -65,7 +65,7 @@ class OptimizedNVSHMEMVsNCCLBenchmarkMultiGPU(VerificationPayloadMixin, BaseBenc
         use_symmem = symmetric_memory_available()
         args = argparse.Namespace(
             min_bytes=256 * 1024,
-            max_bytes=16 * 1024 * 1024,
+            max_bytes=64 * 1024 * 1024,
             steps=6,
             iterations=80,
             mode="nvshmem" if use_symmem else "nccl",

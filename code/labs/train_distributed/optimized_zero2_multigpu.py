@@ -133,7 +133,7 @@ def main():
             device_ids=[device],
             static_graph=True,
             gradient_as_bucket_view=True,
-            bucket_cap_mb=25,
+            bucket_cap_mb=100,
         )
         if rank == 0:
             print("Using custom reduce-scatter hook for ZeRO-2.")

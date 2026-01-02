@@ -17,7 +17,7 @@ class BaselineDSMEMReductionBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
-        workload_n = 64 * 1024 * 1024
+        workload_n = 16 * 1024 * 1024
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="baseline_dsmem_reduction",
@@ -48,7 +48,7 @@ class BaselineDSMEMReductionBenchmark(CudaBinaryBenchmark):
         return simple_signature(
             batch_size=1,
             dtype="float32",
-            N=64 * 1024 * 1024,
+            N=16 * 1024 * 1024,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:

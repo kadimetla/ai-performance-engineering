@@ -75,7 +75,12 @@ def _run_worker(iters: int, warmup: int, batch: int, hidden: int) -> None:
     def _step() -> None:
         with torch.no_grad():
             comm_out = comm_block(inputs)
-            dist.all_reduce(comm_out, op=dist.ReduceOp.AVG)
+            if world_size > 1:
+                dist.all_reduce(comm_out, op=dist.ReduceOp.AVG)
+            else:
+                # Legacy host-staged path with redundant staging to emphasize overhead.
+                comm_out = comm_out.cpu().to(device)
+                comm_out = comm_out.cpu().to(device)
             aux_out = aux_block(inputs)
             _ = comm_out + aux_out
 

@@ -86,9 +86,9 @@ def _wrap_fsdp(model: torch.nn.Module) -> FSDP:
         sharding_strategy=ShardingStrategy.FULL_SHARD,
         mixed_precision=mp_policy,
         use_orig_params=True,
-        forward_prefetch=True,
-        backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
-        limit_all_gathers=True,
+        forward_prefetch=False,
+        backward_prefetch=BackwardPrefetch.BACKWARD_POST,
+        limit_all_gathers=False,
         device_id=torch.cuda.current_device(),
         sync_module_states=True,
     )
@@ -186,7 +186,7 @@ def get_benchmark():
     local_data_path = Path(__file__).parent / "data" / "tinystories_sample.jsonl"
     # Scale up by switching to a larger config (ex: tinyllama_config.json)
     # and matching it with a packed dataset at the desired sequence length.
-    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq256.jsonl"
+    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq512.jsonl"
     config_path = Path(__file__).parent / "data" / "tinyllama_config.json"
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "train_fsdp.py",
@@ -196,7 +196,7 @@ def get_benchmark():
             "--variant",
             "single",
             "--sequence-length",
-            "256",
+            "512",
             "--micro-batch-size",
             "4",
             "--grad-accum",

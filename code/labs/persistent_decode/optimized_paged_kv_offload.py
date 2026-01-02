@@ -1,6 +1,7 @@
 """Optimized paged KV-cache benchmark with pinned staging + async H2D copies.
 
 - Uses pinned staging buffers and an async copy stream.
+- Prefetches the next page to overlap staging with compute.
 - Enables FP8 KV only when a fused FlashAttention path is available on B200/GB200.
 """
 
@@ -31,15 +32,15 @@ def get_benchmark() -> PagedKVOffloadBenchmark:
         num_heads=16,
         head_dim=128,
         max_seq_len=16384,
-        page_tokens=1024,
-        decode_tokens=128,
+        page_tokens=4096,
+        decode_tokens=512,
         use_pinned_stage=True,
         use_async_stream=True,
         use_memmap=False,
         prefer_fp8=True,
         require_fused_fp8=False,
         fallback_dtype=torch.float16,
-        prefetch_next_page=False,
+        prefetch_next_page=True,
     )
     return PagedKVOffloadBenchmark(cfg, label="paged_kv_offload_optimized")
 

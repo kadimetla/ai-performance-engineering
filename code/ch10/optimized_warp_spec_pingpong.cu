@@ -141,7 +141,7 @@ int main() {
     // Matrix dimensions - larger for more memory traffic
     const int M = 4096;
     const int N = 4096;
-    const int K = 256;
+    const int K = 512;
     
     printf("GEMM: [%d, %d] x [%d, %d] + bias + ReLU\n", M, K, K, N);
     printf("Approach: Fused GEMM+Epilogue (no memory round-trip)\n\n");

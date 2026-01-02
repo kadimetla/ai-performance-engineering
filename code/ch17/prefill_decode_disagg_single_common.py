@@ -129,7 +129,7 @@ class PrefillDecodeSingleGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=3, warmup=2, measurement_timeout_seconds=900)
+        return BenchmarkConfig(iterations=3, warmup=5, measurement_timeout_seconds=900)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

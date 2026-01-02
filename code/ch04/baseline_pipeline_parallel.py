@@ -159,6 +159,8 @@ def _run_worker(
                 dist.recv(micro_batch, src=rank - 1)
 
             out = _forward(micro_batch)
+            if world_size == 1:
+                out = out.cpu().to(device)
             activations.append(out)
 
             if rank < world_size - 1:

@@ -22,11 +22,11 @@ class BaselineKVCacheLocalOnlyBenchmark(VerificationPayloadMixin, BaseBenchmark)
         super().__init__()
         self.output = None
         self.model: Optional[nn.MultiheadAttention] = None
-        self.hidden = 256
+        self.hidden = 512
         self.heads = 8
         self.batch = 4
-        self.seq_len = 64
-        self.local_cache_limit = 64  # tokens before spill
+        self.seq_len = 256
+        self.local_cache_limit = 32  # tokens before spill
         tokens = self.batch * self.seq_len
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch),

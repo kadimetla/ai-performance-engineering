@@ -717,7 +717,7 @@ class _PrefillDecodeMultiGPUBenchmark(VerificationPayloadMixin, BaseBenchmark):
             launch_via=LaunchVia.TORCHRUN,
             nproc_per_node=self.world_size,
             iterations=4,
-            warmup=3,
+            warmup=5,
             multi_gpu_required=True,
             measurement_timeout_seconds=900,
         )

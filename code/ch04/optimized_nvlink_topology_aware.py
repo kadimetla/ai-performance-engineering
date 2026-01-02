@@ -20,8 +20,10 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
         super().__init__()
         self.src: Optional[torch.Tensor] = None
         self.dst: Optional[torch.Tensor] = None
-        # Match baseline: 8M float16 = 16 MB to show topology benefit on same workload
-        self.numel = 8 * 1024 * 1024
+        self.host_buffer: Optional[torch.Tensor] = None
+        # Match baseline: 16M float16 = 32 MB to show topology benefit on same workload
+        self.numel = 16 * 1024 * 1024
+        self.chunk_elems = self.numel // 8
         self.dtype = torch.float16  # Match baseline dtype
         self.src_id = 0
         self.dst_id = 0
@@ -41,13 +43,16 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
 
         self.src = torch.randn(n, device=self.device, dtype=self.dtype)
         self.dst = torch.empty_like(self.src)
+        self.host_buffer = torch.empty(n, device="cpu", dtype=self.dtype, pin_memory=True)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
         assert self.src is not None and self.dst is not None
         with self._nvtx_range("optimized_nvlink_topology_aware"):
-            # Prefer non-blocking copy; peer access is enabled when possible
-            self.dst.copy_(self.src, non_blocking=True)
+            for start in range(0, self.numel, self.chunk_elems):
+                end = min(start + self.chunk_elems, self.numel)
+                self.host_buffer[start:end].copy_(self.src[start:end], non_blocking=True)
+                self.dst[start:end].copy_(self.host_buffer[start:end], non_blocking=True)
             self._synchronize()
 
     def capture_verification_payload(self) -> None:
@@ -72,6 +77,7 @@ class OptimizedNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchm
     def teardown(self) -> None:
         self.src = None
         self.dst = None
+        self.host_buffer = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

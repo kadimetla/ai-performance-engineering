@@ -49,11 +49,11 @@ class NVSHMEMPipelineParallelMultiGPU(VerificationPayloadMixin, BaseBenchmark):
                 "--batch-size",
                 "64",
                 "--num-microbatches",
-                "16",
+                "64",
                 "--seq-len",
-                "1024",
+                "512",
                 "--hidden-dim",
-                "2048",
+                "1024",
             ]
             nvshmem_main()
         finally:

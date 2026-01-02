@@ -44,14 +44,14 @@ class DisaggConfig:
     vocab_size: int = 16384
     hidden_size: int = 1536
     ffn_size: int = 6144
-    num_layers: int = 12
-    num_moe_layers: int = 6
+    num_layers: int = 8
+    num_moe_layers: int = 4
     num_experts: int = 16
     top_k: int = 2
     batch_size: int = 2
-    requests_per_rank: int = 12
+    requests_per_rank: int = 16
     context_window: int = 1536
-    decode_tokens: int = 128
+    decode_tokens: int = 64
     dtype: torch.dtype = torch.bfloat16
 
     @property
@@ -556,7 +556,7 @@ def get_benchmark() -> BaseBenchmark:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--iters", type=int, default=4)
-    parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("--warmup", type=int, default=5)
     return parser.parse_args()
 
 

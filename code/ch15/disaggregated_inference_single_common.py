@@ -22,14 +22,14 @@ class DisaggConfig:
     vocab_size: int = 16384
     hidden_size: int = 1024
     ffn_size: int = 4096
-    num_layers: int = 8
-    num_moe_layers: int = 4
+    num_layers: int = 3
+    num_moe_layers: int = 2
     num_experts: int = 16
     top_k: int = 2
     batch_size: int = 1
-    requests_per_rank: int = 4
-    context_window: int = 512
-    decode_tokens: int = 128
+    requests_per_rank: int = 10
+    context_window: int = 1536
+    decode_tokens: int = 64
     dtype: torch.dtype = torch.bfloat16
 
     @property
@@ -186,7 +186,7 @@ class DisaggregatedInferenceSingleGPUBenchmark(VerificationPayloadMixin, BaseBen
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=3, warmup=2, measurement_timeout_seconds=900)
+        return BenchmarkConfig(iterations=3, warmup=5, measurement_timeout_seconds=900)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

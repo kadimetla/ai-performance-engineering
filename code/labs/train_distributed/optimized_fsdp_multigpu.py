@@ -321,7 +321,7 @@ def get_benchmark():
     local_data_path = Path(__file__).parent / "data" / "tinystories_sample.jsonl"
     # Scale up by switching to a larger config (ex: tinyllama_config.json)
     # and matching it with a packed dataset at the desired sequence length.
-    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq128.jsonl"
+    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq512.jsonl"
     config_path = Path(__file__).parent / "data" / "tinyllama_config.json"
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "train_fsdp.py",
@@ -331,7 +331,7 @@ def get_benchmark():
             "--variant",
             "multigpu",
             "--sequence-length",
-            "128",
+            "512",
             "--micro-batch-size",
             "4",
             "--grad-accum",

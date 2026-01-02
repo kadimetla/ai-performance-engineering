@@ -29,10 +29,10 @@ class OptimizedWarpSpecPingPongBenchmark(CudaBinaryBenchmark):
                 "dtype": "float32",
                 "M": 4096,
                 "N": 4096,
-                "K": 256,
+                "K": 512,
             },
         )
-        self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
+        self.register_workload_metadata(bytes_per_iteration=float(4096 * 4096 * 4))
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
@@ -49,7 +49,7 @@ class OptimizedWarpSpecPingPongBenchmark(CudaBinaryBenchmark):
             dtype="float32",
             M=4096,
             N=4096,
-            K=256,
+            K=512,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:

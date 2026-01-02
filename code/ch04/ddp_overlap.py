@@ -93,6 +93,7 @@ class OptimizedOverlapDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.data = None
         self.target = None
         self.output = None
+        self._host_buffer = None
         self.rank = 0
         self.world_size = 1
         self.initialized = False
@@ -146,6 +147,7 @@ class OptimizedOverlapDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
         self.data = torch.randn(self.batch_size, self.hidden_size, device=self.device)
         self.target = torch.randn(self.batch_size, 1, device=self.device)
+        self._host_buffer = torch.empty_like(self.data, device="cpu", pin_memory=True)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -161,6 +163,8 @@ class OptimizedOverlapDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
             # DDP automatically overlaps gradient all-reduce with backward computation
             # when gradient_as_bucket_view=True is enabled
             loss.backward()
+            self._host_buffer.copy_(self.data, non_blocking=True)
+            self.data.copy_(self._host_buffer, non_blocking=True)
             self.optimizer.step()
             self.optimizer.zero_grad()
         self.output = output.detach()

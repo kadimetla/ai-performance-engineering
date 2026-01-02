@@ -23,12 +23,12 @@ class OptimizedKVCacheNvlinkPoolBenchmark(VerificationPayloadMixin, BaseBenchmar
         super().__init__()
         self.output = None
         self.model: Optional[nn.MultiheadAttention] = None
-        self.local_cache_limit = 64
-        self.peer_cache_limit = 64
-        self.hidden = 256
+        self.local_cache_limit = 32
+        self.peer_cache_limit = 160
+        self.hidden = 512
         self.heads = 8
         self.batch = 4
-        self.seq_len = 64
+        self.seq_len = 256
         tokens = self.batch * self.seq_len
         self.peer_device: Optional[torch.device] = None
         self._workload = WorkloadMetadata(
