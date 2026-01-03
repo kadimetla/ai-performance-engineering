@@ -33,7 +33,7 @@ python -m cli.aisp bench run --targets ch15 --profile minimal
 - Expectation baselines live next to each chapter in `expectations_{hardware_key}.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
-- `python -m cli.aisp bench run --targets ch15:disaggregated_inference_multigpu --profile minimal` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity.
+- `python -m cli.aisp bench run --targets ch15:disaggregated_inference_multigpu --profile minimal --ncu-replay-mode kernel` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity (kernel replay avoids NCU application-replay stalls on this workload).
 - `python optimized_kv_cache_management.py --validate` confirms eviction + promotion policies keep decode latency within the budget.
 - `python compare.py --examples continuous_batching` (single GPU) and `python compare.py --examples continuous_batching_multigpu` (multi-GPU) show optimized scheduling increases tokens/sec vs naive queue draining.
 

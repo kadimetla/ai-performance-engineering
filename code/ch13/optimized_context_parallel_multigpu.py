@@ -29,7 +29,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--iters", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--seq-len", type=int, default=16384)
+    parser.add_argument("--seq-len", type=int, default=8192)
     parser.add_argument("--hidden-size", type=int, default=1024)
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--num-layers", type=int, default=2)

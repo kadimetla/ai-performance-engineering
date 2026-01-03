@@ -101,6 +101,19 @@ class BaselineExpertParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBenc
             signature_overrides={"world_size": self._world_size},
         )
 
+    def _prepare_verification_payload(self) -> None:
+        if hasattr(self, "_subprocess_verify_output"):
+            return
+        self.setup()
+        try:
+            self.benchmark_fn()
+            self.capture_verification_payload()
+            self._subprocess_verify_output = self.get_verify_output()
+            self._subprocess_output_tolerance = self.get_output_tolerance()
+            self._subprocess_input_signature = self.get_input_signature()
+        finally:
+            self.teardown()
+
     def validate_result(self) -> Optional[str]:
         if self._output is None:
             return "No output captured"

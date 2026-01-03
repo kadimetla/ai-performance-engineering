@@ -36,11 +36,11 @@ from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_DEFAULT_BATCH = 512
-_DEFAULT_SEQ = 1024
-_DEFAULT_HIDDEN = 4096
-_DEFAULT_LAYERS = 12
-_DEFAULT_MICRO_BATCHES = 32
+_DEFAULT_BATCH = 64
+_DEFAULT_SEQ = 256
+_DEFAULT_HIDDEN = 1024
+_DEFAULT_LAYERS = 4
+_DEFAULT_MICRO_BATCHES = 16
 
 
 def _resolve_world_size() -> int:

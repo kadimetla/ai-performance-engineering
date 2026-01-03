@@ -627,15 +627,15 @@ def demo_pipeline_parallel(benchmark: bool = False) -> None:
     
     # Execute pipeline with multiple microbatches
     if benchmark:
-        num_microbatches = 192
-        batch_size = 8
-        seq_len = 256
-        dim = 1024
+        num_microbatches = 512
+        batch_size = 2
+        seq_len = 128
+        dim = 384
     else:
         num_microbatches = 8
-        batch_size = 8
-        seq_len = 256
-        dim = 1024
+        batch_size = 2
+        seq_len = 128
+        dim = 384
     microbatch_size = batch_size
     hidden = dim * 4
 

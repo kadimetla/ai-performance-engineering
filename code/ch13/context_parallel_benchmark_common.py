@@ -16,7 +16,7 @@ import torch.nn as nn
 @dataclass(frozen=True)
 class ContextParallelConfig:
     batch_size: int = 1
-    seq_len: int = 16384  # total sequence length across ranks
+    seq_len: int = 8192  # total sequence length across ranks
     hidden_size: int = 1024
     num_heads: int = 8
     num_layers: int = 2

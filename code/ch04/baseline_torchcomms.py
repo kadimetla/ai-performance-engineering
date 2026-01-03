@@ -31,6 +31,7 @@ logger = get_logger(__name__)
 
 _DEFAULT_BATCH = 512
 _DEFAULT_HIDDEN = 4096
+_HOST_STAGING_PASSES = 6
 
 
 def _resolve_world_size() -> int:
@@ -79,8 +80,8 @@ def _run_worker(iters: int, warmup: int, batch: int, hidden: int) -> None:
                 dist.all_reduce(comm_out, op=dist.ReduceOp.AVG)
             else:
                 # Legacy host-staged path with redundant staging to emphasize overhead.
-                comm_out = comm_out.cpu().to(device)
-                comm_out = comm_out.cpu().to(device)
+                for _ in range(_HOST_STAGING_PASSES):
+                    comm_out = comm_out.cpu().to(device, non_blocking=False)
             aux_out = aux_block(inputs)
             _ = comm_out + aux_out
 

@@ -118,7 +118,7 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "ddp.py",
-        base_args=["--mode", "baseline", "--variant", "multigpu", "--batch-size", "16"],
+        base_args=["--mode", "baseline", "--variant", "multigpu", "--batch-size", "32"],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=True,
         target_label="labs/train_distributed:ddp_multigpu",

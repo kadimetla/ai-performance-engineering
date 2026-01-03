@@ -247,7 +247,7 @@ def get_benchmark():
     """Expose torchrun-wrapped benchmark for the harness."""
     # Scale up by switching to a larger config (ex: tinyllama_config.json)
     # and matching it with a packed dataset at the desired sequence length.
-    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq512.jsonl"
+    packed_data_path = Path(__file__).parent / "data" / "tinystories_packed_seq1024.jsonl"
     config_path = Path(__file__).parent / "data" / "tinyllama_config.json"
     return TorchrunScriptBenchmark(
         script_path=Path(__file__).parent / "train_fsdp2.py",
@@ -257,11 +257,11 @@ def get_benchmark():
             "--variant",
             "single",
             "--sequence-length",
-            "512",
+            "1024",
             "--micro-batch-size",
-            "4",
+            "2",
             "--grad-accum",
-            "1",
+            "2",
         ],
         config_arg_map={"iterations": "--steps"},
         multi_gpu_required=False,
@@ -272,7 +272,8 @@ def get_benchmark():
             "AISP_TINYSTORIES_LOCAL_PATH": str(LOCAL_DATA_PATH),
             "AISP_TINYSTORIES_PACKED_PATH": str(packed_data_path),
             "AISP_TINYSTORIES_CONFIG_PATH": str(config_path),
-            "AISP_TINYSTORIES_LAYERS": "4",
+            "AISP_TINYSTORIES_LAYERS": "8",
+            "AISP_FSDP_DISABLE_FP8": "1",
             "TOKENIZERS_PARALLELISM": "false",
         },
         name="optimized_fsdp2",

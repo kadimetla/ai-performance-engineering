@@ -14,7 +14,7 @@ def get_benchmark():
             "--compression",
             "none",
             "--extra-grad-mb",
-            "2048",
+            "4096",
             "--batch-size",
             "2",
             "--bucket-cap-mb",

@@ -42,16 +42,16 @@ from core.optimization.moe_inference import (  # noqa: E402
 @dataclass(frozen=True)
 class DisaggConfig:
     vocab_size: int = 16384
-    hidden_size: int = 1536
-    ffn_size: int = 6144
-    num_layers: int = 8
-    num_moe_layers: int = 4
+    hidden_size: int = 768
+    ffn_size: int = 3072
+    num_layers: int = 4
+    num_moe_layers: int = 2
     num_experts: int = 16
     top_k: int = 2
     batch_size: int = 2
-    requests_per_rank: int = 16
-    context_window: int = 1536
-    decode_tokens: int = 64
+    requests_per_rank: int = 24
+    context_window: int = 1024
+    decode_tokens: int = 32
     dtype: torch.dtype = torch.bfloat16
 
     @property
@@ -516,6 +516,9 @@ class _DisaggregatedInferenceMultiGPUBenchmark(VerificationPayloadMixin, BaseBen
             warmup=5,
             multi_gpu_required=True,
             measurement_timeout_seconds=900,
+            # NCU application replay can hang on this workload; default to kernel replay.
+            ncu_replay_mode="kernel",
+            ncu_replay_mode_override=True,
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:

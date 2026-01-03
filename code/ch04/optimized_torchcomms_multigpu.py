@@ -35,7 +35,7 @@ logger = get_logger(__name__)
 
 _DEFAULT_BATCH = 512
 _DEFAULT_HIDDEN = 4096
-_AUX_PASSES = 6
+_AUX_PASSES = 4
 
 try:
     from torch.distributed._functional_collectives import all_reduce as functional_all_reduce

@@ -64,10 +64,10 @@ class OptimizedNVSHMEMVsNCCLBenchmarkMultiGPU(VerificationPayloadMixin, BaseBenc
     def benchmark_fn(self) -> None:
         use_symmem = symmetric_memory_available()
         args = argparse.Namespace(
-            min_bytes=256 * 1024,
-            max_bytes=64 * 1024 * 1024,
+            min_bytes=1024,
+            max_bytes=256 * 1024,
             steps=6,
-            iterations=80,
+            iterations=200,
             mode="nvshmem" if use_symmem else "nccl",
         )
         original_disable = os.environ.get("AISP_DISABLE_SYMMETRIC_MEMORY")

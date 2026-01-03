@@ -177,7 +177,7 @@ def get_benchmark():
             "--variant",
             "multigpu",
             "--batch-size",
-            "16",
+            "32",
             "--grad-accum",
             "1",
         ],

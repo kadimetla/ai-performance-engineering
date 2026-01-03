@@ -47,13 +47,13 @@ class NVSHMEMTrainingExampleMultiGPU(VerificationPayloadMixin, BaseBenchmark):
                 "--demo",
                 "pipeline",
                 "--batch-size",
-                "4",
+                "2",
                 "--seq-len",
-                "512",
+                "256",
                 "--dim",
-                "768",
+                "384",
                 "--steps",
-                "120",
+                "240",
             ]
             nvshmem_train_main()
         finally:

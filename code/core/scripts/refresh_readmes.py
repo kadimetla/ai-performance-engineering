@@ -672,7 +672,7 @@ ENTRIES["ch15"] = chapter_entry(
         ("`compare.py`, `requirements.txt`, `expectations_{hardware_key}.json`, `Makefile`", "Harness entry and dependencies for inference-focused validation."),
     ],
     validation=[
-        "`python -m cli.aisp bench run --targets ch15:disaggregated_inference_multigpu --profile minimal` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity.",
+        "`python -m cli.aisp bench run --targets ch15:disaggregated_inference_multigpu --profile minimal --ncu-replay-mode kernel` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity (kernel replay avoids NCU application-replay stalls on this workload).",
         "`python optimized_kv_cache_management.py --validate` confirms eviction + promotion policies keep decode latency within the budget.",
         "`python compare.py --examples continuous_batching` (single GPU) and `python compare.py --examples continuous_batching_multigpu` (multi-GPU) show optimized scheduling increases tokens/sec vs naive queue draining.",
     ],

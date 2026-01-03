@@ -20,16 +20,16 @@ from ch15.verification_payload_mixin import VerificationPayloadMixin
 @dataclass(frozen=True)
 class DisaggConfig:
     vocab_size: int = 16384
-    hidden_size: int = 1024
-    ffn_size: int = 4096
-    num_layers: int = 3
+    hidden_size: int = 768
+    ffn_size: int = 3072
+    num_layers: int = 4
     num_moe_layers: int = 2
     num_experts: int = 16
     top_k: int = 2
     batch_size: int = 1
-    requests_per_rank: int = 10
-    context_window: int = 1536
-    decode_tokens: int = 64
+    requests_per_rank: int = 24
+    context_window: int = 1024
+    decode_tokens: int = 32
     dtype: torch.dtype = torch.bfloat16
 
     @property

@@ -17,7 +17,7 @@ from ch04.verification_payload_mixin import VerificationPayloadMixin
 class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Baseline device copy benchmark with per-iteration allocation."""
 
-    def __init__(self, size_mb: float = 16.0):
+    def __init__(self, size_mb: float = 1.0):
         super().__init__()
         self.size_mb = size_mb
         self.numel = int((size_mb * 1024 * 1024) / 4)  # float32

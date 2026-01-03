@@ -41,10 +41,10 @@ class NVSHMEMVsNCCLBenchmarkMultiGPU(VerificationPayloadMixin, BaseBenchmark):
 
     def benchmark_fn(self) -> None:
         args = argparse.Namespace(
-            min_bytes=256 * 1024,
-            max_bytes=64 * 1024 * 1024,
+            min_bytes=1024,
+            max_bytes=256 * 1024,
             steps=6,
-            iterations=80,
+            iterations=200,
             mode="nccl",
         )
         original_disable = os.environ.get("AISP_DISABLE_SYMMETRIC_MEMORY")

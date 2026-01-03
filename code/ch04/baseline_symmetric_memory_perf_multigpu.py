@@ -51,7 +51,7 @@ class BaselineSymmetricMemoryPerfBenchmark(VerificationPayloadMixin, BaseBenchma
     """Baseline NCCL P2P send/recv benchmark for symmetric memory comparison."""
     multi_gpu_required = True
 
-    def __init__(self, size_mb: float = 16.0):
+    def __init__(self, size_mb: float = 1.0):
         super().__init__()
         self.size_mb = size_mb
         self.numel = int((size_mb * 1024 * 1024) / 4)  # float32
