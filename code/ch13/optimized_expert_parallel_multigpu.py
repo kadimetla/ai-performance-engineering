@@ -48,13 +48,13 @@ class OptimizedExpertParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBen
 
     def __init__(self) -> None:
         super().__init__()
-        self._config = ExpertParallelConfig()
+        self._ep_config = ExpertParallelConfig()
         self._world_size = torch.cuda.device_count()
         if self._world_size < 2:
             raise RuntimeError("optimized_expert_parallel_multigpu requires >=2 GPUs.")
-        tokens = self._config.batch_size * self._config.seq_len * self._world_size
+        tokens = self._ep_config.batch_size * self._ep_config.seq_len * self._world_size
         self.register_workload_metadata(
-            requests_per_iteration=float(self._config.batch_size),
+            requests_per_iteration=float(self._ep_config.batch_size),
             tokens_per_iteration=float(tokens),
         )
         self._input: Optional[torch.Tensor] = None
@@ -64,18 +64,18 @@ class OptimizedExpertParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBen
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        tokens_per_rank = self._config.batch_size * self._config.seq_len
+        tokens_per_rank = self._ep_config.batch_size * self._ep_config.seq_len
         self._input = torch.randn(
             tokens_per_rank,
-            self._config.hidden_size,
+            self._ep_config.hidden_size,
             device=self.device,
-            dtype=self._config.dtype,
+            dtype=self._ep_config.dtype,
         )
         self._expert_proj = nn.Linear(
-            self._config.hidden_size,
-            self._config.hidden_size,
+            self._ep_config.hidden_size,
+            self._ep_config.hidden_size,
             bias=False,
-            dtype=self._config.dtype,
+            dtype=self._ep_config.dtype,
         ).to(self.device)
 
     def benchmark_fn(self) -> None:
@@ -90,11 +90,11 @@ class OptimizedExpertParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBen
         self._set_verification_payload(
             inputs={"tokens": self._input},
             output=self._output,
-            batch_size=self._config.batch_size,
+            batch_size=self._ep_config.batch_size,
             parameter_count=int(param_count),
             precision_flags=PrecisionFlags(
-                fp16=self._config.dtype == torch.float16,
-                bf16=self._config.dtype == torch.bfloat16,
+                fp16=self._ep_config.dtype == torch.float16,
+                bf16=self._ep_config.dtype == torch.bfloat16,
                 tf32=False,
             ),
             output_tolerance=(0.2, 2.0),
@@ -130,6 +130,7 @@ class OptimizedExpertParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBen
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        self._prepare_verification_payload()
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],

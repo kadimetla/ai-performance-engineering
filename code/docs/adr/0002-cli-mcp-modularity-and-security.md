@@ -23,7 +23,6 @@ The codebase is primarily an educational + local tooling environment; most workf
 - If a network-facing MCP transport is introduced, security requirements must be revisited explicitly (authn/authz, rate limiting, auditing).
 
 ## Follow-ups (Roadmap)
-- Split tool registration into domain modules (e.g., `mcp/tools/gpu.py`, `mcp/tools/bench.py`) while preserving the single server entrypoint.
-- Split CLI domains into modules (e.g., `cli/domains/gpu.py`) while preserving `aisp` UX and global flags.
+- Split tool registration into domain modules (bench, gpu, etc.) while preserving the single MCP server entrypoint.
+- Split CLI domains into modules (bench, gpu, etc.) while preserving `aisp` UX and global flags.
 - If network transport is added: introduce explicit authentication configuration (token/mTLS) and document secure deployment patterns.
-

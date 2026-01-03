@@ -36,6 +36,6 @@ python -m cli.aisp bench run --targets labs/train_distributed --profile minimal
 ## Notes
 - Set `TORCHRUN_ARGS` or pass `--torchrun-env` via the CLI when launching multi-node tests.
 - `utils.py` exposes helper functions (like `resolve_topology()`) that can be reused in other labs.
-- FSDP/FSDP2 benchmarks default to `labs/train_distributed/data/tinystories_packed_seq256.jsonl` plus `labs/train_distributed/data/tinyllama_config.json`, with `AISP_TINYSTORIES_LAYERS=4` to keep the model small. Override with `AISP_TINYSTORIES_PACKED_PATH`, `AISP_TINYSTORIES_LOCAL_PATH`, `AISP_TINYSTORIES_CONFIG_PATH`, or `AISP_TINYSTORIES_LAYERS`.
+- FSDP/FSDP2 benchmarks default to `labs/train_distributed/data/tinystories_packed_seq256` (JSONL) plus `labs/train_distributed/data/tinyllama_config.json`, with `AISP_TINYSTORIES_LAYERS=4` to keep the model small. Override with `AISP_TINYSTORIES_PACKED_PATH`, `AISP_TINYSTORIES_LOCAL_PATH`, `AISP_TINYSTORIES_CONFIG_PATH`, or `AISP_TINYSTORIES_LAYERS`.
 - Scale up by increasing `AISP_TINYSTORIES_LAYERS` or swapping to a larger config and pairing it with a packed dataset that matches the new sequence length.
 - Set `AISP_FSDP_DISABLE_FP8=1` to keep the minimal BF16 path; unset it when you want to exercise the FP8 conversion on larger workloads.

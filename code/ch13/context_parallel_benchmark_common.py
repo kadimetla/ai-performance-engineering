@@ -64,9 +64,9 @@ class ContextParallelLayer(nn.Module):
     def split_qkv(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         qkv = self.qkv(x)
         q, k, v = qkv.chunk(3, dim=-1)
-        q = q.view(x.shape[0], x.shape[1], self.num_heads, self.head_dim).transpose(1, 2)
-        k = k.view(x.shape[0], x.shape[1], self.num_heads, self.head_dim).transpose(1, 2)
-        v = v.view(x.shape[0], x.shape[1], self.num_heads, self.head_dim).transpose(1, 2)
+        q = q.view(x.shape[0], x.shape[1], self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        k = k.view(x.shape[0], x.shape[1], self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        v = v.view(x.shape[0], x.shape[1], self.num_heads, self.head_dim).transpose(1, 2).contiguous()
         return q, k, v
 
     def merge_heads(self, attn: torch.Tensor) -> torch.Tensor:
@@ -186,15 +186,15 @@ def ring_attention(
             k_recv = torch.empty_like(k_current)
             v_recv = torch.empty_like(v_current)
 
-            send_k = dist.isend(k_current.contiguous(), next_rank, group=process_group)
-            recv_k = dist.irecv(k_recv, prev_rank, group=process_group)
-            send_v = dist.isend(v_current.contiguous(), next_rank, group=process_group)
-            recv_v = dist.irecv(v_recv, prev_rank, group=process_group)
-
-            send_k.wait()
-            recv_k.wait()
-            send_v.wait()
-            recv_v.wait()
+            ops = [
+                dist.P2POp(dist.isend, k_current, next_rank, group=process_group),
+                dist.P2POp(dist.irecv, k_recv, prev_rank, group=process_group),
+                dist.P2POp(dist.isend, v_current, next_rank, group=process_group),
+                dist.P2POp(dist.irecv, v_recv, prev_rank, group=process_group),
+            ]
+            reqs = dist.batch_isend_irecv(ops)
+            for req in reqs:
+                req.wait()
 
             k_current = k_recv
             v_current = v_recv

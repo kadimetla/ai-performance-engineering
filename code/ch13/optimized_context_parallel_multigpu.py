@@ -66,14 +66,14 @@ class OptimizedContextParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBe
 
     def __init__(self) -> None:
         super().__init__()
-        self._config = ContextParallelConfig()
+        self._cp_config = ContextParallelConfig()
         self._world_size = torch.cuda.device_count()
         if self._world_size < 2:
             raise RuntimeError("optimized_context_parallel_multigpu requires >=2 GPUs.")
-        self._seq_len = align_seq_len(self._config.seq_len, self._world_size)
-        tokens = self._config.batch_size * self._seq_len
+        self._seq_len = align_seq_len(self._cp_config.seq_len, self._world_size)
+        tokens = self._cp_config.batch_size * self._seq_len
         self.register_workload_metadata(
-            requests_per_iteration=float(self._config.batch_size),
+            requests_per_iteration=float(self._cp_config.batch_size),
             tokens_per_iteration=float(tokens),
         )
         self._layers: Optional[torch.nn.ModuleList] = None
@@ -83,13 +83,13 @@ class OptimizedContextParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBe
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        self._layers = build_layers(self._config, self.device)
+        self._layers = build_layers(self._cp_config, self.device)
         self._input = torch.randn(
-            self._config.batch_size,
+            self._cp_config.batch_size,
             self._seq_len,
-            self._config.hidden_size,
+            self._cp_config.hidden_size,
             device=self.device,
-            dtype=self._config.dtype,
+            dtype=self._cp_config.dtype,
         )
 
     def benchmark_fn(self) -> None:
@@ -106,7 +106,7 @@ class OptimizedContextParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBe
                 rank=0,
                 world_size=1,
                 process_group=None,
-                causal=self._config.causal,
+                causal=self._cp_config.causal,
                 seq_shard=seq_shard,
                 scale=layer.scale,
             )
@@ -120,16 +120,29 @@ class OptimizedContextParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBe
         self._set_verification_payload(
             inputs={"input": self._input},
             output=self._output,
-            batch_size=self._config.batch_size,
+            batch_size=self._cp_config.batch_size,
             parameter_count=int(param_count),
             precision_flags=PrecisionFlags(
-                fp16=self._config.dtype == torch.float16,
-                bf16=self._config.dtype == torch.bfloat16,
+                fp16=self._cp_config.dtype == torch.float16,
+                bf16=self._cp_config.dtype == torch.bfloat16,
                 tf32=False,
             ),
             output_tolerance=(0.5, 5.0),
             signature_overrides={"world_size": self._world_size},
         )
+
+    def _prepare_verification_payload(self) -> None:
+        if hasattr(self, "_subprocess_verify_output"):
+            return
+        self.setup()
+        try:
+            self.benchmark_fn()
+            self.capture_verification_payload()
+            self._subprocess_verify_output = self.get_verify_output()
+            self._subprocess_output_tolerance = self.get_output_tolerance()
+            self._subprocess_input_signature = self.get_input_signature()
+        finally:
+            self.teardown()
 
     def validate_result(self) -> Optional[str]:
         if self._output is None:
@@ -147,6 +160,7 @@ class OptimizedContextParallelMultigpuBenchmark(VerificationPayloadMixin, BaseBe
         )
 
     def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        self._prepare_verification_payload()
         return TorchrunLaunchSpec(
             script_path=Path(__file__).resolve(),
             script_args=[],

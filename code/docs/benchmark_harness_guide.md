@@ -43,13 +43,13 @@ The harness automatically discovers benchmarks using a simple naming convention:
 ch*/baseline_*.py  →  ch*/optimized_*.py
 ```
 
-**Example**: `baseline_moe.py` pairs with `optimized_moe.py` or `optimized_moe_sparse.py`
+**Example**: `baseline_moe.py` pairs with `optimized_moe.py` or `optimized_moe_streams.py`
 
 **Discovery logic**:
 - Scans all chapter directories (`ch01` through `ch20`)
 - Finds `baseline_*.py` files
 - Matches with `optimized_{name}*.py` files
-- Extracts example name (e.g., `baseline_moe_dense.py` → `moe`)
+- Extracts example name (e.g., `baseline_moe.py` → `moe`)
 - Returns tuples: `(baseline_path, [optimized_paths], example_name)`
 
 **Result**: Run **264 benchmarks** across **20 chapters** with a single command:
@@ -245,7 +245,7 @@ config = BenchmarkConfig(
 
 **Deterministic mode**:
 - `torch.use_deterministic_algorithms(True)` - Uses slower but reproducible algorithms
-- `torch.backends.cudnn.deterministic = True` - Disables cuDNN autotuning
+- `torch.backends` -> `cudnn.deterministic = True` - Disables cuDNN autotuning
 - **Trade-off**: Falls back to slower kernels (often 5–20% hit) and ops without deterministic support raise at runtime
 
 #### Run Manifest
@@ -391,7 +391,7 @@ The harness ensures **clean GPU state** between benchmarks:
 
 **Automatic cleanup**:
 - Resets CUDA state between benchmarks (prevents cascading failures)
-- Clears GPU cache (`torch.cuda.empty_cache()`)
+- Clears GPU cache (torch CUDA module `empty_cache()`)
 - Resets peak memory stats
 - Handles cold-start resets via `reset_gpu_state()` for cache/memory cleanup
 - Orchestrators may invoke `core/scripts/reset_gpu.py` for deeper resets; override the script path with `AISP_GPU_RESET_SCRIPT`
@@ -438,7 +438,7 @@ config = BenchmarkConfig(enable_cleanup=True)  # Force cleanup
 
 **Example**:
 ```python
-# Global defaults (benchmark_defaults.py)
+# Global defaults (core/benchmark/defaults.py)
 iterations = 100
 warmup = 10
 
@@ -475,7 +475,7 @@ python -m cli.aisp bench run
 8. ✅ Produces comprehensive summary
 
 **Output**:
-- `benchmark_test_results.json` (machine-readable)
+- `benchmark_test_results` (JSON, machine-readable)
 - `benchmark_test_results.md` (human-readable)
 - Profiling artifacts in `artifacts/<run_id>/`
 - Per-chapter summaries with speedup statistics

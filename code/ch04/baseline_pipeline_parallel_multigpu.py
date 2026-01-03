@@ -167,8 +167,8 @@ def _run_worker(
             if rank < world_size - 1:
                 dist.send(out, dst=rank + 1)
                 torch.cuda.synchronize(device)
-                # Naive global sync amplifies pipeline bubbles in the baseline schedule.
-                dist.barrier()
+            # Naive global sync amplifies pipeline bubbles in the baseline schedule.
+            dist.barrier()
 
         for _ in range(num_micro_batches):
             activation = activations.pop()
@@ -183,8 +183,8 @@ def _run_worker(
             if rank > 0:
                 dist.send(grad, dst=rank - 1)
                 torch.cuda.synchronize(device)
-                # Mirror the forward-path sync to keep the baseline fully serialized.
-                dist.barrier()
+            # Mirror the forward-path sync to keep the baseline fully serialized.
+            dist.barrier()
 
     for _ in range(max(warmup, 0)):
         _run_iteration()

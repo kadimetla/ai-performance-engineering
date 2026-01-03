@@ -21,7 +21,7 @@ This lab demonstrates KV cache compression techniques that enable serving longer
 |------|-------------|
 | `__init__.py` | Module exports |
 | `baseline_kv_standard.py` | FP16 KV cache (standard) |
-| `optimized_kv_fp8_compressed.py` | FP8/FP4 compressed KV cache |
+| `optimized_kv_standard.py` | FP8/FP4 compressed KV cache |
 
 ## Running
 
@@ -29,10 +29,10 @@ This lab demonstrates KV cache compression techniques that enable serving longer
 # Compare memory usage
 python -m cli.aisp bench compare \
     labs.kv_optimization.baseline_kv_standard \
-    labs.kv_optimization.optimized_kv_fp8_compressed
+    labs.kv_optimization.optimized_kv_standard
 
 # Profile memory
-python labs/kv_optimization/optimized_kv_fp8_compressed.py
+python labs/kv_optimization/optimized_kv_standard.py
 ```
 
 ## Configuration
@@ -90,6 +90,5 @@ x_fp8 = (x_blocks / scales).to(torch.float8_e4m3fn)
 - **Ch15**: KV cache management and PagedAttention
 - **Ch19**: NVFP4 and dynamic precision switching
 - **Ch18**: Speculative decoding (benefits from longer context)
-
 
 
