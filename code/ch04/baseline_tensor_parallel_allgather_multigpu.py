@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Optimized: Tensor Parallelism without per-layer sync barriers.
+"""Baseline: Tensor Parallelism with per-layer all-gather allocations.
 
-Removes redundant device syncs and global barriers after all-gather.
+Allocates gather buffers and output tensors for every layer.
 """
 
 from __future__ import annotations
@@ -34,11 +34,11 @@ from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_DEFAULT_BATCH = 16
+_DEFAULT_BATCH = 8
 _DEFAULT_SEQ = 16384
-_DEFAULT_HIDDEN = 8  # Keep hidden small so all-gather remains visible.
-_DEFAULT_LAYERS = 4
-_AUX_PASSES = 2
+_DEFAULT_HIDDEN = 4  # Keep hidden tiny to emphasize collective overhead.
+_DEFAULT_LAYERS = 12
+_AUX_PASSES = 1
 
 
 def _resolve_world_size() -> int:
@@ -46,7 +46,7 @@ def _resolve_world_size() -> int:
         raise RuntimeError("CUDA required for tensor-parallel benchmark")
     world_size = torch.cuda.device_count()
     if world_size < 2:
-        raise RuntimeError("optimized_tensor_parallel_multigpu requires >=2 GPUs.")
+        raise RuntimeError("baseline_tensor_parallel_allgather_multigpu requires >=2 GPUs.")
     return world_size
 
 
@@ -61,7 +61,7 @@ def _resolve_hidden(hidden: Optional[int], world_size: int) -> int:
 
 def _init_distributed() -> tuple[int, int, int]:
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
-        raise RuntimeError("optimized_tensor_parallel_multigpu requires torchrun (RANK/WORLD_SIZE missing).")
+        raise RuntimeError("baseline_tensor_parallel_allgather_multigpu requires torchrun (RANK/WORLD_SIZE missing).")
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
@@ -85,8 +85,6 @@ def _build_layers(hidden: int, hidden_per_rank: int, num_layers: int, device: to
             nn.Linear(hidden, hidden, bias=False),
             nn.GELU(),
             nn.Linear(hidden, hidden, bias=False),
-            nn.GELU(),
-            nn.Linear(hidden, hidden, bias=False),
         )
         for _ in range(num_layers)
     ]).to(device).to(torch.bfloat16)
@@ -103,7 +101,7 @@ def _run_worker(
 ) -> None:
     rank, world_size, local_rank = _init_distributed()
     if world_size < 2:
-        raise RuntimeError("optimized_tensor_parallel_multigpu requires >=2 GPUs.")
+        raise RuntimeError("baseline_tensor_parallel_allgather_multigpu requires >=2 GPUs.")
     hidden = _resolve_hidden(hidden, world_size)
 
     torch.manual_seed(42)
@@ -114,21 +112,19 @@ def _run_worker(
 
     shard_layers, proj_layers, aux_layers = _build_layers(hidden, hidden_per_rank, num_layers, device)
     inputs = torch.randn(batch, seq_length, hidden, device=device, dtype=torch.bfloat16)
-    gather_list = [
-        torch.empty(batch, seq_length, hidden_per_rank, device=device, dtype=torch.bfloat16)
-        for _ in range(world_size)
-    ]
-    full_out = torch.empty(batch, seq_length, hidden, device=device, dtype=torch.bfloat16)
     def _step() -> None:
         x = inputs
         for layer_idx in range(num_layers):
             local_out = shard_layers[layer_idx](x)
-            work = dist.all_gather(gather_list, local_out, async_op=True)
-            work.wait()
+            gather_list = [
+                torch.empty(batch, seq_length, hidden_per_rank, device=device, dtype=torch.bfloat16)
+                for _ in range(world_size)
+            ]
+            dist.all_gather(gather_list, local_out)
+            full_out = torch.cat(gather_list, dim=-1)
             aux_out = x
             for _ in range(_AUX_PASSES):
                 aux_out = aux_layers[layer_idx](aux_out)
-            torch.cat(gather_list, dim=-1, out=full_out)
             proj_out = proj_layers[layer_idx](full_out)
             x = proj_out + aux_out
 
@@ -153,7 +149,7 @@ def _run_worker(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Optimized tensor parallel benchmark")
+    parser = argparse.ArgumentParser(description="Baseline tensor parallel all-gather benchmark")
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=_DEFAULT_BATCH)
@@ -176,7 +172,7 @@ def main() -> None:
     )
 
 
-class OptimizedTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
+class BaselineTensorParallelAllGatherBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness entry that launches this module via torchrun."""
     multi_gpu_required = True
     preferred_ncu_replay_mode = "kernel"  # Application replay is unstable for torchrun collectives.
@@ -217,10 +213,10 @@ class OptimizedTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         x = self._input
         for layer_idx in range(_DEFAULT_LAYERS):
             local_out = self._shard_layers[layer_idx](x)
+            full_out = torch.cat([local_out] * self._world_size, dim=-1)
             aux_out = x
             for _ in range(_AUX_PASSES):
                 aux_out = self._aux_layers[layer_idx](aux_out)
-            full_out = torch.cat([local_out] * self._world_size, dim=-1)
             proj_out = self._proj_layers[layer_idx](full_out)
             x = proj_out + aux_out
         self._output = x
@@ -288,7 +284,7 @@ class OptimizedTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
             script_path=Path(__file__).resolve(),
             script_args=[],
             multi_gpu_required=True,
-            name="optimized_tensor_parallel_multigpu",
+            name="baseline_tensor_parallel_allgather_multigpu",
             config_arg_map={
                 "iterations": "--iters",
                 "warmup": "--warmup",
@@ -297,7 +293,7 @@ class OptimizedTensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
 
 def get_benchmark() -> BaseBenchmark:
-    return OptimizedTensorParallelBenchmark()
+    return BaselineTensorParallelAllGatherBenchmark()
 
 
 if __name__ == "__main__":

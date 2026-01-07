@@ -1,6 +1,6 @@
-"""Optimized paged KV-cache prefetch benchmark (async copy + prefetch).
+"""Optimized paged KV-cache prefetch benchmark (pinned async + direct H2D + prefetch).
 
-- Uses pinned staging buffers and an async copy stream.
+- Uses pinned staging buffers with an async copy stream and direct H2D copies.
 - Prefetches the next page to overlap H2D copies with compute.
 - Uses a pinned host cache (memmap disabled) to isolate overlap effects.
 """
@@ -24,14 +24,14 @@ def get_benchmark() -> PagedKVOffloadBenchmark:
         batch_size=4,
         num_heads=16,
         head_dim=128,
-        max_seq_len=32768,
+        max_seq_len=65536,
         page_tokens=8192,
-        decode_tokens=128,
-        repeat_pages=8,
+        decode_tokens=8,
+        repeat_pages=64,
         use_pinned_stage=True,
         use_async_stream=True,
         use_memmap=False,
-        prefer_fp8=True,
+        prefer_fp8=False,
         require_fused_fp8=False,
         fallback_dtype=torch.float16,
         prefetch_next_page=True,

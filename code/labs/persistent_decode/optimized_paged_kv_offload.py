@@ -1,4 +1,4 @@
-"""Optimized paged KV-cache benchmark with pinned staging + direct H2D copies.
+"""Optimized paged KV-cache benchmark with pinned staging + FP8 KV.
 
 - Uses pinned staging buffers with direct H2D copies.
 - Enables FP8 KV only when a fused FlashAttention path is available on B200/GB200.
@@ -31,14 +31,14 @@ def get_benchmark() -> PagedKVOffloadBenchmark:
         num_heads=16,
         head_dim=128,
         max_seq_len=32768,
-        page_tokens=8192,
-        decode_tokens=32,
-        repeat_pages=16,
+        page_tokens=2048,
+        decode_tokens=64,
+        repeat_pages=32,
         use_pinned_stage=True,
         use_async_stream=False,
         use_memmap=True,
         prefer_fp8=True,
-        require_fused_fp8=False,
+        require_fused_fp8=True,
         fallback_dtype=torch.float16,
         prefetch_next_page=False,
         use_direct_h2d=True,

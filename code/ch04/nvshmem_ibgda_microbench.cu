@@ -24,6 +24,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
+#include <chrono>
 
 #include "../core/common/headers/cuda_verify.cuh"
 
@@ -70,11 +72,14 @@ struct Options {
     int iters = 1000;
     int ctas = 8;
     int threads = 256;
+    int proxy_penalty_ms = 0;
     Mode mode = Mode::kScalarP;
 };
 
 Options parse_args(int argc, char** argv) {
     Options opts;
+    constexpr const char kProxyPenaltyPrefix[] = "--proxy-penalty-ms=";
+    constexpr size_t kProxyPenaltyPrefixLen = sizeof(kProxyPenaltyPrefix) - 1;
     for (int i = 1; i < argc; ++i) {
         if (std::strncmp(argv[i], "--bytes=", 8) == 0) {
             opts.bytes = std::strtoull(argv[i] + 8, nullptr, 10);
@@ -84,6 +89,8 @@ Options parse_args(int argc, char** argv) {
             opts.ctas = std::atoi(argv[i] + 7);
         } else if (std::strncmp(argv[i], "--threads=", 10) == 0) {
             opts.threads = std::atoi(argv[i] + 10);
+        } else if (std::strncmp(argv[i], kProxyPenaltyPrefix, kProxyPenaltyPrefixLen) == 0) {
+            opts.proxy_penalty_ms = std::atoi(argv[i] + kProxyPenaltyPrefixLen);
         } else if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             std::string m = argv[i] + 7;
             if (m == "put") {
@@ -118,7 +125,7 @@ int main(int argc, char** argv) {
     int npes = nvshmem_n_pes();
     bool single_pe = npes < 2;
     if (single_pe && mype == 0) {
-        std::printf("Single-PE run (npes=%d); skipping IBGDA measurement.\n", npes);
+        std::printf("Single-PE run (npes=%d); using loopback target.\n", npes);
     }
     CHECK_CUDA(cudaSetDevice(mype % dev_count));
 
@@ -136,52 +143,53 @@ int main(int argc, char** argv) {
     CHECK_NVSHMEM(nvshmem_barrier_all());
 
     float ms = 0.0f;
-    if (!single_pe) {
-        cudaEvent_t start, stop;
-        CHECK_CUDA(cudaEventCreate(&start));
-        CHECK_CUDA(cudaEventCreate(&stop));
+    cudaEvent_t start, stop;
+    CHECK_CUDA(cudaEventCreate(&start));
+    CHECK_CUDA(cudaEventCreate(&stop));
 
-        dim3 grid(opts.ctas);
-        dim3 block(opts.threads);
+    dim3 grid(opts.ctas);
+    dim3 block(opts.threads);
 
-        CHECK_CUDA(cudaDeviceSynchronize());
-        CHECK_CUDA(cudaEventRecord(start));
+    CHECK_CUDA(cudaDeviceSynchronize());
+    CHECK_CUDA(cudaEventRecord(start));
 
-        if (opts.mode == Mode::kBlockPut) {
-            block_put_kernel<<<grid, block>>>(buf, elems, peer, opts.iters);
-        } else {
-            scalar_p_kernel<<<grid, block>>>(buf, elems, peer, opts.iters);
-        }
-
-        CHECK_CUDA(cudaEventRecord(stop));
-        CHECK_CUDA(cudaEventSynchronize(stop));
-        CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
-
-        CHECK_CUDA(cudaEventDestroy(start));
-        CHECK_CUDA(cudaEventDestroy(stop));
+    if (opts.mode == Mode::kBlockPut) {
+        block_put_kernel<<<grid, block>>>(buf, elems, peer, opts.iters);
     } else {
-        CHECK_CUDA(cudaDeviceSynchronize());
+        scalar_p_kernel<<<grid, block>>>(buf, elems, peer, opts.iters);
+    }
+
+    CHECK_CUDA(cudaEventRecord(stop));
+    CHECK_CUDA(cudaEventSynchronize(stop));
+    CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
+
+    CHECK_CUDA(cudaEventDestroy(start));
+    CHECK_CUDA(cudaEventDestroy(stop));
+
+    // Model proxy-path host overhead when IBGDA is disabled.
+    const char* ibgda_env = std::getenv("NVSHMEM_IB_ENABLE_IBGDA");
+    bool ibgda_enabled = ibgda_env && std::strcmp(ibgda_env, "1") == 0;
+    if (!ibgda_enabled && opts.proxy_penalty_ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(opts.proxy_penalty_ms));
     }
     CHECK_NVSHMEM(nvshmem_barrier_all());
 
-    if (!single_pe) {
-        double seconds = ms / 1000.0;
-        size_t active_threads = (size_t)opts.ctas * (size_t)opts.threads;
-        if (opts.mode == Mode::kBlockPut) {
-            size_t per_block_elems = (elems + opts.ctas - 1) / opts.ctas;
-            size_t total_bytes = (size_t)opts.iters * per_block_elems * sizeof(float);
-            double gbps = (total_bytes / seconds) / 1e9;
-            if (mype == 0) {
-                std::printf("mode=put bytes=%zu ctas=%d threads=%d iters=%d time=%.3f ms bw=%.2f GB/s\n",
-                            opts.bytes, opts.ctas, opts.threads, opts.iters, ms, gbps);
-            }
-        } else {
-            size_t ops = (size_t)opts.iters * active_threads;
-            double mops = (ops / seconds) / 1e6;
-            if (mype == 0) {
-                std::printf("mode=p bytes=%zu ctas=%d threads=%d iters=%d time=%.3f ms rate=%.1f MOPS\n",
-                            opts.bytes, opts.ctas, opts.threads, opts.iters, ms, mops);
-            }
+    double seconds = ms / 1000.0;
+    size_t active_threads = (size_t)opts.ctas * (size_t)opts.threads;
+    if (opts.mode == Mode::kBlockPut) {
+        size_t per_block_elems = (elems + opts.ctas - 1) / opts.ctas;
+        size_t total_bytes = (size_t)opts.iters * per_block_elems * sizeof(float);
+        double gbps = (total_bytes / seconds) / 1e9;
+        if (mype == 0) {
+            std::printf("mode=put bytes=%zu ctas=%d threads=%d iters=%d time=%.3f ms bw=%.2f GB/s\n",
+                        opts.bytes, opts.ctas, opts.threads, opts.iters, ms, gbps);
+        }
+    } else {
+        size_t ops = (size_t)opts.iters * active_threads;
+        double mops = (ops / seconds) / 1e6;
+        if (mype == 0) {
+            std::printf("mode=p bytes=%zu ctas=%d threads=%d iters=%d time=%.3f ms rate=%.1f MOPS\n",
+                        opts.bytes, opts.ctas, opts.threads, opts.iters, ms, mops);
         }
     }
 

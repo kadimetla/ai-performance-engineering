@@ -42,6 +42,8 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
         threads: int = 256,
         iters: int = 500,
         world_size: int = 2,
+        ibgda_batch: int = 1,
+        proxy_penalty_ms: int = 0,
         symmetric_size: str = _default_symmetric_size(),
     ) -> None:
         self.enable_ibgda = enable_ibgda
@@ -51,6 +53,8 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
         self.threads = threads
         self.iters = iters
         self.world_size = max(1, world_size)
+        self.ibgda_batch = max(1, ibgda_batch)
+        self.proxy_penalty_ms = max(0, proxy_penalty_ms)
         self.symmetric_size = symmetric_size
         self.nvshmemrun: Optional[str] = None
         self._parsed_metrics: Dict[str, float] = {}
@@ -137,7 +141,7 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
                     "NVSHMEM_IB_ENABLE_IBGDA": "1",
                     "NVSHMEM_IBGDA_NIC_HANDLER": "gpu",
                     "NVSHMEM_IBGDA_FORCE_NIC_BUF_MEMTYPE": "gpumem",
-                    "NVSHMEM_IBGDA_NUM_REQUESTS_IN_BATCH": "1",
+                    "NVSHMEM_IBGDA_NUM_REQUESTS_IN_BATCH": str(self.ibgda_batch),
                 }
             )
         else:
@@ -166,6 +170,7 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
             f"--ctas={self.ctas}",
             f"--threads={self.threads}",
             f"--iters={self.iters}",
+            f"--proxy-penalty-ms={self.proxy_penalty_ms}",
         ]
 
     def _maybe_apply_ncu_profile_overrides(self) -> None:

@@ -13,11 +13,11 @@ from ch04.nvshmem_ibgda_microbench_multigpu import NvshmemIbgdaMicrobench
 from core.harness.benchmark_harness import BenchmarkConfig
 
 _DEFAULT_KWARGS = dict(
-    mode="p",
-    bytes_per_message=1024,
-    ctas=8,
+    mode="put",
+    bytes_per_message=1048576,
+    ctas=16,
     threads=256,
-    iters=1000,
+    iters=200,
 )
 
 
@@ -25,7 +25,7 @@ class OptimizedNvshmemIbgdaMicrobenchSingle(NvshmemIbgdaMicrobench):
     multi_gpu_required = False
 
     def __init__(self) -> None:
-        super().__init__(enable_ibgda=True, world_size=1, **_DEFAULT_KWARGS)
+        super().__init__(enable_ibgda=True, world_size=1, ibgda_batch=16, **_DEFAULT_KWARGS)
 
     def get_config(self) -> BenchmarkConfig:
         config = super().get_config()

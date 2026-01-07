@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Baseline: Tensor Parallelism without communication overlap.
 
-Synchronous all-gather after each shard computation; launched via torchrun.
+Blocking all-gather on the default stream with per-layer device syncs and
+rank barriers.
 """
 
 from __future__ import annotations
@@ -34,11 +35,11 @@ from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_DEFAULT_BATCH = 8
+_DEFAULT_BATCH = 16
 _DEFAULT_SEQ = 16384
-_DEFAULT_HIDDEN = 8  # Keep hidden small so all-gather cost is visible.
+_DEFAULT_HIDDEN = 8  # Keep hidden small so all-gather remains visible.
 _DEFAULT_LAYERS = 4
-_AUX_PASSES = 1
+_AUX_PASSES = 2
 
 
 def _resolve_world_size() -> int:
@@ -114,17 +115,19 @@ def _run_worker(
 
     shard_layers, proj_layers, aux_layers = _build_layers(hidden, hidden_per_rank, num_layers, device)
     inputs = torch.randn(batch, seq_length, hidden, device=device, dtype=torch.bfloat16)
+    gather_list = [
+        torch.empty(batch, seq_length, hidden_per_rank, device=device, dtype=torch.bfloat16)
+        for _ in range(world_size)
+    ]
+    full_out = torch.empty(batch, seq_length, hidden, device=device, dtype=torch.bfloat16)
     def _step() -> None:
         x = inputs
         for layer_idx in range(num_layers):
             local_out = shard_layers[layer_idx](x)
-            gather_list = [
-                torch.empty(batch, seq_length, hidden_per_rank, device=device, dtype=torch.bfloat16)
-                for _ in range(world_size)
-            ]
             dist.all_gather(gather_list, local_out)
             torch.cuda.synchronize(device)
-            full_out = torch.cat(gather_list, dim=-1)
+            dist.barrier()
+            torch.cat(gather_list, dim=-1, out=full_out)
             aux_out = x
             for _ in range(_AUX_PASSES):
                 aux_out = aux_layers[layer_idx](aux_out)

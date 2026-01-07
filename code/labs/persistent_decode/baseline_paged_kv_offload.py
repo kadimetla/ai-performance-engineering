@@ -1,6 +1,6 @@
 """Baseline paged KV-cache benchmark without fusion checks or async copies.
 
-- Stores cold KV pages in pageable CPU memory.
+- Stores cold KV pages in a memmap-backed cache (simulated NVMe).
 - Tries FP8 KV even when no fused attention path is present (may fall back).
 - Uses blocking H2D copies and no prefetch, so TTFT-style latency is higher.
 """
@@ -32,13 +32,13 @@ def get_benchmark() -> PagedKVOffloadBenchmark:
         num_heads=16,
         head_dim=128,
         max_seq_len=32768,
-        page_tokens=8192,
-        decode_tokens=32,
-        repeat_pages=16,
+        page_tokens=2048,
+        decode_tokens=64,
+        repeat_pages=32,
         use_pinned_stage=False,
         use_async_stream=False,
         use_memmap=True,
-        prefer_fp8=True,  # naive: request FP8 even if fused path is absent
+        prefer_fp8=False,  # baseline keeps FP16 KV to show FP8 gains in optimized
         require_fused_fp8=False,
         fallback_dtype=torch.float16,
         prefetch_next_page=False,

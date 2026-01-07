@@ -137,6 +137,10 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def _select_runtime_dtype(self) -> torch.dtype:
         if self.cfg.prefer_fp8 and _supports_fp8_kv():
             if not _supports_fused_fp8_attention():
+                if self.cfg.require_fused_fp8:
+                    raise RuntimeError(
+                        "FP8 KV requested with require_fused_fp8=True, but FP8 SDPA kernel is unavailable."
+                    )
                 self._fp8_reason = (
                     "FP8 requested but FP8 SDPA kernel unavailable; "
                     f"falling back to {self.cfg.fallback_dtype}."
@@ -168,6 +172,9 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
         slice_len = end - start
         target = self.prefetch_staging if into_prefetch else self.staging
         assert target is not None
+
+        if self.cfg.use_direct_h2d and self.cfg.use_pinned_stage and self.host_cache is not None:
+            return self.host_cache[..., start:end, :], slice_len
 
         if self.host_memmap is not None:
             np_slice = self.host_memmap[..., start:end, :]
@@ -434,13 +441,16 @@ class PagedKVOffloadBenchmark(VerificationPayloadMixin, BaseBenchmark):
     # -------------------- Harness config --------------------
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(
+        config = BenchmarkConfig(
             iterations=12,
             warmup=5,
             timeout_seconds=300,
             measurement_timeout_seconds=300,
             deterministic=False,
         )
+        # Force single-GPU visibility for consistent runs on multi-GPU hosts.
+        config.single_gpu = True
+        return config
 
     def validate_result(self) -> Optional[str]:
         if self._fp8_reason and self.cfg.prefer_fp8:

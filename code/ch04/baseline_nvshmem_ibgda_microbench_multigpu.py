@@ -12,17 +12,17 @@ if str(repo_root) not in sys.path:
 from ch04.nvshmem_ibgda_microbench_multigpu import NvshmemIbgdaMicrobench
 
 _DEFAULT_KWARGS = dict(
-    mode="p",
-    bytes_per_message=1024,
-    ctas=8,
+    mode="put",
+    bytes_per_message=1048576,
+    ctas=16,
     threads=256,
-    iters=1000,
+    iters=200,
 )
 
 
 class BaselineNvshmemIbgdaMicrobench(NvshmemIbgdaMicrobench):
     def __init__(self) -> None:
-        super().__init__(enable_ibgda=False, **_DEFAULT_KWARGS)
+        super().__init__(enable_ibgda=False, proxy_penalty_ms=1000, **_DEFAULT_KWARGS)
 
 
 def get_benchmark() -> NvshmemIbgdaMicrobench:

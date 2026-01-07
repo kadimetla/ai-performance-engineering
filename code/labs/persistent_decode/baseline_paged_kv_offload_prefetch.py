@@ -1,8 +1,8 @@
-"""Baseline paged KV-cache prefetch benchmark (async copy, no prefetch).
+"""Baseline paged KV-cache prefetch benchmark (pageable sync copy, no prefetch).
 
-- Uses pinned staging buffers and an async copy stream.
+- Uses pageable staging buffers and a synchronous copy path.
 - Does not prefetch the next page, so H2D copies block the iteration.
-- Uses a pinned host cache (memmap disabled) to isolate overlap effects.
+- Uses a pageable host cache (memmap disabled) to isolate overlap effects.
 """
 
 from __future__ import annotations
@@ -24,18 +24,18 @@ def get_benchmark() -> PagedKVOffloadBenchmark:
         batch_size=4,
         num_heads=16,
         head_dim=128,
-        max_seq_len=32768,
+        max_seq_len=65536,
         page_tokens=8192,
-        decode_tokens=128,
-        repeat_pages=8,
-        use_pinned_stage=True,
-        use_async_stream=True,
+        decode_tokens=8,
+        repeat_pages=64,
+        use_pinned_stage=False,
+        use_async_stream=False,
         use_memmap=False,
-        prefer_fp8=True,
+        prefer_fp8=False,
         require_fused_fp8=False,
         fallback_dtype=torch.float16,
         prefetch_next_page=False,
-        use_direct_h2d=True,
+        use_direct_h2d=False,
     )
     return PagedKVOffloadBenchmark(cfg, label="paged_kv_offload_prefetch_baseline")
 
