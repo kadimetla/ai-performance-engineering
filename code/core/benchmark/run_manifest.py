@@ -632,12 +632,12 @@ class RunManifest(BaseModel):
                 "hardware": {
                     "gpu_model": "NVIDIA B200-SXM5-192GB",
                     "cuda_version": "13.0",
-                    "driver_version": "580.105.08",
+                    "driver_version": "580.126.09",
                     "compute_capability": "10.0",
                     "schemaVersion": "1.0"
                 },
                 "software": {
-                    "pytorch_version": "2.10.0+cu130",
+                    "pytorch_version": "2.10.0.dev20251213+cu130",
                     "triton_version": "3.5.0",
                     "python_version": "3.12.0",
                     "os": "linux",

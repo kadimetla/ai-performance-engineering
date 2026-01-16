@@ -5,8 +5,8 @@ set -euo pipefail
 REF="${1:-${CUTLASS_REF:-8cd5bef43a2b0d3f9846b026c271593c6e4a8e8a}}"
 REPO="${CUTLASS_REPO:-https://github.com/NVIDIA/cutlass.git}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-DEST_DIR="${PROJECT_ROOT}/third_party/cutlass"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+DEST_DIR="${CUTLASS_SRC_DIR:-${PROJECT_ROOT}/third_party/cutlass}"
 
 echo "Installing CUTLASS (${REF}) into ${DEST_DIR}"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/cutlass.XXXXXX")"
@@ -27,6 +27,7 @@ else
     exit 1
 fi
 
+mkdir -p "$(dirname "${DEST_DIR}")"
 rm -rf "${DEST_DIR}"
 mv "${tmp_dir}/cutlass-src" "${DEST_DIR}"
 rm -rf "${DEST_DIR}/.git"

@@ -4,7 +4,7 @@
 # ========================================
 #
 # This script installs EVERYTHING you need:
-#   1. NVIDIA Driver 580.105.08 (auto-upgrades if needed; open kernel modules for B200)
+#   1. NVIDIA Driver 580.126.09 (auto-upgrades if needed; open kernel modules for B200)
 #   2. Python 3.12 (PyTorch 2.10-dev compatible)
 #   3. CUDA 13.0.2 toolkit + cuBLAS 13.1.0.3 (Update 2) repository
 #   4. Environment for PyTorch 2.10-dev source build with CUDA 13.0.2
@@ -58,7 +58,7 @@ set -e  # Exit on any error
 echo "AI Performance Engineering Setup Script"
 echo "=========================================="
 echo "This script will install:"
-echo "  • NVIDIA Driver 580.105.08 (auto-upgrade if needed)"
+echo "  • NVIDIA Driver 580.126.09 (auto-upgrade if needed)"
 echo "  • Python 3.12 (PyTorch 2.10-dev compatible)"
 echo "  • CUDA 13.0.2 toolkit + cuBLAS 13.1.0.3 (Update 2) repository"
 echo "  • Environment configured for PyTorch 2.10-dev source build"
@@ -71,7 +71,7 @@ echo "Note: If driver upgrade is needed, you'll be prompted to reboot."
 echo ""
 
 PROJECT_ROOT="$(dirname "$(realpath "$0")")"
-REQUIRED_DRIVER_VERSION="580.105.08"
+REQUIRED_DRIVER_VERSION="580.126.09"
 PYTHON_TARGET_VERSION="3.12"
 PYTHON_TARGET_MAJOR="${PYTHON_TARGET_VERSION%%.*}"
 PYTHON_TARGET_MINOR="${PYTHON_TARGET_VERSION##*.}"
@@ -151,8 +151,8 @@ TE_VERSION="v2.9"
 TE_BUNDLED_CUTLASS_VERSION="4.2.0"  # What TE bundles (needs symlink override)
 TE_SRC_DIR="${TE_SRC_DIR:-${THIRD_PARTY_DIR}/TransformerEngine}"
 CUTLASS_REPO_URL="${CUTLASS_REPO_URL:-https://github.com/NVIDIA/cutlass.git}"
-# CUTLASS 4.3.0 - post-release commit with corrected version.h
-CUTLASS_REF="${CUTLASS_REF:-e67e63c331d6d5ceb552aa8f7e5f5efb26565a1e}"
+# CUTLASS 4.3.0 release tag
+CUTLASS_REF="${CUTLASS_REF:-v4.3.0}"
 CUTLASS_TARGET_VERSION="${CUTLASS_TARGET_VERSION:-4.3.0}"
 CUTLASS_SRC_DIR="${CUTLASS_SRC_DIR:-${THIRD_PARTY_DIR}/cutlass}"
 PIP_ROOT_USER_ACTION="ignore"
@@ -187,7 +187,16 @@ CMAKE_CUDA_ARCH_LIST_VALUE="100;103;121;122"
 TORCH_SM_ARCH_LIST_VALUE="sm_100;sm_103;sm_121;sm_122"
 CUTLASS_NVCC_ARCHS_VALUE_DEFAULT="100;103;121;122"
 CUTLASS_NVCC_ARCHS_VALUE="${CUTLASS_NVCC_ARCHS_VALUE_DEFAULT}"
-PYTORCH_CU130_INDEX="https://download.pytorch.org/whl/cu130"
+PYTORCH_NIGHTLY_DATE="20251213"
+PYTORCH_TORCH_VERSION="2.10.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
+PYTORCH_TORCHVISION_VERSION="0.25.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
+PYTORCH_TORCHAUDIO_VERSION="2.10.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
+PYTORCH_TORCHAO_VERSION="0.16.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
+PYTORCH_TRITON_VERSION="3.6.0+git8fedd49b"
+PYTORCH_NIGHTLY_INDEX="https://download.pytorch.org/whl/nightly"
+PYTORCH_CU130_INDEX_ROOT="https://download.pytorch.org/whl/nightly/cu130"
+PYTORCH_CU130_INDEX="${PYTORCH_CU130_INDEX_ROOT}"
+PYTORCH_TORCH_FIND_LINKS="${PYTORCH_TORCH_FIND_LINKS:-https://download.pytorch.org/whl/nightly/cu130/torch/}"
 GPU_CLOCK_SERVICE_PATH="/etc/systemd/system/gpu-clock-pin.service"
 echo "Project root: $PROJECT_ROOT"
 cd "$PROJECT_ROOT"
@@ -317,19 +326,6 @@ pip_wheel() {
 
 pip_show() {
     pip_cmd show "$@"
-}
-
-torch_wheel_url() {
-    local arch="$(uname -m)"
-    case "${arch}" in
-        x86_64) arch="x86_64" ;;
-        aarch64|arm64) arch="aarch64" ;;
-        *)
-            echo "Unsupported architecture for cu130 torch wheel: ${arch}" >&2
-            return 1
-            ;;
-    esac
-echo "${PYTORCH_CU130_INDEX}/torch-2.10.0%2Bcu130-cp${PYTHON_TARGET_MAJOR}${PYTHON_TARGET_MINOR}-cp${PYTHON_TARGET_MAJOR}${PYTHON_TARGET_MINOR}-manylinux_2_28_${arch}.whl"
 }
 
 # Ensure a tool is reachable by adding a symlink in /usr/local/bin if found elsewhere.
@@ -692,7 +688,7 @@ if not all(entry["ok"] or entry["ok"] is None for entry in status.values()):
 PY
 }
 
-TORCHAO_EXTRA_INDEX_URL="https://download.pytorch.org/whl/nightly/cu130"
+TORCHAO_EXTRA_INDEX_URL="${PYTORCH_CU130_INDEX}"
 
 # Check Ubuntu version
 if ! command -v lsb_release &> /dev/null; then
@@ -740,10 +736,10 @@ if command -v nvidia-smi &> /dev/null; then
 
     DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -n 1 | tr -d ' ')
     if [[ -n "$DRIVER_VERSION" ]]; then
-        DRIVER_MAJOR=$(echo "$DRIVER_VERSION" | cut -d. -f1)
-        if [ "$DRIVER_MAJOR" -lt 580 ]; then
+        if ! dpkg --compare-versions "$DRIVER_VERSION" ge "$REQUIRED_DRIVER_VERSION"; then
             echo "Current NVIDIA driver: $DRIVER_VERSION"
-            echo "CUDA ${CUDA_SHORT_VERSION} Update 2 requires driver 580+. This script will upgrade it automatically."
+            echo "CUDA ${CUDA_SHORT_VERSION} Update 2 requires driver ${REQUIRED_DRIVER_VERSION}+."
+            echo "This script will upgrade it automatically."
         else
             echo "NVIDIA driver version: $DRIVER_VERSION (compatible with CUDA ${CUDA_SHORT_VERSION} Update 2)"
         fi
@@ -1064,14 +1060,13 @@ if dpkg -s python3-flatbuffers >/dev/null 2>&1; then
     apt remove -y python3-flatbuffers
 fi
 
-# Upgrade NVIDIA driver to 580+ if needed (required for CUDA ${CUDA_SHORT_VERSION} Update 2)
+# Upgrade NVIDIA driver to required version if needed (required for CUDA ${CUDA_SHORT_VERSION} Update 2)
 echo ""
 echo "Checking NVIDIA driver version..."
 if command -v nvidia-smi &> /dev/null; then
     CURRENT_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -n 1 | tr -d ' ')
-    DRIVER_MAJOR=$(echo "$CURRENT_DRIVER" | cut -d. -f1)
     
-    if [ "$DRIVER_MAJOR" -lt 580 ]; then
+    if ! dpkg --compare-versions "$CURRENT_DRIVER" ge "$REQUIRED_DRIVER_VERSION"; then
         echo "Current driver ($CURRENT_DRIVER) is too old for CUDA ${CUDA_SHORT_VERSION} Update 2"
         echo "Upgrading to NVIDIA driver 580 (open kernel modules)..."
         
@@ -1095,7 +1090,7 @@ if command -v nvidia-smi &> /dev/null; then
             echo "║                                                            ║"
             echo "║  After reboot:                                             ║"
             echo "║    1. Run: nvidia-smi                                      ║"
-            echo "║    2. Verify driver version is 580+                        ║"
+            echo "║    2. Verify driver version is ${REQUIRED_DRIVER_VERSION}+                 ║"
             echo "║    3. Re-run: sudo ./setup.sh                              ║"
             echo "╚════════════════════════════════════════════════════════════╝"
             echo ""
@@ -1121,7 +1116,7 @@ fi
 # Install NCCL for Blackwell optimizations
 echo ""
 echo "Installing NCCL ${NCCL_SHORT_VERSION} (Blackwell-optimized)..."
-if ! apt install -y "libnccl2=${NCCL_SHORT_VERSION}-1+cuda13.0" "libnccl-dev=${NCCL_SHORT_VERSION}-1+cuda13.0"; then
+if ! apt install -y --allow-downgrades "libnccl2=${NCCL_SHORT_VERSION}-1+cuda13.0" "libnccl-dev=${NCCL_SHORT_VERSION}-1+cuda13.0"; then
     echo "Pinned NCCL ${NCCL_SHORT_VERSION} packages unavailable; installing default libnccl2/libnccl-dev from CUDA repo."
     apt install -y libnccl2 libnccl-dev
 fi
@@ -1604,9 +1599,9 @@ if [ -f "$TEMP_REQUIREMENTS" ]; then
             nvidia-ml-py3 nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
             numpy==2.1.2 pandas==2.3.2 scikit-learn==1.7.2 pillow==11.3.0 \
             matplotlib==3.10.6 seaborn==0.13.2 tensorboard==2.20.0 wandb==0.22.0 plotly==6.3.0 bokeh==3.8.0 dash==3.2.0 \
-            click==8.2.1 \
+            click==8.1.7 \
             jupyter==1.1.1 ipykernel==6.30.1 black==25.9.0 flake8==7.3.0 mypy==1.18.2 pytest==8.3.4 typer==0.12.0 rich==13.7.0 \
-            transformers==4.40.2 datasets==2.18.0 sentencepiece==0.2.0 tokenizers==0.19.1 \
+            transformers==4.40.2 datasets==2.21.0 sentencepiece==0.2.0 tokenizers==0.19.1 \
             onnx==1.19.0 \
             py-spy==0.4.1 memory-profiler==0.61.0 line-profiler==5.0.0 pyinstrument==5.1.1 snakeviz==2.2.2 \
             optuna==4.5.0 hyperopt==0.2.7 ray==2.49.2 \
@@ -1621,9 +1616,9 @@ else
         nvidia-ml-py3 nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
         numpy==2.1.2 pandas==2.3.2 scikit-learn==1.7.2 pillow==11.3.0 \
         matplotlib==3.10.6 seaborn==0.13.2 tensorboard==2.20.0 wandb==0.22.0 plotly==6.3.0 bokeh==3.8.0 dash==3.2.0 \
-        click==8.2.1 \
+        click==8.1.7 \
         jupyter==1.1.1 ipykernel==6.30.1 black==25.9.0 flake8==7.3.0 mypy==1.18.2 pytest==8.3.4 typer==0.12.0 rich==13.7.0 \
-        transformers==4.40.2 datasets==2.18.0 sentencepiece==0.2.0 tokenizers==0.19.1 \
+        transformers==4.40.2 datasets==2.21.0 sentencepiece==0.2.0 tokenizers==0.19.1 \
         onnx==1.19.0 \
         py-spy==0.4.1 memory-profiler==0.61.0 line-profiler==5.0.0 pyinstrument==5.1.1 snakeviz==2.2.2 \
         optuna==4.5.0 hyperopt==0.2.7 ray==2.49.2 \
@@ -1634,17 +1629,21 @@ fi
 # Install PyTorch CUDA 13 stack (binary wheels only, no source builds)
 echo ""
 echo "============================================================================"
-echo "Installing PyTorch 2.10.0 cu13 stack (binary wheels only)"
+echo "Installing PyTorch nightly 2.10 cu130 stack (binary wheels only)"
 echo "============================================================================"
 echo ""
 
 echo "Removing any existing PyTorch installations..."
 pip_uninstall -y torch torchvision torchdata functorch pytorch-triton >/dev/null 2>&1 || true
 
-echo "Installing torch 2.10.0 + torchvision/torchaudio + torchao (cu13) from cu130 index..."
+echo "Installing torch ${PYTORCH_TORCH_VERSION} + torchvision/torchaudio/torchao (cu130 nightly)..."
 if ! pip_install --no-cache-dir --upgrade --ignore-installed \
-    "$(torch_wheel_url)"; then
-    echo "ERROR: torch 2.10.0+cu130 wheel install failed"
+    --index-url "${PYTORCH_CU130_INDEX}" \
+    --find-links "${PYTORCH_TORCH_FIND_LINKS}" \
+    --extra-index-url "https://pypi.org/simple" \
+    --only-binary=":all:" \
+    "torch==${PYTORCH_TORCH_VERSION}"; then
+    echo "ERROR: torch ${PYTORCH_TORCH_VERSION} install failed from nightly cu130 index"
     exit 1
 fi
 
@@ -1652,11 +1651,35 @@ if ! pip_install --no-cache-dir --upgrade --ignore-installed \
     --index-url "${PYTORCH_CU130_INDEX}" \
     --extra-index-url "https://pypi.org/simple" \
     --only-binary=":all:" \
-    torchvision==0.25.0+cu130 \
-    torchaudio==2.10.0+cu130 \
-    torchao==0.15.0+cu130 \
-    triton==3.5.1; then
-    echo "ERROR: torchvision/torchaudio/torchao install failed from cu130 index"
+    "torchvision==${PYTORCH_TORCHVISION_VERSION}"; then
+    echo "ERROR: torchvision install failed from nightly cu130 index"
+    exit 1
+fi
+
+if ! pip_install --no-cache-dir --upgrade --ignore-installed \
+    --index-url "${PYTORCH_CU130_INDEX}" \
+    --extra-index-url "https://pypi.org/simple" \
+    --only-binary=":all:" \
+    "torchaudio==${PYTORCH_TORCHAUDIO_VERSION}"; then
+    echo "ERROR: torchaudio install failed from nightly cu130 index"
+    exit 1
+fi
+
+if ! pip_install --no-cache-dir --upgrade --ignore-installed \
+    --index-url "${PYTORCH_CU130_INDEX}" \
+    --extra-index-url "https://pypi.org/simple" \
+    --only-binary=":all:" \
+    "torchao==${PYTORCH_TORCHAO_VERSION}"; then
+    echo "ERROR: torchao install failed from nightly cu130 index"
+    exit 1
+fi
+
+if ! pip_install --no-cache-dir --upgrade --ignore-installed \
+    --index-url "${PYTORCH_NIGHTLY_INDEX}" \
+    --extra-index-url "https://pypi.org/simple" \
+    --only-binary=":all:" \
+    "triton==${PYTORCH_TRITON_VERSION}"; then
+    echo "ERROR: triton install failed"
     exit 1
 fi
 
@@ -1670,21 +1693,23 @@ pip_install --no-cache-dir --upgrade --ignore-installed --no-deps torchtitan==0.
     echo "Warning: torchtitan 0.2.0 install failed; continuing without torchtitan"
 }
 
-if ! python3 - <<'PY'
+if ! PYTORCH_EXPECTED_VERSION="${PYTORCH_TORCH_VERSION}" python3 - <<'PY'
 import sys
 import torch
+import os
 
 cuda_ver = getattr(torch.version, "cuda", None) or ""
 if not cuda_ver.startswith("13."):
     print(f"ERROR: Expected cu13 torch wheel, got torch.version.cuda={cuda_ver!r}")
     sys.exit(1)
-if not torch.__version__.startswith("2.10.0+cu130"):
-    print(f"ERROR: Expected torch==2.10.0+cu130, got {torch.__version__}")
+expected = os.environ.get("PYTORCH_EXPECTED_VERSION", "")
+if expected and torch.__version__ != expected:
+    print(f"ERROR: Expected torch=={expected}, got {torch.__version__}")
     sys.exit(1)
 print(f"[setup] torch cu13 confirmed: {torch.__version__} (cuda {cuda_ver})")
 PY
 then
-    echo "ERROR: cu130 torch install did not deliver a cu13 build."
+    echo "ERROR: cu130 torch install did not deliver the expected nightly build."
     exit 1
 fi
 
@@ -1811,11 +1836,12 @@ pip_install --no-cache-dir --upgrade --ignore-installed --no-deps tokenizers==0.
 # Triton should be bundled with PyTorch, but install it explicitly to ensure it's available
 echo "Verifying triton availability (required by Transformer Engine)..."
 if ! python3 -c "import triton" 2>/dev/null; then
-    echo "  Triton not found. Installing triton from cu130 index (with --no-deps to prevent torch override)..."
+    echo "  Triton not found. Installing triton from PyTorch nightly index (with --no-deps to prevent torch override)..."
     pip_install --no-cache-dir --upgrade --no-deps \
-        --index-url "${PYTORCH_CU130_INDEX}" \
+        --index-url "${PYTORCH_NIGHTLY_INDEX}" \
         --extra-index-url "https://pypi.org/simple" \
-        triton || {
+        --only-binary=":all:" \
+        "triton==${PYTORCH_TRITON_VERSION}" || {
         echo "  Warning: Failed to install triton. Transformer Engine may not work."
     }
 else
@@ -3216,13 +3242,14 @@ fi
 # Final hard pins to ensure dependency consistency
 echo ""
 echo "Reinforcing final dependency pins (HF + TE runtime)..."
-pip_uninstall -y tokenizers huggingface-hub onnx onnxscript einops >/dev/null 2>&1 || true
+pip_uninstall -y tokenizers huggingface-hub onnx onnxscript einops fsspec >/dev/null 2>&1 || true
 pip_install --no-cache-dir --force-reinstall --ignore-installed --no-deps \
     tokenizers==0.19.1 \
     huggingface-hub==0.23.2 \
     onnx==1.19.0 \
     onnxscript==0.1.0 \
-    einops==0.8.0 || {
+    einops==0.8.0 \
+    fsspec==2024.6.1 || {
     echo "Warning: final dependency pinning failed"
 }
 
@@ -3257,9 +3284,14 @@ TE_ENV_VARS_BASE=(
 TE_WHEEL_DIR="${THIRD_PARTY_DIR}/wheels"
 mkdir -p "${TE_WHEEL_DIR}"
 
-# Keep torch pinned to cu130 production wheel (cu13 deps) for TE builds
-if ! pip_install --no-cache-dir --force-reinstall --ignore-installed "$(torch_wheel_url)"; then
-    echo "ERROR: torch cu130 wheel install failed for TE rebuild"
+# Keep torch pinned to cu130 nightly wheel (cu13 deps) for TE builds
+if ! pip_install --no-cache-dir --force-reinstall --ignore-installed --no-deps \
+    --index-url "${PYTORCH_CU130_INDEX}" \
+    --find-links "${PYTORCH_TORCH_FIND_LINKS}" \
+    --extra-index-url "https://pypi.org/simple" \
+    --only-binary=":all:" \
+    "torch==${PYTORCH_TORCH_VERSION}"; then
+    echo "ERROR: torch ${PYTORCH_TORCH_VERSION} install failed for TE rebuild"
     exit 1
 fi
 pip_install --upgrade pydantic==2.12.4 pydantic-core==2.41.5

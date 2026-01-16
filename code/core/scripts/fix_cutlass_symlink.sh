@@ -4,9 +4,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CUTLASS_SRC="${PROJECT_ROOT}/third_party/cutlass"
-TE_CUTLASS="${PROJECT_ROOT}/third_party/TransformerEngine/3rdparty/cutlass"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+CUTLASS_SRC="${CUTLASS_SRC_DIR:-${PROJECT_ROOT}/third_party/cutlass}"
+TE_CUTLASS="${TE_SRC_DIR:-${PROJECT_ROOT}/third_party/TransformerEngine}/3rdparty/cutlass"
 
 echo "🔧 CUTLASS Symlink Auto-Repair"
 echo "=============================="
@@ -85,4 +85,3 @@ else
     echo "❌ Fix failed - please check manually"
     exit 1
 fi
-
