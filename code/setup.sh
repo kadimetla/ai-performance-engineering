@@ -3408,17 +3408,29 @@ run_with_te_env pip_install --force-reinstall --no-build-isolation --no-deps "${
 # Persist runtime environment for future shells
 TE_ENV_FILE="${THIRD_PARTY_DIR}/te_sm100a_env.sh"
 CU13_LIBDIR="$(python3 - <<'PY'
-import sys, pathlib
-base = pathlib.Path(sys.prefix) / 'lib/python3.12/dist-packages/nvidia'
-cu13 = base / 'cu13' / 'lib'
-print(cu13 if cu13.exists() else '')
+import site, pathlib
+paths = []
+for sp in site.getsitepackages() + [site.getusersitepackages()]:
+    if sp:
+        paths.append(pathlib.Path(sp) / 'nvidia' / 'cu13' / 'lib')
+for candidate in paths:
+    if candidate.exists():
+        print(candidate)
+        raise SystemExit(0)
+print('')
 PY
 )"
 CUSPARSELT_LIBDIR="$(python3 - <<'PY'
-import sys, pathlib
-base = pathlib.Path(sys.prefix) / 'lib/python3.12/dist-packages/nvidia'
-cusparse = base / 'cusparselt' / 'lib'
-print(cusparse if cusparse.exists() else '')
+import site, pathlib
+paths = []
+for sp in site.getsitepackages() + [site.getusersitepackages()]:
+    if sp:
+        paths.append(pathlib.Path(sp) / 'nvidia' / 'cusparselt' / 'lib')
+for candidate in paths:
+    if candidate.exists():
+        print(candidate)
+        raise SystemExit(0)
+print('')
 PY
 )"
 if [ -z "${CU13_LIBDIR}" ] || [ -z "${CUSPARSELT_LIBDIR}" ]; then
