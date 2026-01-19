@@ -541,6 +541,60 @@
       },
       "type": "python"
     },
+    "kernel_fusion_llm_persistent_buffer_and_stream_friendly_setup": {
+      "example": "kernel_fusion_llm_persistent_buffer_and_stream_friendly_setup",
+      "metadata": {
+        "best_memory_savings_pct": 0.0,
+        "best_memory_savings_ratio": 1.0,
+        "best_optimization": "optimized_kernel_fusion_llm_persistent_buffer_and_stream_friendly_setup",
+        "best_optimization_file": "optimized_kernel_fusion_llm_persistent_buffer_and_stream_friendly_setup.py",
+        "best_optimization_memory_mb": 208.310546875,
+        "best_optimization_speedup": 2.7561989929217163,
+        "best_optimization_technique": "optimized_kernel_fusion_llm_persistent_buffer_and_stream_friendly_setup",
+        "best_optimization_time_ms": 0.42001718861716136,
+        "optimization_goal": "speed"
+      },
+      "metrics": {
+        "baseline_memory_mb": 208.310546875,
+        "baseline_p75_ms": 1.1568959951400757,
+        "baseline_throughput.bytes_per_s": null,
+        "baseline_throughput.custom_unit_name": null,
+        "baseline_throughput.custom_unit_per_s": null,
+        "baseline_throughput.goodput": null,
+        "baseline_throughput.latency_ms": 1.1576509522764307,
+        "baseline_throughput.requests_per_s": 863.8182329773733,
+        "baseline_throughput.samples_per_s": null,
+        "baseline_throughput.schemaVersion": "1.0",
+        "baseline_throughput.tokens_per_s": 138210917276.37973,
+        "baseline_time_ms": 1.1576509522764307,
+        "best_memory_savings_pct": 0.0,
+        "best_memory_savings_ratio": 1.0,
+        "best_optimized_memory_mb": 208.310546875,
+        "best_optimized_p75_ms": 0.42019200325012207,
+        "best_optimized_speedup": 2.7561989929217163,
+        "best_optimized_throughput.bytes_per_s": null,
+        "best_optimized_throughput.custom_unit_name": null,
+        "best_optimized_throughput.custom_unit_per_s": null,
+        "best_optimized_throughput.goodput": null,
+        "best_optimized_throughput.latency_ms": 0.42001718861716136,
+        "best_optimized_throughput.requests_per_s": 2380.854943799653,
+        "best_optimized_throughput.samples_per_s": null,
+        "best_optimized_throughput.schemaVersion": "1.0",
+        "best_optimized_throughput.tokens_per_s": 380936791007.9445,
+        "best_optimized_time_ms": 0.42001718861716136,
+        "best_speedup": 2.7561989929217163,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "8c4f1ec36ba7a40c973c96fd16dc040229efd45a",
+        "hardware_key": "b200",
+        "iterations": 1,
+        "profile_name": "deep_dive",
+        "timestamp": "2026-01-19T07:32:09.783760",
+        "warmup_iterations": 5
+      },
+      "type": "python"
+    },
     "kernel_launches": {
       "example": "kernel_launches",
       "metadata": {

@@ -1414,6 +1414,21 @@ class BaseBenchmark:
             torch.cuda.synchronize(self.device)
 
 
+def _maybe_write_subprocess_stderr(stderr: str, benchmark_name: str, config: BenchmarkConfig) -> None:
+    if not os.environ.get("AISP_CAPTURE_SUBPROCESS_STDERR"):
+        return
+    output_dir = getattr(config, "profiling_output_dir", None)
+    if not output_dir:
+        return
+    try:
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", benchmark_name).strip("_")
+        path = Path(output_dir) / f"{slug}_subprocess.stderr.log"
+        path.write_text(stderr)
+    except Exception:
+        pass
+
+
 class BenchmarkHarness:
     """Production-grade benchmarking harness with profiling support."""
     
@@ -2586,6 +2601,7 @@ class BenchmarkHarness:
                     if LOGGER_AVAILABLE:
                         logger.error(f"Benchmark '{benchmark_name}' subprocess failed with return code {process.returncode}")
                         logger.error(f"Stderr preview: {stderr_preview}")
+                    _maybe_write_subprocess_stderr(stderr, benchmark_name, config)
                 times_ms = cast(List[float], [])
             else:
                 # Parse JSON result from isolated runner

@@ -693,14 +693,21 @@ class LLMPatchApplier:
         # 1. Add new imports at the top (after existing imports)
         if patch.new_imports:
             import_insert_line = 0
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    if hasattr(node, 'lineno'):
-                        import_insert_line = max(import_insert_line, node.lineno)
+            for node in tree.body:
+                if isinstance(node, (ast.Import, ast.ImportFrom)) and hasattr(node, 'lineno'):
+                    import_insert_line = max(import_insert_line, node.lineno)
+            if import_insert_line == 0 and tree.body:
+                first_stmt = tree.body[0]
+                if isinstance(first_stmt, ast.Expr) and isinstance(getattr(first_stmt, "value", None), ast.Constant):
+                    if isinstance(first_stmt.value.value, str):
+                        import_insert_line = first_stmt.end_lineno or first_stmt.lineno
             
             # Insert new imports after existing ones
             for imp in reversed(patch.new_imports):
-                lines.insert(import_insert_line, imp)
+                stripped = imp.strip()
+                if not stripped:
+                    continue
+                lines.insert(import_insert_line, stripped)
             
             new_content = '\n'.join(lines)
             # Re-parse after modifying

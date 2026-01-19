@@ -263,6 +263,53 @@ _EXPECTATION_OVERRIDES: Dict[str, str] = {
     "aisp_tools_probe_hw": "Runs aisp tools probe-hw; probes hardware capabilities and writes artifacts/hardware_capabilities.json.",
 }
 
+_SELECTION_HINTS: Dict[str, str] = {
+    "aisp_triage": (
+        "First call for combined status + context; use aisp_status for a faster health-only check; "
+        "use aisp_suggest_tools when you only need tool recommendations."
+    ),
+    "aisp_status": (
+        "Health-only snapshot; use aisp_triage for context or aisp_system_full for full inventory."
+    ),
+    "aisp_suggest_tools": (
+        "Intent-to-tool mapping; use aisp_ask for answers or aisp_triage for system snapshot."
+    ),
+    "aisp_run_benchmarks": (
+        "Run benchmarks; use aisp_benchmark_targets to discover targets and "
+        "aisp_benchmark_deep_dive_compare for one-shot run+profile+diff."
+    ),
+    "aisp_benchmark_deep_dive_compare": (
+        "One-shot run+profile+diff; use aisp_run_benchmarks if you only want results without deep profiling."
+    ),
+    "aisp_benchmark_triage": (
+        "Analyze a single run; use aisp_benchmark_compare_runs to compare two runs."
+    ),
+    "aisp_benchmark_compare_runs": (
+        "Compare baseline vs candidate runs; use aisp_benchmark_triage for single-run analysis."
+    ),
+    "aisp_benchmark_report": (
+        "Human-readable PDF/HTML report; use aisp_benchmark_export for CSV/markdown/json data exports."
+    ),
+    "aisp_benchmark_export": (
+        "Raw data export (CSV/markdown/json); use aisp_benchmark_report for PDF/HTML reports."
+    ),
+    "aisp_profile_nsys": (
+        "Timeline/API tracing; use aisp_profile_ncu for kernel metrics or aisp_profile_torch for PyTorch ops."
+    ),
+    "aisp_profile_ncu": (
+        "Kernel metrics; use aisp_profile_nsys for timeline or aisp_profile_torch for PyTorch ops."
+    ),
+    "aisp_profile_torch": (
+        "PyTorch operator breakdown; use aisp_profile_nsys for timeline or aisp_profile_ncu for kernel metrics."
+    ),
+    "aisp_ask": (
+        "Conceptual performance Q&A; use aisp_explain to interpret existing tool outputs."
+    ),
+    "aisp_explain": (
+        "Interpret tool outputs/results; use aisp_ask for general performance questions."
+    ),
+}
+
 
 def _property_implies_output(prop: str) -> bool:
     """Detect property names that imply writing to disk."""
@@ -347,12 +394,17 @@ def _enrich_description(name: str, description: str, schema: Optional[Dict[str, 
     """Combine base description with derived inputs/outputs/expectations."""
     inputs_text = _format_inputs_from_schema(schema)
     expectations = _expectations_from_name_and_schema(name, schema)
-    parts = [
-        description.strip(),
-        f"Inputs: {inputs_text}.",
-        f"Outputs: {_OUTPUT_ENVELOPE_SUMMARY}",
-        f"Expectations: {expectations}",
-    ]
+    selection_hint = _SELECTION_HINTS.get(name)
+    parts = [description.strip()]
+    if selection_hint:
+        parts.append(f"Selection: {selection_hint}")
+    parts.extend(
+        [
+            f"Inputs: {inputs_text}.",
+            f"Outputs: {_OUTPUT_ENVELOPE_SUMMARY}",
+            f"Expectations: {expectations}",
+        ]
+    )
     return " ".join(parts)
 
 
@@ -586,7 +638,7 @@ def _run_tools_cli(
 
 def _run_bench_cli(args: List[str], timeout: Optional[int] = _BENCH_CLI_TIMEOUT) -> Dict[str, Any]:
     """Invoke bench CLI and return stdout/stderr/exit code."""
-    cmd = [sys.executable, "-m", "cli.aisp", "bench", *args]
+    cmd = [sys.executable, "-m", "core.benchmark.bench_commands", *args]
     env = _subprocess_env()
     started_at = time.time()
     try:
@@ -671,6 +723,12 @@ def _extract_bench_results_json(result: Dict[str, Any]) -> Optional[Path]:
 def _attach_bench_artifact_paths(result: Dict[str, Any]) -> Dict[str, Any]:
     """Attach {results_json, run_dir} to a bench CLI result when discoverable."""
     results_json = _extract_bench_results_json(result)
+    if not results_json and isinstance(result, dict):
+        run_dir = result.get("run_dir")
+        if run_dir:
+            candidate = Path(str(run_dir)) / "results" / "benchmark_test_results.json"
+            if candidate.exists():
+                results_json = candidate
     if not results_json:
         return result
 
@@ -1183,7 +1241,15 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
     {
         "type": "object",
         "properties": with_context_params({
-            "targets": {"type": "array", "items": {"type": "string"}},
+            "targets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Benchmark targets as chapter or chapter:example; "
+                    "discover via aisp_benchmark_targets or aisp_list_chapters. "
+                    "Examples: ['ch07'] or ['ch10:atomic_reduction']."
+                ),
+            },
             "profile": {
                 "type": "string",
                 "description": "Profiling preset: none (no profiling), minimal (basic), deep_dive (full nsys/ncu profiling), or roofline",
@@ -1475,7 +1541,10 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "targets": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Benchmark targets to run (chapter or chapter:example). Prefer a single example pair for clean diffs.",
+                    "description": (
+                        "Benchmark targets to run (chapter or chapter:example). Prefer a single example pair for clean diffs. "
+                        "Discover targets via aisp_benchmark_targets or aisp_list_chapters."
+                    ),
                 },
                 "output_dir": {
                     "type": "string",
@@ -1572,6 +1641,12 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
 
         bench_result = tool_run_benchmarks(bench_params)
         bench_result = _attach_bench_artifact_paths(bench_result)
+        if not isinstance(bench_result, dict):
+            return {
+                "error": "bench run failed to return a result payload",
+                "bench_result": bench_result,
+                "success": False,
+            }
 
         results_json = bench_result.get("results_json")
         run_dir = bench_result.get("run_dir")
@@ -2135,8 +2210,15 @@ def tool_benchmark_targets(params: Dict[str, Any]) -> Dict[str, Any]:
     "WORKFLOW: aisp_run_benchmarks → aisp_benchmark_triage → aisp_benchmark_report(format='html'). "
     "REQUIRES: benchmark_test_results.json from aisp_run_benchmarks.",
     {"type": "object", "properties": with_context_params({
-        "data_file": {"type": "string", "description": "Path to benchmark_test_results.json (defaults to latest)"},
-        "output": {"type": "string", "description": "Output file path (.pdf or .html)", "default": "report.pdf"},
+        "data_file": {
+            "type": "string",
+            "description": "Path to benchmark_test_results.json from aisp_run_benchmarks (defaults to latest in artifacts/).",
+        },
+        "output": {
+            "type": "string",
+            "description": "Output file path (.pdf or .html); extension should match format.",
+            "default": "report.pdf",
+        },
         "format": {"type": "string", "description": "Output format: pdf or html", "enum": ["pdf", "html"], "default": "pdf"},
         "title": {"type": "string", "description": "Report title (optional)"},
         "author": {"type": "string", "description": "Report author (optional)"},
@@ -2178,9 +2260,15 @@ def tool_benchmark_report(params: Dict[str, Any]) -> Dict[str, Any]:
     "Example: \"Export benchmarks to CSV\" or \"Convert results to markdown table\". "
     "REQUIRES: Run aisp_run_benchmarks first to generate benchmark_test_results.json. ⚡ FAST (~2s). WORKFLOW: aisp_run_benchmarks → aisp_benchmark_export. NOT FOR: Reports (use aisp_benchmark_report).",
     {"type": "object", "properties": with_context_params({
-        "data_file": {"type": "string", "description": "Path to benchmark_test_results.json (defaults to latest)"},
+        "data_file": {
+            "type": "string",
+            "description": "Path to benchmark_test_results.json from aisp_run_benchmarks (defaults to latest in artifacts/).",
+        },
         "format": {"type": "string", "description": "Output format: csv, markdown, or json", "enum": ["csv", "markdown", "json"], "default": "csv"},
-        "output": {"type": "string", "description": "Output file path (auto-generated if omitted)"},
+        "output": {
+            "type": "string",
+            "description": "Output file path (defaults to benchmark_export.<format> if omitted).",
+        },
     })}
 )
 def tool_benchmark_export(params: Dict[str, Any]) -> BenchmarkExportResult:
@@ -2258,8 +2346,14 @@ def tool_benchmark_export(params: Dict[str, Any]) -> BenchmarkExportResult:
     "4. aisp_benchmark_compare_runs(baseline=..., candidate=...) "
     "5. If regressions: aisp_analyze_bottlenecks on affected benchmarks.",
     {"type": "object", "properties": with_context_params({
-        "baseline": {"type": "string", "description": "Path to baseline benchmark_test_results.json"},
-        "candidate": {"type": "string", "description": "Path to candidate/new benchmark_test_results.json"},
+        "baseline": {
+            "type": "string",
+            "description": "Path to baseline (older) benchmark_test_results.json",
+        },
+        "candidate": {
+            "type": "string",
+            "description": "Path to candidate/new benchmark_test_results.json",
+        },
         "top": {"type": "integer", "description": "Show top N regressions/improvements", "default": 10},
     }), "required": ["baseline", "candidate"]}
 )
@@ -2303,7 +2397,7 @@ def tool_benchmark_compare_runs(params: Dict[str, Any]) -> Dict[str, Any]:
     {"type": "object", "properties": with_context_params({
         "data_file": {
             "type": "string",
-            "description": "Path to benchmark_test_results.json (defaults to latest in artifacts/)"
+            "description": "Path to benchmark_test_results.json from aisp_run_benchmarks (defaults to latest in artifacts/)."
         },
         "baseline_file": {
             "type": "string",
@@ -3335,7 +3429,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     "USE when: Deep-diving into specific kernel performance, optimizing occupancy, memory access. "
     "Example: \"Profile attention kernel with ncu\" or \"Get detailed metrics for matmul\". "
     "⚠️ VERY SLOW: Replays kernels. Use kernel_filter to limit scope. Use dry_run=true first. "
-    "workload_type: memory_bound (default, fast), compute_bound, tensor_core, attention. NOT FOR: Kernel metrics (use aisp_profile_ncu). 🕐 SLOW (varies). WORKFLOW: aisp_profile_kernels → aisp_profile_ncu. NOT FOR: Timeline (use aisp_profile_nsys).",
+    "workload_type: memory_bound (default, fast), compute_bound, tensor_core, attention. "
+    "🕐 SLOW (varies). WORKFLOW: aisp_profile_kernels → aisp_profile_ncu. NOT FOR: Timeline (use aisp_profile_nsys).",
     {"type": "object", "properties": with_context_params({
         "command": {
             "type": "array",

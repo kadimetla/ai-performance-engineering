@@ -8,6 +8,8 @@ from ch11.stream_overlap_base import ConcurrentStreamOptimized
 class OptimizedWarpSpecializationStreamsBenchmark(ConcurrentStreamOptimized):
     def __init__(self) -> None:
         super().__init__("warp_specialization_multistream")
+        # Application replay is unstable for this multistream profile on NCU.
+        self.preferred_ncu_replay_mode = "kernel"
 
 
 def get_benchmark() -> ConcurrentStreamOptimized:

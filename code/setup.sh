@@ -1535,6 +1535,7 @@ apt install -y \
     linux-tools-generic \
     "linux-tools-${KERNEL_RELEASE}" \
     gdb \
+    cmake \
     perf-tools-unstable \
     infiniband-diags \
     perftest \
@@ -1971,6 +1972,10 @@ if [ ! -f "${TE_SRC_DIR}/3rdparty/cutlass/include/cute/arch/tmem_allocator_sm100
     exit 1
 fi
 echo "  ✓ TE CUTLASS symlinked: ${TE_BUNDLED_CUTLASS_VERSION} → ${CUTLASS_TARGET_VERSION} (SM100a ready)"
+
+echo "Removing existing Transformer Engine installs to avoid dist-info skew..."
+pip_uninstall -y transformer_engine transformer-engine >/dev/null 2>&1 || true
+rm -rf "${PYTHON_DIST_PACKAGES}"/transformer_engine*.dist-info 2>/dev/null || true
 
 pip_install --no-input --upgrade --ignore-installed pybind11
 
@@ -2457,8 +2462,9 @@ fi
 VLLM_WHEEL_PATH=""
 VLLM_WHEEL_HAS_PARTS=0
 
-echo "Installing vLLM from cu13 wheels (binary only)..."
-if ! pip_install --no-cache-dir --upgrade --ignore-installed --prefer-binary --only-binary=:all: \
+echo "Installing vLLM from cu13 wheels (binary only, no deps)..."
+pip_uninstall -y vllm >/dev/null 2>&1 || true
+if ! pip_install --no-cache-dir --upgrade --ignore-installed --prefer-binary --only-binary=:all: --no-deps \
     ${VLLM_EXTRA_INDEX_URL:+--extra-index-url "${VLLM_EXTRA_INDEX_URL}"} \
     vllm; then
     echo "ERROR: Failed to install prebuilt vLLM wheel from index ${VLLM_EXTRA_INDEX_URL:-PyPI}."
@@ -2508,6 +2514,14 @@ except Exception as exc:
     print(f"ERROR: vLLM import failed: {exc}")
     raise SystemExit(1)
 PY
+
+echo ""
+echo "Verifying PyTorch CUDA after vLLM installation..."
+if ! verify_and_restore_pytorch_cuda "vLLM installation"; then
+    echo "ERROR: Failed to restore PyTorch CUDA after vLLM!"
+    exit 1
+fi
+echo "✓ PyTorch CUDA verified after vLLM"
 
 # Remove conflicting system packages that interfere with PyTorch
 echo ""
@@ -2965,6 +2979,7 @@ echo "================================================================="
 #   - All CUTLASS library headers (1000+ header files)
 echo "Installing nvidia-cutlass-dsl and cuda-python (pinned versions)..."
 pip_install --no-cache-dir --upgrade --ignore-installed "nvidia-cutlass-dsl==4.3.0" "cuda-python==13.0.3"
+pip_install --no-cache-dir --upgrade --force-reinstall --no-deps "cuda-bindings==13.0.3"
 
 if [ $? -eq 0 ]; then
     echo "CUTLASS backend packages installed (pinned versions)"
@@ -3345,6 +3360,16 @@ TE_ENV_VARS_BASE=(
     "NVTE_ENABLE_TMA=1"
 )
 
+run_with_te_env() {
+    TRITON_CODEGEN_ARCH=sm_100a \
+    TRITON_OVERRIDE_ARCH=sm100 \
+    CMAKE_CUDA_ARCHITECTURES=100a \
+    NVTE_ENABLE_FP8=1 \
+    NVTE_ENABLE_FP4=1 \
+    NVTE_ENABLE_TMA=1 \
+    "$@"
+}
+
 TE_WHEEL_DIR="${THIRD_PARTY_DIR}/wheels"
 mkdir -p "${TE_WHEEL_DIR}"
 
@@ -3371,14 +3396,14 @@ git -C "${TE_SRC_DIR}" submodule update --init --recursive
 # Build a wheel and install it (stores wheel in third_party/wheels for reuse)
 (
     cd "${TE_SRC_DIR}"
-    env "${TE_ENV_VARS_BASE[@]}" pip_wheel . -w "${TE_WHEEL_DIR}" --no-build-isolation
+    run_with_te_env pip_wheel . -w "${TE_WHEEL_DIR}" --no-build-isolation --no-deps
 )
 LATEST_TE_WHEEL="$(ls -t "${TE_WHEEL_DIR}"/transformer_engine-*.whl | head -n 1)"
 if [ -z "${LATEST_TE_WHEEL}" ]; then
     echo "ERROR: TransformerEngine wheel not built."
     exit 1
 fi
-env "${TE_ENV_VARS_BASE[@]}" pip_install --force-reinstall --no-build-isolation "${LATEST_TE_WHEEL}"
+run_with_te_env pip_install --force-reinstall --no-build-isolation --no-deps "${LATEST_TE_WHEEL}"
 
 # Persist runtime environment for future shells
 TE_ENV_FILE="${THIRD_PARTY_DIR}/te_sm100a_env.sh"

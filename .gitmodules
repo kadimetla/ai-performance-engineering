@@ -1,6 +1,7 @@
 [submodule "code/third_party/cutlass"]
 	path = code/third_party/cutlass
 	url = https://github.com/NVIDIA/cutlass.git
+	ignore = untracked
 [submodule "third_party/TransformerEngine"]
 	path = third_party/TransformerEngine
 	url = https://github.com/NVIDIA/TransformerEngine.git

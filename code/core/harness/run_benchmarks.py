@@ -22,6 +22,7 @@ from datetime import datetime
 from collections import defaultdict
 import statistics
 import math
+import difflib
 from dataclasses import dataclass, fields, replace
 import threading
 from contextlib import ExitStack, contextmanager
@@ -362,6 +363,102 @@ def find_best_optimization_entry(optimizations: List[Dict[str, Any]]) -> Optiona
             best_entry = opt
             best_speed = speed
     return best_entry
+
+
+def _resolve_report_root(bench_root: Optional[Path]) -> Path:
+    return bench_root.resolve() if bench_root else repo_root
+
+
+def _format_rel_link(target: Path, base_dir: Path) -> str:
+    try:
+        return target.resolve().relative_to(base_dir.resolve()).as_posix()
+    except Exception:
+        try:
+            return os.path.relpath(str(target.resolve()), str(base_dir.resolve()))
+        except Exception:
+            return str(target)
+
+
+def _safe_read_text(path: Path) -> Optional[str]:
+    try:
+        return path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _truncate_text(text: str, max_lines: int = 80, max_chars: int = 4000) -> str:
+    lines = text.splitlines()
+    if len(lines) > max_lines:
+        lines = lines[:max_lines] + ["... (truncated)"]
+    truncated = "\n".join(lines)
+    if len(truncated) > max_chars:
+        truncated = truncated[:max_chars] + "\n... (truncated)"
+    return truncated
+
+
+def _extract_markdown_section(text: str, header: str) -> Optional[str]:
+    lines = text.splitlines()
+    start_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip() == header:
+            start_idx = idx + 1
+            break
+    if start_idx is None:
+        return None
+    end_idx = len(lines)
+    for idx in range(start_idx, len(lines)):
+        if lines[idx].startswith("## ") and lines[idx].strip() != header:
+            end_idx = idx
+            break
+    section = "\n".join(lines[start_idx:end_idx]).strip()
+    return section or None
+
+
+def _to_blockquote(text: str) -> str:
+    return "\n".join(f"> {line}".rstrip() if line.strip() else ">" for line in text.splitlines())
+
+
+def _generate_diff(
+    original_text: str,
+    patched_text: str,
+    *,
+    from_label: str,
+    to_label: str,
+    max_lines: int = 200,
+) -> Optional[str]:
+    diff_lines = list(
+        difflib.unified_diff(
+            original_text.splitlines(keepends=True),
+            patched_text.splitlines(keepends=True),
+            fromfile=from_label,
+            tofile=to_label,
+            lineterm="",
+        )
+    )
+    if not diff_lines:
+        return None
+    if len(diff_lines) > max_lines:
+        diff_lines = diff_lines[:max_lines] + ["... (diff truncated)\n"]
+    return "".join(diff_lines)
+
+
+def _resolve_source_file(bench: Dict[str, Any], chapter_dir: Path) -> Optional[Path]:
+    best_opt = find_best_optimization_entry(bench.get("optimizations", []))
+    candidates = [
+        best_opt.get("file") if best_opt else None,
+        bench.get("baseline_file"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = chapter_dir / candidate
+        if path.exists():
+            return path
+    return None
+
+
+def _benchmark_has_llm_data(bench: Dict[str, Any]) -> bool:
+    return bool(bench.get("llm_analysis") or bench.get("llm_patches") or bench.get("best_llm_patch"))
 
 
 def start_progress_watchdog(
@@ -1640,6 +1737,39 @@ def _build_torchrun_profile_command(
     return torchrun_cmd, env
 
 
+def _harden_profile_env(
+    base_env: Optional[Dict[str, str]],
+    repo_root: Path,
+    chapter_dir: Optional[Path] = None,
+) -> Dict[str, str]:
+    env = dict(base_env or os.environ.copy())
+    pythonpath_entries = [str(repo_root)]
+    if chapter_dir is not None:
+        pythonpath_entries.append(str(chapter_dir))
+    try:
+        import site
+        for site_path in site.getsitepackages():
+            if site_path:
+                pythonpath_entries.append(site_path)
+        user_site = site.getusersitepackages()
+        if user_site:
+            pythonpath_entries.append(user_site)
+    except Exception:
+        pass
+    existing = env.get("PYTHONPATH")
+    if existing:
+        pythonpath_entries.append(existing)
+    deduped: List[str] = []
+    seen = set()
+    for entry in pythonpath_entries:
+        if not entry or entry in seen:
+            continue
+        seen.add(entry)
+        deduped.append(entry)
+    env["PYTHONPATH"] = os.pathsep.join(deduped)
+    return env
+
+
 def profile_python_benchmark(
     benchmark: Any,  # Benchmark instance
     benchmark_path: Path,
@@ -1958,6 +2088,7 @@ benchmark.teardown()
         use_torchrun = _is_torchrun_launch(config)
         if use_torchrun:
             target_command, env = _build_torchrun_profile_command(config, wrapper_script.name)
+            env = _harden_profile_env(env, repo_root, chapter_dir)
             ncu_command = profiler_config.get_ncu_command_for_target(
                 str(ncu_output.with_suffix("")),
                 target_command,
@@ -1965,7 +2096,7 @@ benchmark.teardown()
                 nvtx_includes=nvtx_includes,
             )
         else:
-            env = os.environ.copy()
+            env = _harden_profile_env(None, repo_root, chapter_dir)
             ncu_command = profiler_config.get_ncu_command(
                 str(ncu_output.with_suffix("")),
                 wrapper_script.name,
@@ -4498,8 +4629,24 @@ def _test_chapter_impl(
                                 
                                 # Load original optimized code for potential refinement
                                 original_optimized_code = None
-                                optimized_file = chapter_dir / bench_result.get('optimized_file', '')
-                                if optimized_file.exists():
+                                # Find optimized file using same logic as _apply_llm_patches_for_benchmark
+                                example_name = bench_result.get('example', '')
+                                optimizations = bench_result.get('optimizations', [])
+                                
+                                best_opt = None
+                                best_speedup = 0.0
+                                for opt in optimizations:
+                                    if opt.get('status') == 'succeeded' and opt.get('speedup', 0) > best_speedup:
+                                        best_speedup = opt.get('speedup', 0)
+                                        best_opt = opt
+                                
+                                optimized_file = chapter_dir / f"optimized_{example_name}.py"
+                                if not optimized_file.exists():
+                                    optimized_file = chapter_dir / f"baseline_{example_name}.py"
+                                if best_opt and best_opt.get('file'):
+                                    optimized_file = chapter_dir / best_opt['file']
+                                
+                                if optimized_file.exists() and optimized_file.is_file():
                                     original_optimized_code = optimized_file.read_text()
                                 
                                 for patch in benchmarkable:
@@ -4533,7 +4680,7 @@ def _test_chapter_impl(
                                             logger.info(f"      ✓ {patch.get('variant_name', 'patch')}: {patch_time:.3f}ms ({patch['actual_speedup']:.2f}x vs baseline)")
                                         
                                         # Auto-verify patched output matches original
-                                        if optimized_file.exists():
+                                        if optimized_file.exists() and optimized_file.is_file():
                                             verify_result = _verify_patched_benchmark(
                                                 str(optimized_file),
                                                 patch['patched_file'],
@@ -4607,7 +4754,7 @@ def _test_chapter_impl(
                                                                 logger.info(f"      ✓ Refined {patch.get('variant_name', 'patch')}: {patch_time:.3f}ms ({patch['actual_speedup']:.2f}x)")
                                                             
                                                             # Verify refined patch
-                                                            if optimized_file.exists():
+                                                            if optimized_file.exists() and optimized_file.is_file():
                                                                 verify_result = _verify_patched_benchmark(
                                                                     str(optimized_file),
                                                                     str(refined_path),
@@ -5079,6 +5226,7 @@ def _rebenchmark_patched_variant(
         if enable_profiling and profile_type != "none":
             profile_path = None
             patch_name = Path(patched_file).stem
+            profile_env = _harden_profile_env(None, repo_root, path.parent)
             
             if profile_output_dir:
                 profile_output_dir.mkdir(parents=True, exist_ok=True)
@@ -5089,7 +5237,7 @@ def _rebenchmark_patched_variant(
                     nsys_output = profile_output_dir / f"{patch_name}_nsys.nsys-rep" if profile_output_dir else Path(f"{patch_name}_nsys.nsys-rep")
                     cmd = ["nsys", "profile", "-o", str(nsys_output.with_suffix('')), "--force-overwrite", "true", 
                            "python", patched_file]
-                    subprocess.run(cmd, capture_output=True, timeout=120)
+                    subprocess.run(cmd, capture_output=True, timeout=120, env=profile_env)
                     if nsys_output.exists():
                         profile_path = str(nsys_output)
                         response['nsys_profile'] = profile_path
@@ -5102,7 +5250,7 @@ def _rebenchmark_patched_variant(
                     ncu_output = profile_output_dir / f"{patch_name}_ncu.ncu-rep" if profile_output_dir else Path(f"{patch_name}_ncu.ncu-rep")
                     cmd = ["ncu", "--force-overwrite", "-o", str(ncu_output.with_suffix('')), "--set", "full", 
                            "python", patched_file]
-                    subprocess.run(cmd, capture_output=True, timeout=300)
+                    subprocess.run(cmd, capture_output=True, timeout=300, env=profile_env)
                     if ncu_output.exists():
                         response['ncu_profile'] = str(ncu_output)
                 except Exception as e:
@@ -5457,6 +5605,7 @@ def _verify_patched_benchmark(
     """
     import importlib.util
     import torch
+    import traceback
     from pathlib import Path
     
     result = {
@@ -5691,6 +5840,24 @@ def _verify_patched_benchmark(
             
         orig_benchmark.setup()
         orig_benchmark.benchmark_fn()
+        try:
+            orig_benchmark.capture_verification_payload()
+        except Exception as e:
+            result['verification_type'] = 'verification_payload_error'
+            result['verified'] = False
+            result['errors'].append(f"capture_verification_payload() failed for original: {e}")
+            result['details']['reason'] = (
+                'VERIFICATION REQUIRED: capture_verification_payload() failed for original benchmark'
+            )
+            result['details']['capture_phase'] = 'original'
+            result['details']['capture_error'] = str(e)
+            result['details']['capture_traceback'] = traceback.format_exc()[-500:]
+            result['quarantine_reason'] = 'capture_verification_payload_error'
+            try:
+                orig_benchmark.teardown()
+            except Exception:
+                pass
+            return result
         # Prefer get_verify_output() method if available (consistent with FULL VERIFICATION)
         if hasattr(orig_benchmark, 'get_verify_output'):
             try:
@@ -5737,6 +5904,28 @@ def _verify_patched_benchmark(
             
         patch_benchmark.setup()
         patch_benchmark.benchmark_fn()
+        try:
+            patch_benchmark.capture_verification_payload()
+        except Exception as e:
+            result['verification_type'] = 'verification_payload_error'
+            result['verified'] = False
+            result['errors'].append(f"capture_verification_payload() failed for patched: {e}")
+            result['details']['reason'] = (
+                'VERIFICATION REQUIRED: capture_verification_payload() failed for patched benchmark'
+            )
+            result['details']['capture_phase'] = 'patched'
+            result['details']['capture_error'] = str(e)
+            result['details']['capture_traceback'] = traceback.format_exc()[-500:]
+            result['quarantine_reason'] = 'capture_verification_payload_error'
+            try:
+                patch_benchmark.teardown()
+            except Exception:
+                pass
+            try:
+                orig_benchmark.teardown()
+            except Exception:
+                pass
+            return result
         # Prefer get_verify_output() method if available (consistent with FULL VERIFICATION)
         if hasattr(patch_benchmark, 'get_verify_output'):
             try:
@@ -6214,8 +6403,20 @@ def test_chapter(
     )
 
 
-def generate_markdown_report(results: List[Dict[str, Any]], output_path: Path) -> None:
+def generate_markdown_report(
+    results: List[Dict[str, Any]],
+    output_path: Path,
+    *,
+    bench_root: Optional[Path] = None,
+) -> None:
     """Generate markdown summary report."""
+    report_root = _resolve_report_root(bench_root)
+    report_dir = output_path.parent
+    has_llm_details = any(
+        _benchmark_has_llm_data(bench)
+        for result in results
+        for bench in result.get("benchmarks", [])
+    )
     with open(output_path, 'w') as f:
         f.write("# Benchmark Test Results Summary\n\n")
         f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
@@ -6294,6 +6495,13 @@ def generate_markdown_report(results: List[Dict[str, Any]], output_path: Path) -
                 if len(all_failures) > 20:
                     f.write(f"\n*...and {len(all_failures) - 20} more failures*\n")
             f.write("\n")
+
+        if has_llm_details:
+            f.write("## LLM Transparency (Highlighted)\n\n")
+            f.write("- **LLM analysis excerpts** embedded per benchmark, with links to full analysis.\n")
+            f.write("- **Patch diffs** shown against the source file used for patching.\n")
+            f.write("- **Re-benchmark + verification outcomes** included for each patch.\n")
+            f.write("- **Best-patch explanations** linked when available.\n\n")
         
         # Per-chapter summary table
         f.write("## Per-Chapter Summary\n\n")
@@ -6373,6 +6581,129 @@ def generate_markdown_report(results: List[Dict[str, Any]], output_path: Path) -
                     
                     if bench['best_speedup'] > 1.0:
                         f.write(f"- Best speedup: {bench['best_speedup']:.2f}x\n")
+
+                if _benchmark_has_llm_data(bench):
+                    chapter_dir = report_root / r["chapter"]
+                    f.write("\n#### LLM Analysis & Patch Diffs\n\n")
+
+                    llm_result = bench.get("llm_analysis") or {}
+                    llm_path = llm_result.get("md_path")
+                    llm_md = Path(llm_path) if llm_path else None
+                    if llm_md and llm_md.exists():
+                        llm_link = _format_rel_link(llm_md, report_dir)
+                        provider = llm_result.get("provider", "unknown")
+                        model = llm_result.get("model", "unknown")
+                        latency = llm_result.get("latency_seconds")
+                        cached = llm_result.get("cached", False)
+                        latency_str = f"{latency:.1f}s" if isinstance(latency, (int, float)) else "unknown"
+                        f.write(f"- **LLM analysis:** [{llm_md.name}]({llm_link})\n")
+                        f.write(f"  - Provider: {provider} | Model: {model} | Latency: {latency_str} | Cached: {cached}\n")
+
+                        llm_text = _safe_read_text(llm_md)
+                        if llm_text:
+                            why = _extract_markdown_section(llm_text, "## Why Is It Faster?")
+                            root = _extract_markdown_section(llm_text, "## Root Cause Analysis")
+                            suggested = _extract_markdown_section(llm_text, "## Suggested Code Changes")
+                            missed = _extract_markdown_section(llm_text, "## Missed Optimization Opportunities")
+                            excerpt_parts = []
+                            for title, section in (
+                                ("Why Is It Faster?", why),
+                                ("Root Cause Analysis", root),
+                                ("Suggested Code Changes", suggested),
+                                ("Missed Optimization Opportunities", missed),
+                            ):
+                                if section:
+                                    excerpt_parts.append(f"**{title}**\n\n{section}")
+                            if not excerpt_parts:
+                                excerpt_parts = [_truncate_text(llm_text)]
+                            excerpt = "\n\n".join(excerpt_parts)
+                            excerpt = _truncate_text(excerpt)
+                            f.write("\n**LLM analysis excerpt:**\n\n")
+                            f.write(_to_blockquote(excerpt))
+                            f.write("\n\n")
+                    else:
+                        f.write("- **LLM analysis:** Not available in results\n\n")
+
+                    explanation_path = chapter_dir / "llm_explanations" / f"explanation_{bench['example']}.md"
+                    if explanation_path.exists():
+                        explanation_link = _format_rel_link(explanation_path, report_dir)
+                        f.write(f"- **Best-patch explanation:** [{explanation_path.name}]({explanation_link})\n")
+
+                    best_patch = bench.get("best_llm_patch")
+                    if best_patch:
+                        best_variant = best_patch.get("variant_name", "unknown")
+                        best_speedup = best_patch.get("actual_speedup")
+                        best_speedup_str = f"{best_speedup:.2f}x" if isinstance(best_speedup, (int, float)) else "unknown"
+                        f.write(f"- **Best LLM patch selected:** `{best_variant}` ({best_speedup_str} vs baseline)\n")
+                        promoted = best_patch.get("promoted_file")
+                        if promoted:
+                            promoted_path = Path(promoted)
+                            promoted_link = _format_rel_link(promoted_path, report_dir)
+                            f.write(f"  - Promoted file: [{promoted_path.name}]({promoted_link})\n")
+
+                    patches = bench.get("llm_patches") or []
+                    source_file = _resolve_source_file(bench, chapter_dir)
+                    source_text = _safe_read_text(source_file) if source_file else None
+                    if source_file:
+                        source_link = _format_rel_link(source_file, report_dir)
+                        f.write(f"- **Patch diff base:** [{source_file.name}]({source_link})\n")
+                    if patches:
+                        f.write("\n**Patch outcomes:**\n\n")
+                        f.write("| Variant | Expected | Actual | Median (ms) | Verified | Patch File |\n")
+                        f.write("|---------|----------|--------|-------------|----------|------------|\n")
+                        for patch in patches:
+                            variant = patch.get("variant_name", "unknown")
+                            expected = patch.get("expected_speedup", "unknown")
+                            actual = patch.get("actual_speedup")
+                            actual_str = f"{actual:.2f}x" if isinstance(actual, (int, float)) else "unknown"
+                            rebench = patch.get("rebenchmark_result", {})
+                            median = rebench.get("median_ms")
+                            median_str = format_time_ms(median) if isinstance(median, (int, float)) else "n/a"
+                            verification = patch.get("verification", {})
+                            verified = verification.get("verified")
+                            verified_str = "yes" if verified else ("no" if verified is not None else "n/a")
+                            patched_file = patch.get("patched_file")
+                            patch_link = "n/a"
+                            if patched_file:
+                                patched_path = Path(patched_file)
+                                patch_link = f"[{patched_path.name}]({_format_rel_link(patched_path, report_dir)})"
+                            f.write(f"| {variant} | {expected} | {actual_str} | {median_str} | {verified_str} | {patch_link} |\n")
+
+                        f.write("\n")
+                        for patch in patches:
+                            patched_file = patch.get("patched_file")
+                            if not patched_file:
+                                continue
+                            patched_path = Path(patched_file)
+                            if not patched_path.exists() or not source_text:
+                                continue
+                            patched_text = _safe_read_text(patched_path)
+                            if not patched_text:
+                                continue
+                            diff = _generate_diff(
+                                source_text,
+                                patched_text,
+                                from_label=str(source_file.name if source_file else "source"),
+                                to_label=str(patched_path.name),
+                            )
+                            if not diff:
+                                continue
+                            variant = patch.get("variant_name", patched_path.name)
+                            f.write("<details>\n")
+                            f.write(f"<summary>Patch diff: {variant}</summary>\n\n")
+                            f.write("```diff\n")
+                            f.write(diff)
+                            f.write("\n```\n")
+                            f.write("</details>\n\n")
+
+                        failed_patches = [p for p in patches if not p.get("success")]
+                        if failed_patches:
+                            f.write("**Failed patches:**\n\n")
+                            for patch in failed_patches:
+                                variant = patch.get("variant_name", "unknown")
+                                reason = patch.get("error") or patch.get("failure_reason") or "Unknown error"
+                                f.write(f"- `{variant}`: {reason}\n")
+                            f.write("\n")
                 
                 f.write("\n")
             
@@ -6671,7 +7002,7 @@ def main():
         logger.info(f"\nJSON results saved to: {output_json}")
     
     if args.format in ['markdown', 'both']:
-        generate_markdown_report(all_results, output_md)
+        generate_markdown_report(all_results, output_md, bench_root=active_bench_root)
         logger.info(f"Markdown report saved to: {output_md}")
     
     # Print summary

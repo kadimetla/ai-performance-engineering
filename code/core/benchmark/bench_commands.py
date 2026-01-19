@@ -493,7 +493,7 @@ def _execute_benchmarks(
             json.dump({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "results": all_results}, f, indent=2)
         logger.info(f"JSON results saved to: {output_json}")
     if output_format in ["markdown", "both"]:
-        generate_markdown_report(all_results, output_md)
+        generate_markdown_report(all_results, output_md, bench_root=active_bench_root)
         logger.info(f"Markdown report saved to: {output_md}")
 
     total_failed = sum(r.get("summary", {}).get("failed", 0) for r in all_results)
@@ -2261,3 +2261,11 @@ def main():
         sys.exit(1)
 
     app()
+
+
+if __name__ == "__main__":
+    main()
+
+
+if __name__ == "__main__":
+    main()

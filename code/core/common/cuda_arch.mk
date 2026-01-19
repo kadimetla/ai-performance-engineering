@@ -13,7 +13,7 @@
 #   CUDA_NVCC_ARCH_FLAGS- Baseline nvcc flags for the selected architecture
 #   ARCH_LIST           - Ordered list of supported architectures (sm_100, sm_103, sm_120, sm_121, sm_122, sm_123)
 
-CUDA_VERSION ?= 13.1
+CUDA_VERSION ?= 13.0
 NVCC ?= nvcc
 PYTHON ?= python3
 

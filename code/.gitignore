@@ -1,5 +1,6 @@
 book/
 third_party/TransformerEngine-src/
+third_party/wheels/
 third_party/cutlass/
 artifacts_tmp/
 .cuda_env/
