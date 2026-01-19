@@ -1390,6 +1390,31 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
             "success": False,
         }
 
+    llm_requested = bool(
+        llm_analysis
+        or force_llm
+        or apply_patches
+        or rebenchmark_llm_patches
+        or llm_explain
+    )
+    if llm_requested:
+        from core.llm import get_llm_status
+
+        llm_status = get_llm_status()
+        if os.getenv("LLM_ANALYSIS_ENABLED", "true").lower() == "false":
+            return {
+                "error": "LLM analysis disabled via LLM_ANALYSIS_ENABLED=false.",
+                "llm_status": llm_status,
+                "success": False,
+            }
+        if not llm_status.get("available"):
+            return {
+                "error": "LLM analysis requested but no LLM backend is configured.",
+                "llm_status": llm_status,
+                "hint": llm_status.get("warning") or "Set an LLM API key/base URL in .env/.env.local.",
+                "success": False,
+            }
+
     cuda_check = _cuda_precheck()
 
     args: List[str] = ["run", "--profile", profile]
@@ -1522,6 +1547,112 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
         })
 
     return steps
+
+
+@register_tool(
+    "aisp_benchmark_variants",
+    "Tags: benchmark, llm, variants, optimize, profiling. "
+    "Shortcut to profile and generate optimized variants via LLM: runs benchmarks with profile='minimal', "
+    "forces LLM analysis, applies patches, and rebenchmarks patched variants by default. "
+    "Returns the same outputs as aisp_run_benchmarks. "
+    "USE when: You want to quickly profile and generate/test/benchmark new optimized variants for a target. "
+    "Example: targets=['ch11:warp_specialization_multistream'].",
+    {
+        "type": "object",
+        "properties": with_context_params({
+            "targets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Benchmark targets as chapter or chapter:example; "
+                    "discover via aisp_benchmark_targets or aisp_list_chapters."
+                ),
+            },
+            "profile": {
+                "type": "string",
+                "description": "Profiling preset: none (no profiling), minimal (basic), deep_dive (full nsys/ncu profiling), or roofline",
+                "enum": ["none", "minimal", "deep_dive", "roofline"],
+                "default": "minimal",
+            },
+            "artifacts_dir": {
+                "type": "string",
+                "description": "Base directory for artifacts (bench creates a timestamped run dir underneath).",
+            },
+            "run_id": {
+                "type": "string",
+                "description": "Run ID for artifacts (default: timestamp)",
+            },
+            "iterations": {
+                "type": "integer",
+                "description": "Override benchmark iterations (all targets).",
+            },
+            "warmup": {
+                "type": "integer",
+                "description": "Override warmup iterations (all targets).",
+            },
+            "llm_analysis": {
+                "type": "boolean",
+                "description": "Enable LLM-powered analysis (default true for this shortcut).",
+                "default": True,
+            },
+            "force_llm": {
+                "type": "boolean",
+                "description": "Force LLM analysis on all benchmarks regardless of speedup (default true for this shortcut).",
+                "default": True,
+            },
+            "apply_patches": {
+                "type": "boolean",
+                "description": "Apply LLM-suggested patches to create new optimized variants (default true for this shortcut).",
+                "default": True,
+            },
+            "rebenchmark_llm_patches": {
+                "type": "boolean",
+                "description": "Re-benchmark LLM-patched variants (default true for this shortcut).",
+                "default": True,
+            },
+            "llm_explain": {
+                "type": "boolean",
+                "description": "Generate LLM explanations for best patches (requires rebenchmark_llm_patches=true).",
+                "default": False,
+            },
+            "async": {
+                "type": "boolean",
+                "description": "Run in background and return job_id; poll with aisp_job_status",
+                "default": False,
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "description": "Max runtime before returning with partial output; set 0/null for no timeout",
+                "default": 900,
+            },
+            "allow_invalid_environment": {
+                "type": "boolean",
+                "description": (
+                    "Allow running benchmarks even if validate_environment() reports errors. "
+                    "Still emits warnings; results may be invalid. Intended for unit tests and diagnostics."
+                ),
+                "default": False,
+            },
+            "allow_virtualization": {
+                "type": "boolean",
+                "description": (
+                    "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                    "virtualization check to a loud warning. Results are still invalid; bare metal is required."
+                ),
+                "default": False,
+            },
+        }),
+        "required": ["targets"],
+    },
+)
+def tool_benchmark_variants(params: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(params)
+    merged.setdefault("profile", "minimal")
+    merged.setdefault("llm_analysis", True)
+    merged.setdefault("force_llm", True)
+    merged.setdefault("apply_patches", True)
+    merged.setdefault("rebenchmark_llm_patches", True)
+    return tool_run_benchmarks(merged)
 
 
 @register_tool(
@@ -1732,7 +1863,11 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
                     "torch": best_opt.get("optimized_torch_trace"),
                 }
 
-                def _copy_profile(rel_path: Optional[str], dst_dir: Path) -> Optional[str]:
+                def _copy_profile(
+                    rel_path: Optional[str],
+                    dst_dir: Path,
+                    dest_stem: Optional[str] = None,
+                ) -> Optional[str]:
                     if not rel_path:
                         return None
                     src = Path(rel_path)
@@ -1741,7 +1876,11 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
                     if not src.exists():
                         return None
                     dst_dir.mkdir(parents=True, exist_ok=True)
-                    dst = dst_dir / src.name
+                    if dest_stem:
+                        suffix = "".join(src.suffixes)
+                        dst = dst_dir / f"{dest_stem}{suffix}"
+                    else:
+                        dst = dst_dir / src.name
                     shutil.copy2(src, dst)
                     return str(dst)
 
@@ -1750,12 +1889,24 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
                 profiles_dir = run_dir_path / "profiles" / f"{safe_chapter}__{safe_example}"
 
                 copied = {
-                    "baseline_nsys_rep": _copy_profile(baseline_paths["nsys"], profiles_dir),
-                    "optimized_nsys_rep": _copy_profile(optimized_paths["nsys"], profiles_dir),
-                    "baseline_ncu_rep": _copy_profile(baseline_paths["ncu"], profiles_dir),
-                    "optimized_ncu_rep": _copy_profile(optimized_paths["ncu"], profiles_dir),
-                    "baseline_torch_trace": _copy_profile(baseline_paths["torch"], profiles_dir),
-                    "optimized_torch_trace": _copy_profile(optimized_paths["torch"], profiles_dir),
+                    "baseline_nsys_rep": _copy_profile(
+                        baseline_paths["nsys"], profiles_dir, dest_stem=f"baseline_{safe_example}"
+                    ),
+                    "optimized_nsys_rep": _copy_profile(
+                        optimized_paths["nsys"], profiles_dir, dest_stem=f"optimized_{safe_example}"
+                    ),
+                    "baseline_ncu_rep": _copy_profile(
+                        baseline_paths["ncu"], profiles_dir, dest_stem=f"baseline_{safe_example}"
+                    ),
+                    "optimized_ncu_rep": _copy_profile(
+                        optimized_paths["ncu"], profiles_dir, dest_stem=f"optimized_{safe_example}"
+                    ),
+                    "baseline_torch_trace": _copy_profile(
+                        baseline_paths["torch"], profiles_dir, dest_stem=f"baseline_{safe_example}"
+                    ),
+                    "optimized_torch_trace": _copy_profile(
+                        optimized_paths["torch"], profiles_dir, dest_stem=f"optimized_{safe_example}"
+                    ),
                 }
 
                 # Run comparisons on the per-benchmark profiles_dir (contains only this pair).
@@ -2088,6 +2239,17 @@ def tool_benchmark_llm_patch_loop(params: Dict[str, Any]) -> Dict[str, Any]:
                 "timeout_seconds": timeout_seconds,
             }
             compare_result = tool_benchmark_deep_dive_compare(compare_params)
+            if not isinstance(compare_result, dict):
+                compare_runs.append(
+                    {
+                        "target": alias_target,
+                        "promoted_file": promoted.get("promoted_file"),
+                        "compare_result": compare_result,
+                        "summary": {},
+                        "error": "compare_result_missing",
+                    }
+                )
+                continue
 
             summaries: Dict[str, Any] = {}
             benchmarks = compare_result.get("benchmarks") or []

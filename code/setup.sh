@@ -3506,15 +3506,15 @@ echo "Happy performance engineering!"
 
 echo ""
 echo "Downloading GPT-OSS model and installing CLI..."
-huggingface-cli download openai/gpt-oss-20b --include "original/*" --local-dir gpt-oss-20b/ || {
+GPT_OSS_MODEL_DIR="${GPT_OSS_MODEL_DIR:-${PROJECT_ROOT}/gpt-oss-20b}"
+huggingface-cli download openai/gpt-oss-20b --include "original/*" --local-dir "${GPT_OSS_MODEL_DIR}/" || {
     echo "ERROR: Failed to download gpt-oss-20b model"
     exit 1
 }
-if ! python3 -m pip install --no-cache-dir --upgrade gpt-oss; then
+if ! pip_install --no-cache-dir --upgrade gpt-oss; then
     echo "ERROR: Failed to install gpt-oss package"
     exit 1
 fi
-python3 -m gpt_oss.chat model/ || {
-    echo "ERROR: gpt_oss chat invocation failed"
-    exit 1
-}
+if ! python3 -m gpt_oss.chat "${GPT_OSS_MODEL_DIR}"; then
+    echo "WARNING: gpt_oss chat invocation failed; skipping."
+fi

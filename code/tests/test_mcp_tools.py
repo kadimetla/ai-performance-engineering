@@ -55,6 +55,7 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_benchmark_targets",
         "aisp_list_chapters",
         "aisp_run_benchmarks",
+        "aisp_benchmark_variants",
         "aisp_benchmark_deep_dive_compare",
         "aisp_benchmark_llm_patch_loop",
         "aisp_benchmark_report",
@@ -152,6 +153,7 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
 SLOW_TOOLS = {
     "aisp_gpu_bandwidth",
     "aisp_run_benchmarks",
+    "aisp_benchmark_variants",
     "aisp_benchmark_deep_dive_compare",
     "aisp_benchmark_llm_patch_loop",
     "aisp_profile_nsys",
@@ -177,6 +179,7 @@ SLOW_TOOLS = {
 
 BENCHMARK_SLOW_TOOLS = {
     "aisp_run_benchmarks",
+    "aisp_benchmark_variants",
     "aisp_benchmark_deep_dive_compare",
     "aisp_benchmark_llm_patch_loop",
 }
@@ -188,6 +191,16 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
         "iterations": 1,
         "warmup": 5,
         "llm_analysis": False,
+    },
+    "aisp_benchmark_variants": {
+        "targets": ["ch10:atomic_reduction"],
+        "profile": "minimal",
+        "iterations": 1,
+        "warmup": 5,
+        "llm_analysis": False,
+        "force_llm": False,
+        "apply_patches": False,
+        "rebenchmark_llm_patches": False,
     },
     "aisp_benchmark_report": {
         "data_file": str(BENCH_FILE),
@@ -341,7 +354,7 @@ def test_expected_tool_registration_matches_catalog():
     expected = {case.name for case in ALL_TOOL_CASES}
     registered = set(mcp_server.TOOLS.keys())
     assert expected == registered, "Tool catalog must mirror MCP server registry"
-    assert len(expected) == 81
+    assert len(expected) == 82
 
 
 def test_tool_list_protocol_matches_registration(server: mcp_server.MCPServer):
