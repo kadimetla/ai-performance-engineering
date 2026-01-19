@@ -58,6 +58,7 @@ from core.utils.chapter_compare_template import (
     get_last_load_error,
 )
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
+from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.benchmark.defaults import BenchmarkDefaults, set_defaults, get_defaults
 from core.benchmark.run_manifest import reset_gpu_state, get_git_info
 from core.profiling.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
@@ -70,6 +71,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency during docs builds
     detect_supported_arch = None  # type: ignore[assignment]
 from core.benchmark.timing_parser import parse_kernel_time_ms
+from core.analysis.llm_patch_promotion import promote_best_llm_patch
 from core.benchmark.expectations import (
     ExpectationsStore,
     ExpectationEntry,
@@ -118,6 +120,27 @@ TORCH_PROFILER_AVAILABLE = hasattr(torch, 'profiler') and hasattr(torch.profiler
 
 # Generous timeout so deep NCU profiling can finish (pulled from benchmark defaults)
 NCU_TIMEOUT_SECONDS = get_defaults().ncu_timeout_seconds
+
+PROGRESS_PHASES = {
+    "discovery": 1,
+    "baseline_timing": 2,
+    "baseline_nsys": 3,
+    "baseline_ncu": 4,
+    "baseline_torch": 5,
+    "optimized_timing": 6,
+    "optimized_nsys": 7,
+    "optimized_ncu": 8,
+    "optimized_torch": 9,
+    "verification": 10,
+    "expectations": 11,
+    "llm_analysis": 12,
+    "llm_patch_apply": 13,
+    "llm_patch_rebenchmark": 14,
+    "llm_patch_verify": 15,
+    "llm_explain": 16,
+    "complete": 17,
+}
+PROGRESS_TOTAL_PHASES = max(PROGRESS_PHASES.values())
 
 # Import metric extraction utilities
 try:
@@ -2436,6 +2459,7 @@ def _test_chapter_impl(
     llm_patch_retries: int = 2,
     use_llm_cache: bool = True,
     llm_explain: bool = False,
+    progress_recorder: Optional[ProgressRecorder] = None,
 ) -> Dict[str, Any]:
     """Test all benchmarks in a chapter and return results.
     
@@ -2608,10 +2632,10 @@ def _test_chapter_impl(
             }
         }
     
-    progress_recorder = None
+    watchdog_record = None
     stop_watchdog = None
     if total_benchmarks:
-        progress_recorder, stop_watchdog = start_progress_watchdog(
+        watchdog_record, stop_watchdog = start_progress_watchdog(
             logger,
             chapter_name,
         )
@@ -2808,6 +2832,48 @@ def _test_chapter_impl(
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     
     done_count = 0
+    progress_ok = True
+
+    def emit_progress(
+        phase: str,
+        *,
+        step: str,
+        step_detail: Optional[str] = None,
+        artifacts: Optional[List[str]] = None,
+        metrics: Optional[Dict[str, Any]] = None,
+        percent_override: Optional[float] = None,
+    ) -> None:
+        nonlocal progress_ok
+        if not progress_recorder or not progress_ok:
+            return
+        phase_index = PROGRESS_PHASES.get(phase, 0)
+        percent_complete = percent_override
+        if percent_complete is None and total_benchmarks:
+            phase_progress = 0.0
+            if phase_index > 0 and PROGRESS_TOTAL_PHASES:
+                phase_progress = (phase_index - 1) / PROGRESS_TOTAL_PHASES
+            percent_complete = ((done_count + phase_progress) / total_benchmarks) * 100.0
+        event = ProgressEvent(
+            phase=phase,
+            phase_index=phase_index,
+            total_phases=PROGRESS_TOTAL_PHASES,
+            step=step,
+            step_detail=step_detail,
+            percent_complete=percent_complete,
+            artifacts=artifacts or [],
+            metrics=metrics or {},
+        )
+        try:
+            progress_recorder.emit(event)
+        except Exception as exc:
+            progress_ok = False
+            logger.warning("Progress updates disabled: %s", exc)
+
+    emit_progress(
+        "discovery",
+        step=f"{chapter_name}:discovery",
+        step_detail=f"python={len(python_pairs)} cuda={len(cuda_pairs)} total={total_benchmarks}",
+    )
 
     def _record_manifest(
         run: Any,
@@ -2833,8 +2899,18 @@ def _test_chapter_impl(
     def mark_progress(example_label: str) -> None:
         nonlocal done_count
         done_count += 1
-        if progress_recorder:
-            progress_recorder(f"{chapter_name}:{example_label} ({done_count}/{total_benchmarks})")
+        if total_benchmarks:
+            percent = (done_count / total_benchmarks) * 100.0
+        else:
+            percent = None
+        emit_progress(
+            "complete",
+            step=f"{chapter_name}:{example_label}",
+            step_detail=f"completed {done_count}/{total_benchmarks}",
+            percent_override=percent,
+        )
+        if watchdog_record:
+            watchdog_record(f"{chapter_name}:{example_label} ({done_count}/{total_benchmarks})")
 
     from contextlib import ExitStack
 
@@ -2910,11 +2986,17 @@ def _test_chapter_impl(
                 reset_cuda_state()  # Reset after failure or skip
                 if cold_start:
                     reset_gpu_state()
+                mark_progress(example_name)
                 continue
             
             try:
                 # Use benchmark_with_manifest for reproducibility
                 run_id = f"{chapter_name}_{example_name}_baseline"
+                emit_progress(
+                    "baseline_timing",
+                    step=f"{chapter_name}:{example_name}",
+                    step_detail="baseline timing",
+                )
                 baseline_run, baseline_config = _run_with_config(
                     baseline_benchmark,
                     run_id=run_id,
@@ -3067,6 +3149,11 @@ def _test_chapter_impl(
                     
                     # nsys profiling
                     if check_nsys_available():
+                        emit_progress(
+                            "baseline_nsys",
+                            step=f"{chapter_name}:{example_name}",
+                            step_detail="nsys profiling (baseline)",
+                        )
                         logger.info(f"      nsys...")
                         nsys_path = profile_python_benchmark(
                             baseline_benchmark,
@@ -3090,6 +3177,11 @@ def _test_chapter_impl(
                     
                     # ncu profiling
                     if check_ncu_available():
+                        emit_progress(
+                            "baseline_ncu",
+                            step=f"{chapter_name}:{example_name}",
+                            step_detail="ncu profiling (baseline)",
+                        )
                         logger.info(f"ncu...")
                         ncu_path = profile_python_benchmark_ncu(
                             baseline_benchmark,
@@ -3113,6 +3205,11 @@ def _test_chapter_impl(
                     
                     # PyTorch profiler
                     if TORCH_PROFILER_AVAILABLE:
+                        emit_progress(
+                            "baseline_torch",
+                            step=f"{chapter_name}:{example_name}",
+                            step_detail="torch profiling (baseline)",
+                        )
                         logger.info(f"PyTorch...")
                         torch_path = profile_python_benchmark_torch(
                             baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
@@ -3156,6 +3253,7 @@ def _test_chapter_impl(
                 # Additional cleanup for cold start mode
                 if cold_start:
                     reset_gpu_state()
+                mark_progress(example_name)
                 continue
             
             # Test each optimization
@@ -3224,6 +3322,11 @@ def _test_chapter_impl(
                     
                     # Use benchmark_with_manifest for reproducibility
                     opt_run_id = f"{chapter_name}_{example_name}_optimized_{technique}"
+                    emit_progress(
+                        "optimized_timing",
+                        step=f"{chapter_name}:{example_name}",
+                        step_detail=f"optimized timing ({technique})",
+                    )
                     optimized_run, optimized_config = _run_with_config(
                         optimized_benchmark,
                         run_id=opt_run_id,
@@ -3392,6 +3495,11 @@ def _test_chapter_impl(
 
                     # POST-TIMING VERIFICATION: validate workload equivalence + outputs using the timing-run artifacts.
                     if verify_input:
+                        emit_progress(
+                            "verification",
+                            step=f"{chapter_name}:{example_name}",
+                            step_detail="input verification",
+                        )
                         try:
                             if baseline_signature is None:
                                 raise RuntimeError("Baseline input signature missing")
@@ -3425,6 +3533,11 @@ def _test_chapter_impl(
                             opt_result["error"] = f"Input verification failed: {exc}"
 
                     if verify_output and opt_result.get("status") == "succeeded":
+                        emit_progress(
+                            "verification",
+                            step=f"{chapter_name}:{example_name}",
+                            step_detail="output verification",
+                        )
                         try:
                             if perf_compare_runner is None:
                                 raise RuntimeError("Verification system unavailable")
@@ -3485,6 +3598,11 @@ def _test_chapter_impl(
                         
                         # nsys profiling
                         if check_nsys_available():
+                            emit_progress(
+                                "optimized_nsys",
+                                step=f"{chapter_name}:{example_name}",
+                                step_detail=f"nsys profiling (optimized {technique})",
+                            )
                             logger.info(f"      nsys...")
                             nsys_path = profile_python_benchmark(
                                 optimized_benchmark,
@@ -3508,6 +3626,11 @@ def _test_chapter_impl(
                         
                         # ncu profiling
                         if check_ncu_available():
+                            emit_progress(
+                                "optimized_ncu",
+                                step=f"{chapter_name}:{example_name}",
+                                step_detail=f"ncu profiling (optimized {technique})",
+                            )
                             logger.info(f"ncu...")
                             ncu_path = profile_python_benchmark_ncu(
                                 optimized_benchmark,
@@ -3531,6 +3654,11 @@ def _test_chapter_impl(
                         
                         # PyTorch profiler
                         if TORCH_PROFILER_AVAILABLE:
+                            emit_progress(
+                                "optimized_torch",
+                                step=f"{chapter_name}:{example_name}",
+                                step_detail=f"torch profiling (optimized {technique})",
+                            )
                             logger.info(f"PyTorch...")
                             torch_path = profile_python_benchmark_torch(
                                 optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
@@ -3673,6 +3801,11 @@ def _test_chapter_impl(
                         result_entry["verification"] = best_opt.get("verification")
 
                 if best_opt:
+                    emit_progress(
+                        "expectations",
+                        step=f"{chapter_name}:{example_name}",
+                        step_detail="expectations update",
+                    )
                     provenance = RunProvenance(
                         git_commit=git_commit or "unknown",
                         hardware_key=expectation_hardware_key,
@@ -3809,6 +3942,11 @@ def _test_chapter_impl(
                 f"    Running baseline executable {baseline_executable.name} "
                 f"(runs={cuda_iterations}, timeout={cuda_timeout}s per run)"
             )
+            emit_progress(
+                "baseline_timing",
+                step=f"{chapter_name}:{example_name}",
+                step_detail="cuda baseline timing",
+            )
             baseline_result = benchmark_cuda_executable(
                 baseline_executable,
                 iterations=cuda_iterations,
@@ -3875,6 +4013,11 @@ def _test_chapter_impl(
 
                 # nsys profiling
                 if check_nsys_available():
+                    emit_progress(
+                        "baseline_nsys",
+                        step=f"{chapter_name}:{example_name}",
+                        step_detail="nsys profiling (cuda baseline)",
+                    )
                     logger.info(f"      nsys...")
                     nsys_path = profile_cuda_executable(
                         baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
@@ -3893,6 +4036,11 @@ def _test_chapter_impl(
 
                 # ncu profiling
                 if check_ncu_available():
+                    emit_progress(
+                        "baseline_ncu",
+                        step=f"{chapter_name}:{example_name}",
+                        step_detail="ncu profiling (cuda baseline)",
+                    )
                     logger.info(f"      ncu...")
                     ncu_path = profile_cuda_executable_ncu(
                         baseline_executable,
@@ -3966,6 +4114,11 @@ def _test_chapter_impl(
                 logger.info(
                     f"    Running {opt_name} "
                     f"(runs={cuda_iterations}, timeout={cuda_timeout}s per run)"
+                )
+                emit_progress(
+                    "optimized_timing",
+                    step=f"{chapter_name}:{example_name}",
+                    step_detail=f"cuda optimized timing ({technique})",
                 )
                 optimized_result = benchmark_cuda_executable(
                     optimized_executable,
@@ -4068,6 +4221,11 @@ def _test_chapter_impl(
 
                     # nsys profiling
                     if check_nsys_available():
+                        emit_progress(
+                            "optimized_nsys",
+                            step=f"{chapter_name}:{example_name}",
+                            step_detail=f"nsys profiling (cuda optimized {technique})",
+                        )
                         logger.info(f"      nsys...")
                         nsys_path = profile_cuda_executable(
                             optimized_executable, chapter_dir, profiling_output_dir,
@@ -4087,6 +4245,11 @@ def _test_chapter_impl(
 
                     # ncu profiling
                     if check_ncu_available():
+                        emit_progress(
+                            "optimized_ncu",
+                            step=f"{chapter_name}:{example_name}",
+                            step_detail=f"ncu profiling (cuda optimized {technique})",
+                        )
                         logger.info("ncu...")
                         ncu_path = profile_cuda_executable_ncu(
                             optimized_executable,
@@ -4139,6 +4302,11 @@ def _test_chapter_impl(
                 optimization_goal = (result_entry.get("optimization_goal") or "speed").strip().lower()
                 best_opt = select_best_optimization(result_entry.get("optimizations", []), goal=optimization_goal)
                 if best_opt:
+                    emit_progress(
+                        "expectations",
+                        step=f"{chapter_name}:{example_name}",
+                        step_detail="expectations update",
+                    )
                     provenance = RunProvenance(
                         git_commit=git_commit or "unknown",
                         hardware_key=expectation_hardware_key,
@@ -4245,12 +4413,26 @@ def _test_chapter_impl(
     
     if llm_analysis:
         logger.info("  Running LLM-powered analysis...")
+        def _patch_label(patch: Dict[str, Any]) -> str:
+            name = patch.get("variant_name")
+            if name:
+                return str(name)
+            patched_file = patch.get("patched_file") or ""
+            if patched_file:
+                return Path(patched_file).name
+            return "patch"
+
         for bench_result in benchmark_results:
             # Run LLM analysis for benchmarks that need optimization
             # Default: <1.1x speedup, but --force-llm runs on ALL benchmarks
             best_speedup = bench_result.get('best_speedup', 1.0)
             needs_analysis = force_llm or best_speedup < 1.1
             if bench_result.get('status') in ('succeeded', 'failed_regression') and needs_analysis:
+                emit_progress(
+                    "llm_analysis",
+                    step=f"{chapter_name}:{bench_result['example']}",
+                    step_detail="analysis start",
+                )
                 llm_result = _run_llm_analysis_for_benchmark(
                     bench_result,
                     profiling_output_dir,
@@ -4262,9 +4444,19 @@ def _test_chapter_impl(
                     bench_result['llm_analysis'] = llm_result
                     llm_patch_metrics['total_analyzed'] += 1
                     logger.info(f"    ✓ {bench_result['example']}: LLM analysis ({llm_result.get('latency_seconds', 0):.1f}s)")
+                    emit_progress(
+                        "llm_analysis",
+                        step=f"{chapter_name}:{bench_result['example']}",
+                        step_detail="analysis complete",
+                    )
                     
                     # Apply patches if enabled
                     if apply_llm_patches and llm_result.get('md_path'):
+                        emit_progress(
+                            "llm_patch_apply",
+                            step=f"{chapter_name}:{bench_result['example']}",
+                            step_detail="patch apply start",
+                        )
                         patch_results = _apply_llm_patches_for_benchmark(
                             bench_result,
                             llm_result,
@@ -4289,6 +4481,13 @@ def _test_chapter_impl(
                                     'example': bench_result['example'],
                                     'reason': fp.get('error', fp.get('failure_reason', 'Unknown')),
                                 })
+
+                            for patch in patch_results:
+                                emit_progress(
+                                    "llm_patch_apply",
+                                    step=f"{chapter_name}:{bench_result['example']}",
+                                    step_detail=f"patch {_patch_label(patch)}: {'ok' if patch.get('success') else 'failed'}",
+                                )
                             
                             logger.info(f"    📝 {bench_result['example']}: Applied {len(successful_patches)}/{len(patch_results)} patches")
                             
@@ -4304,6 +4503,12 @@ def _test_chapter_impl(
                                     original_optimized_code = optimized_file.read_text()
                                 
                                 for patch in benchmarkable:
+                                    patch_name = _patch_label(patch)
+                                    emit_progress(
+                                        "llm_patch_rebenchmark",
+                                        step=f"{chapter_name}:{bench_result['example']}",
+                                        step_detail=f"rebenchmark start {patch_name}",
+                                    )
                                     rebench_result = _rebenchmark_patched_variant(
                                         patch['patched_file'],
                                         iterations=iterations or 3,
@@ -4313,6 +4518,11 @@ def _test_chapter_impl(
                                         profile_output_dir=profiling_output_dir / "llm_patches" if profiling_output_dir else None,
                                     )
                                     patch['rebenchmark_result'] = rebench_result
+                                    emit_progress(
+                                        "llm_patch_rebenchmark",
+                                        step=f"{chapter_name}:{bench_result['example']}",
+                                        step_detail=f"rebenchmark {'ok' if rebench_result.get('success') else 'failed'} {patch_name}",
+                                    )
                                     
                                     if rebench_result.get('success'):
                                         llm_patch_metrics['patches_rebenchmarked'] += 1
@@ -4329,6 +4539,11 @@ def _test_chapter_impl(
                                                 patch['patched_file'],
                                             )
                                             patch['verification'] = verify_result
+                                            emit_progress(
+                                                "llm_patch_verify",
+                                                step=f"{chapter_name}:{bench_result['example']}",
+                                                step_detail=f"verify {'ok' if verify_result.get('verified') else 'failed'} {patch_name}",
+                                            )
                                             if verify_result.get('verified'):
                                                 llm_patch_metrics['patches_verified'] += 1
                                                 logger.info(f"      ✓ Verified: output matches original")
@@ -4360,6 +4575,11 @@ def _test_chapter_impl(
                                                         refined_path.write_text(refined_code)
                                                         
                                                         # Try rebenchmark again
+                                                        emit_progress(
+                                                            "llm_patch_rebenchmark",
+                                                            step=f"{chapter_name}:{bench_result['example']}",
+                                                            step_detail=f"refine rebenchmark attempt {attempt + 1} {patch_name}",
+                                                        )
                                                         refined_result = _rebenchmark_patched_variant(
                                                             str(refined_path),
                                                             iterations=iterations or 3,
@@ -4367,6 +4587,11 @@ def _test_chapter_impl(
                                                             enable_profiling=enable_profiling,
                                                             profile_type=profile_type,
                                                             profile_output_dir=profiling_output_dir / "llm_patches" if profiling_output_dir else None,
+                                                        )
+                                                        emit_progress(
+                                                            "llm_patch_rebenchmark",
+                                                            step=f"{chapter_name}:{bench_result['example']}",
+                                                            step_detail=f"refine rebenchmark {'ok' if refined_result.get('success') else 'failed'} {patch_name}",
                                                         )
                                                         
                                                         if refined_result.get('success'):
@@ -4388,6 +4613,11 @@ def _test_chapter_impl(
                                                                     str(refined_path),
                                                                 )
                                                                 patch['verification'] = verify_result
+                                                                emit_progress(
+                                                                    "llm_patch_verify",
+                                                                    step=f"{chapter_name}:{bench_result['example']}",
+                                                                    step_detail=f"verify {'ok' if verify_result.get('verified') else 'failed'} {patch_name}",
+                                                                )
                                                                 if verify_result.get('verified'):
                                                                     llm_patch_metrics['patches_verified'] += 1
                                                                     logger.info(f"      ✓ Verified: output matches original")
@@ -4425,6 +4655,11 @@ def _test_chapter_impl(
                                         if patched_file_path.exists():
                                             patched_code = patched_file_path.read_text()
                                             logger.info(f"    📚 Generating educational explanation...")
+                                            emit_progress(
+                                                "llm_explain",
+                                                step=f"{chapter_name}:{bench_result['example']}",
+                                                step_detail=f"explain start {_patch_label(best_patch)}",
+                                            )
                                             explanation = _explain_best_patch_with_llm(
                                                 best_patch,
                                                 bench_result,
@@ -4436,12 +4671,37 @@ def _test_chapter_impl(
                                             if explanation:
                                                 bench_result['best_llm_patch']['explanation'] = explanation
                                                 logger.info(f"    📚 Explanation: {explanation.get('technique_name', 'Unknown')}")
+                                                emit_progress(
+                                                    "llm_explain",
+                                                    step=f"{chapter_name}:{bench_result['example']}",
+                                                    step_detail=f"explain complete {_patch_label(best_patch)}",
+                                                )
                                                 
                                                 # Save explanation to file
                                                 explain_dir = chapter_dir / "llm_explanations"
                                                 explain_dir.mkdir(exist_ok=True)
                                                 explain_file = explain_dir / f"explanation_{bench_result['example']}.md"
                                                 _save_explanation_markdown(explanation, bench_result, explain_file)
+                                            else:
+                                                emit_progress(
+                                                    "llm_explain",
+                                                    step=f"{chapter_name}:{bench_result['example']}",
+                                                    step_detail=f"explain failed {_patch_label(best_patch)}",
+                                                )
+
+                                    promoted_file = promote_best_llm_patch(
+                                        best_patch,
+                                        bench_result,
+                                        chapter_dir,
+                                    )
+                                    if promoted_file:
+                                        bench_result['best_llm_patch']['promoted_file'] = promoted_file
+                else:
+                    emit_progress(
+                        "llm_analysis",
+                        step=f"{chapter_name}:{bench_result['example']}",
+                        step_detail="analysis failed",
+                    )
 
     # Calculate summary statistics
     avg_speedup = sum(speedups) / len(speedups) if speedups else 1.0
@@ -5908,6 +6168,7 @@ def test_chapter(
     llm_patch_retries: int = 2,
     use_llm_cache: bool = True,
     llm_explain: bool = False,
+    progress_recorder: Optional[ProgressRecorder] = None,
 ) -> Dict[str, Any]:
     return _test_chapter_impl(
         chapter_dir,
@@ -5949,6 +6210,7 @@ def test_chapter(
         llm_patch_retries=llm_patch_retries,
         use_llm_cache=use_llm_cache,
         llm_explain=llm_explain,
+        progress_recorder=progress_recorder,
     )
 
 

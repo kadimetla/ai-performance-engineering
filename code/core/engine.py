@@ -961,12 +961,17 @@ class AIDomain:
         try:
             from core.llm import get_llm_status
             status = get_llm_status()
-            return {
+            result = {
                 "llm_available": status.get("available", False),
                 "provider": status.get("provider"),
                 "model": status.get("model"),
                 "book_available": True,
             }
+            # Include warning if LLM is unavailable
+            if not status.get("available", False):
+                result["warning"] = status.get("warning", "LLM backend not configured")
+                result["setup_required"] = status.get("setup_required", False)
+            return result
         except Exception as e:
             return {
                 "llm_available": False,
@@ -974,6 +979,8 @@ class AIDomain:
                 "model": None,
                 "book_available": True,
                 "error": str(e),
+                "warning": f"Error checking LLM status: {e}",
+                "setup_required": True,
             }
 
 

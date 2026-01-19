@@ -14,6 +14,7 @@ triton==3.5.0
 # Build tooling compatibility
 packaging==25.0
 ninja==1.13.0
+nvidia-mathdx==25.6.0
 
 # Monitoring and system insight
 nvidia-ml-py==12.560.30

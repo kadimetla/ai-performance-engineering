@@ -50,6 +50,7 @@ class ArtifactManager:
         (self.run_dir / "profiles").mkdir(exist_ok=True)
         (self.run_dir / "reports").mkdir(exist_ok=True)
         (self.run_dir / "logs").mkdir(exist_ok=True)
+        (self.run_dir / "progress").mkdir(exist_ok=True)
     
     @property
     def results_dir(self) -> Path:
@@ -70,7 +71,12 @@ class ArtifactManager:
     def logs_dir(self) -> Path:
         """Get path to logs directory."""
         return self.run_dir / "logs"
-    
+
+    @property
+    def progress_dir(self) -> Path:
+        """Get path to progress directory."""
+        return self.run_dir / "progress"
+
     @property
     def manifest_path(self) -> Path:
         """Get path to manifest.json file."""
@@ -135,4 +141,3 @@ class ArtifactManager:
     def __repr__(self) -> str:
         """Representation."""
         return f"ArtifactManager(base_dir={self.base_dir}, run_id={self.run_id})"
-

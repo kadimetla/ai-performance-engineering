@@ -117,7 +117,17 @@ class LLMConfig:
 
 
 def _load_env():
-    """Load .env files (idempotent)."""
+    """Load .env files (idempotent).
+    
+    Loads .env first, then .env.local (which takes precedence).
+    Always loads from .env files even if variables are already set in os.environ,
+    to ensure .env file values are used.
+    """
+    _load_env._loaded = getattr(_load_env, '_loaded', False)
+    if _load_env._loaded:
+        return
+    _load_env._loaded = True
+    
     for env_name in [".env", ".env.local"]:
         env_file = CODE_ROOT / env_name
         if env_file.exists():
@@ -130,9 +140,14 @@ def _load_env():
                         if key.startswith("export "):
                             key = key.replace("export", "", 1).strip()
                         value = value.strip().strip('"').strip("'")
+                        # .env.local always overrides, .env only sets if not already in os.environ
                         if env_name == ".env.local" or key not in os.environ:
                             if key and value:
                                 os.environ[key] = value
+
+
+# Load .env files at module import time to ensure they're available
+_load_env()
 
 
 def _check_ollama() -> bool:
@@ -162,9 +177,11 @@ def get_config() -> LLMConfig:
 
 
 def reset_config():
-    """Reset config (useful for testing)."""
+    """Reset config (useful for testing or reloading after .env changes)."""
     global _config
     _config = None
+    # Reset the _load_env flag so it reloads .env files
+    _load_env._loaded = False
 
 
 # =============================================================================
@@ -395,6 +412,9 @@ def get_llm_status(probe: bool = False) -> Dict[str, Any]:
     Args:
         probe: When True, issue a real LLM call to verify connectivity.
     """
+    # Ensure .env is loaded before checking config
+    _load_env()
+    
     config = get_config()
     available = config.provider not in ("none", "") and (
         bool(config.api_key) or bool(config.base_url)
@@ -418,6 +438,49 @@ def get_llm_status(probe: bool = False) -> Dict[str, Any]:
     if probe_error:
         status["error"] = probe_error
     status["probed"] = probe
+    
+    # Add warning and setup instructions when LLM is unavailable
+    if not available:
+        env_file = CODE_ROOT / ".env"
+        env_local_file = CODE_ROOT / ".env.local"
+        has_env = env_file.exists() or env_local_file.exists()
+        
+        setup_instructions = []
+        if has_env:
+            setup_instructions.append(
+                f"⚠️  LLM backend unavailable despite .env file(s) present. "
+                f"Please verify your API key is correctly set in {env_file.name} or {env_local_file.name}"
+            )
+        else:
+            setup_instructions.append(
+                f"⚠️  No LLM backend configured. Create a .env file in {CODE_ROOT} with one of:"
+            )
+        
+        setup_instructions.extend([
+            "",
+            "To enable LLM analysis and patching, add ONE of the following to your .env file:",
+            "",
+            "  # Option 1: OpenAI",
+            "  OPENAI_API_KEY=your-api-key-here",
+            "",
+            "  # Option 2: Anthropic",
+            "  ANTHROPIC_API_KEY=your-api-key-here",
+            "",
+            "  # Option 3: Local Ollama (if running)",
+            "  OLLAMA_HOST=http://localhost:11434",
+            "",
+            "  # Option 4: vLLM server",
+            "  VLLM_API_BASE=http://localhost:8000/v1",
+            "",
+            "Optional: Set provider explicitly",
+            "  PERF_LLM_PROVIDER=openai  # or 'anthropic', 'ollama', 'vllm'",
+            "",
+            f"After adding your API key, restart the MCP server or call reset_config() to reload.",
+        ])
+        
+        status["warning"] = "\n".join(setup_instructions)
+        status["setup_required"] = True
+    
     return status
 
 

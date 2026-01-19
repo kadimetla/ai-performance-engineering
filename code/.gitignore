@@ -1,4 +1,6 @@
 book/
+third_party/TransformerEngine-src/
+third_party/cutlass/
 artifacts_tmp/
 .cuda_env/
 file_inventory.csv
@@ -46,6 +48,7 @@ phi-3.5-moe/
 .kiro/
 *-plan.md
 benchmark_peak_results_*.json
+benchmark_peak_manifest_*.json
 benchmark_profiles/
 benchmark_results_*.json
 benchmark_results_*.json
@@ -160,6 +163,7 @@ single_gpu_load_test.json
 llm_analysis/
 **/llm_analysis/
 llm_patches/
+**/llm_patches/
 **/llm_analysis/
 llm_patches_test/
 **/llm_patches_test/

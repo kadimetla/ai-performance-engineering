@@ -110,6 +110,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, NotRequired
 
 # Ensure repository root is on sys.path for imports (e.g., analysis.advanced_analysis)
@@ -117,6 +118,7 @@ CODE_ROOT = Path(__file__).resolve().parent.parent
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
+from core.harness.progress import ProgressEvent, ProgressRecorder
 
 # MCP Protocol Types
 @dataclass
@@ -683,7 +685,50 @@ def _attach_bench_artifact_paths(result: Dict[str, Any]) -> Dict[str, Any]:
     enriched["results_json"] = str(results_json)
     if run_dir:
         enriched["run_dir"] = str(run_dir)
+        enriched["run_id"] = run_dir.name
     return enriched
+
+
+def _default_run_id() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _resolve_run_dir(artifacts_dir: Optional[str], run_id: str) -> Path:
+    base_dir = Path(artifacts_dir) if artifacts_dir else CODE_ROOT / "artifacts"
+    if not base_dir.is_absolute():
+        base_dir = (CODE_ROOT / base_dir).resolve()
+    return base_dir / run_id
+
+
+def _progress_path_for_run(run_dir: Optional[Path], run_id: Optional[str]) -> Optional[Path]:
+    if not run_dir or not run_id:
+        return None
+    return run_dir / "progress" / "run_progress.json"
+
+
+def _progress_path_in_dir(output_dir: Path, run_id: str) -> Path:
+    return output_dir / "progress" / f"run_{run_id}.json"
+
+
+def _read_progress_payload(progress_path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    if not progress_path:
+        return None
+    try:
+        path = Path(progress_path)
+        if not path.exists():
+            return None
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _emit_progress_safe(recorder: Optional[ProgressRecorder], event: ProgressEvent) -> None:
+    if recorder is None:
+        return
+    try:
+        recorder.emit(event)
+    except Exception:
+        pass
 
 
 def _trim_value(value: Any, max_length: int = _PREVIEW_MAX_LENGTH, max_items: int = _PREVIEW_MAX_ITEMS) -> Any:
@@ -846,7 +891,12 @@ def _cleanup_job_store(now: Optional[float] = None) -> None:
             _JOB_STORE.pop(job_id, None)
 
 
-def _queue_job(tool_name: str, runner: Callable[[], Any], arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _queue_job(
+    tool_name: str,
+    runner: Callable[[], Any],
+    arguments: Optional[Dict[str, Any]] = None,
+    run_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Run a task in the background and return a ticket for polling."""
     _cleanup_job_store()
     job_id = f"{tool_name}-{uuid.uuid4().hex[:10]}"
@@ -858,6 +908,9 @@ def _queue_job(tool_name: str, runner: Callable[[], Any], arguments: Optional[Di
         "submitted_at": submitted_at,
         "arguments": _sanitize_arguments(arguments),
     }
+    if run_metadata:
+        for key, value in run_metadata.items():
+            record[key] = str(value) if isinstance(value, Path) else value
     with _JOB_LOCK:
         if len(_JOB_STORE) >= _JOB_MAX_ENTRIES:
             raise RuntimeError(
@@ -887,13 +940,17 @@ def _queue_job(tool_name: str, runner: Callable[[], Any], arguments: Optional[Di
             )
 
     _JOB_EXECUTOR.submit(_runner)
-    return {
+    ticket = {
         "job_id": job_id,
         "status": "started",
         "tool": tool_name,
         "submitted_at": submitted_at,
         "note": "Use aisp_job_status with job_id to poll until completed.",
     }
+    if run_metadata:
+        for key, value in run_metadata.items():
+            ticket[key] = str(value) if isinstance(value, Path) else value
+    return ticket
 
 
 def _context_snapshot() -> Dict[str, Any]:
@@ -1137,6 +1194,10 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 "type": "string",
                 "description": "Base directory for artifacts (bench creates a timestamped run dir underneath).",
             },
+            "run_id": {
+                "type": "string",
+                "description": "Run ID for artifacts (default: timestamp)",
+            },
             "iterations": {
                 "type": "integer",
                 "description": "Override benchmark iterations (all targets).",
@@ -1151,6 +1212,21 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 "default": False
             },
             "apply_patches": {"type": "boolean"},
+            "force_llm": {
+                "type": "boolean",
+                "description": "Force LLM analysis on all benchmarks regardless of speedup (costs API credits).",
+                "default": False,
+            },
+            "rebenchmark_llm_patches": {
+                "type": "boolean",
+                "description": "Re-benchmark LLM-patched variants (requires apply_patches=true).",
+                "default": False,
+            },
+            "llm_explain": {
+                "type": "boolean",
+                "description": "Generate LLM explanations for best patches (requires rebenchmark_llm_patches=true).",
+                "default": False,
+            },
             "precheck_only": {
                 "type": "boolean",
                 "description": "Return prerequisites and planned command without running",
@@ -1198,6 +1274,10 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     raw_profile = params.get("profile") or "minimal"
     profile = normalize_param("profile", raw_profile, "minimal")
     artifacts_dir = params.get("artifacts_dir")
+    run_id_param = params.get("run_id")
+    run_id = run_id_param.strip() if isinstance(run_id_param, str) else run_id_param
+    if not run_id:
+        run_id = _default_run_id()
     iterations_param = params.get("iterations")
     warmup_param = params.get("warmup")
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
@@ -1215,17 +1295,42 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     # Enable explicitly with llm_analysis=true when you want AI-powered insights
     llm_analysis = params.get("llm_analysis", False)
     apply_patches = params.get("apply_patches", False)
+    force_llm = bool(params.get("force_llm", False))
+    rebenchmark_llm_patches = bool(params.get("rebenchmark_llm_patches", False))
+    llm_explain = bool(params.get("llm_explain", False))
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     run_async = bool(params.get("async", False))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
     include_context, context_level = extract_context_opts(params)
+
+    if apply_patches and not (llm_analysis or force_llm):
+        return {
+            "error": "apply_patches requires llm_analysis=true or force_llm=true",
+            "hint": "Set llm_analysis or force_llm to enable LLM analysis before patching.",
+            "success": False,
+        }
+    if rebenchmark_llm_patches and not apply_patches:
+        return {
+            "error": "rebenchmark_llm_patches requires apply_patches=true",
+            "hint": "Set apply_patches=true to generate patches before rebenchmarking.",
+            "success": False,
+        }
+    if llm_explain and not rebenchmark_llm_patches:
+        return {
+            "error": "llm_explain requires rebenchmark_llm_patches=true",
+            "hint": "Set rebenchmark_llm_patches=true to benchmark patches before explaining.",
+            "success": False,
+        }
+
     cuda_check = _cuda_precheck()
 
     args: List[str] = ["run", "--profile", profile]
     if artifacts_dir:
         args.extend(["--artifacts-dir", str(artifacts_dir)])
+    if run_id:
+        args.extend(["--run-id", str(run_id)])
     if iterations_param is not None:
         args.extend(["--iterations", str(int(iterations_param))])
     if warmup_param is not None:
@@ -1236,17 +1341,29 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         args.append("--allow-virtualization")
     for t in targets:
         args.extend(["-t", t])
-    # Add --llm-analysis only if explicitly enabled (costs API credits)
+    # Add LLM options only if explicitly enabled (costs API credits)
     if llm_analysis:
         args.append("--llm-analysis")
+    if force_llm:
+        args.append("--force-llm")
     if apply_patches:
         args.append("--apply-llm-patches")
+    if rebenchmark_llm_patches:
+        args.append("--rebenchmark-llm-patches")
+    if llm_explain:
+        args.append("--llm-explain")
+
+    run_dir = _resolve_run_dir(artifacts_dir, str(run_id)) if run_id else None
+    progress_path = _progress_path_for_run(run_dir, str(run_id)) if run_dir else None
 
     if precheck_only:
         return {
             "precheck_only": True,
             "cuda": cuda_check,
             "planned_args": args,
+            "run_id": run_id,
+            "run_dir": str(run_dir) if run_dir else None,
+            "progress_path": str(progress_path) if progress_path else None,
             "note": "Run aisp_status or aisp_triage first, then rerun without precheck_only.",
         }
 
@@ -1263,6 +1380,9 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
             "cuda": cuda_check,
             "command": " ".join([sys.executable, "-m", "cli.aisp", "bench", *args]),
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+            "run_id": run_id,
+            "run_dir": str(run_dir) if run_dir else None,
+            "progress_path": str(progress_path) if progress_path else None,
             "note": "Set dry_run=false to execute; use async=true for background execution.",
         }
 
@@ -1272,7 +1392,12 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     if run_async:
-        queued = _queue_job("aisp_run_benchmarks", _execute_benchmarks, params)
+        run_metadata = {
+            "run_id": run_id,
+            "run_dir": str(run_dir) if run_dir else None,
+            "progress_path": str(progress_path) if progress_path else None,
+        }
+        queued = _queue_job("aisp_run_benchmarks", _execute_benchmarks, params, run_metadata=run_metadata)
         queued["targets"] = targets
         queued["note"] = "Background benchmark started; poll with aisp_job_status using job_id. When complete, use aisp_benchmark_triage to analyze results."
         return queued
@@ -1280,6 +1405,11 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     result = _execute_benchmarks()
     # Add suggested next steps to help users continue their workflow
     result["suggested_next_steps"] = _benchmark_next_steps(result)
+    result["run_id"] = run_id
+    if run_dir:
+        result["run_dir"] = str(run_dir)
+    if progress_path:
+        result["progress_path"] = str(progress_path)
     return attach_context_if_requested(result, include_context, context_level)
 
 
@@ -1352,6 +1482,10 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "description": "Base directory for artifacts; a timestamped run dir is created inside.",
                     "default": "artifacts/mcp-deep-dive",
                 },
+                "run_id": {
+                    "type": "string",
+                    "description": "Run ID for artifacts (default: timestamp)",
+                },
                 "iterations": {
                     "type": "integer",
                     "description": "Override benchmark iterations (default 1 for profiling).",
@@ -1402,6 +1536,10 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     include_context, context_level = extract_context_opts(params)
     targets = params.get("targets") or []
     output_dir = params.get("output_dir") or "artifacts/mcp-deep-dive"
+    run_id_param = params.get("run_id")
+    run_id = run_id_param.strip() if isinstance(run_id_param, str) else run_id_param
+    if not run_id:
+        run_id = _default_run_id()
     iterations = params.get("iterations", 1)
     warmup = params.get("warmup", 5)
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
@@ -1409,6 +1547,8 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     run_async = bool(params.get("async", False))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
+    run_dir = _resolve_run_dir(output_dir, str(run_id))
+    progress_path = _progress_path_for_run(run_dir, str(run_id))
 
     if not targets:
         return make_error("targets is required", include_context, context_level)
@@ -1419,6 +1559,7 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "targets": targets,
             "profile": "deep_dive",
             "artifacts_dir": output_dir,
+            "run_id": run_id,
             "iterations": iterations,
             "warmup": warmup,
             "allow_invalid_environment": allow_invalid_environment,
@@ -1455,6 +1596,20 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
         run_dir_path = Path(str(run_dir))
         analysis_path = run_dir_path / "reports" / "deep_dive_compare.json"
         analysis_path.parent.mkdir(parents=True, exist_ok=True)
+        analysis_progress = ProgressRecorder(
+            run_id=str(run_id),
+            progress_path=run_dir_path / "progress" / "run_progress.json",
+        )
+        analysis_progress.emit(
+            ProgressEvent(
+                phase="analysis",
+                phase_index=1,
+                total_phases=2,
+                step="deep_dive_compare",
+                step_detail="analysis start",
+                percent_complete=0.0,
+            )
+        )
 
         raw = json.loads(results_path.read_text())
         chapters = raw.get("results", []) if isinstance(raw, dict) else []
@@ -1566,23 +1721,343 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "benchmarks": benchmark_analyses,
         }
         analysis_path.write_text(json.dumps(analysis, indent=2, default=str))
+        analysis_progress.emit(
+            ProgressEvent(
+                phase="analysis",
+                phase_index=2,
+                total_phases=2,
+                step="deep_dive_compare",
+                step_detail="analysis complete",
+                percent_complete=100.0,
+            )
+        )
 
         return {
             "run_dir": str(run_dir_path),
             "results_json": str(results_path),
             "analysis_json": str(analysis_path),
             "benchmarks": benchmark_analyses,
+            "run_id": run_id,
+            "progress_path": str(run_dir_path / "progress" / "run_progress.json"),
             "success": True,
         }
 
     if run_async:
-        queued = _queue_job("aisp_benchmark_deep_dive_compare", _run_and_analyze, params)
+        run_metadata = {
+            "run_id": run_id,
+            "run_dir": str(run_dir),
+            "progress_path": str(progress_path) if progress_path else None,
+        }
+        queued = _queue_job("aisp_benchmark_deep_dive_compare", _run_and_analyze, params, run_metadata=run_metadata)
         queued["output_dir"] = output_dir
+        queued["run_id"] = run_id
         queued["targets"] = targets
         queued["note"] = "Background deep-dive started; poll with aisp_job_status using job_id."
         return queued
 
     result = _run_and_analyze()
+    result["run_id"] = run_id
+    if progress_path:
+        result["progress_path"] = str(progress_path)
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+def _summarize_metric_deltas(metrics: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
+    ranked: List[Tuple[float, Dict[str, Any]]] = []
+    for metric in metrics:
+        delta_pct = metric.get("delta_pct")
+        delta = metric.get("delta")
+        score = None
+        if isinstance(delta_pct, (int, float)):
+            score = abs(delta_pct)
+        elif isinstance(delta, (int, float)):
+            score = abs(delta)
+        if score is None:
+            continue
+        ranked.append((score, metric))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in ranked[:limit]]
+
+
+def _summarize_ncu_comparison(ncu_comparison: Optional[Dict[str, Any]], limit: int = 5) -> Dict[str, Any]:
+    if not ncu_comparison:
+        return {}
+    if "metrics" in ncu_comparison:
+        return {"top_metrics": _summarize_metric_deltas(ncu_comparison.get("metrics") or [], limit=limit)}
+    kernel_rows = ncu_comparison.get("kernel_comparison") or []
+    if not kernel_rows:
+        return {}
+    top_kernel = kernel_rows[0]
+    metrics = top_kernel.get("metrics") or {}
+    ranked: List[Tuple[float, Dict[str, Any]]] = []
+    for name, payload in metrics.items():
+        ratio = payload.get("ratio")
+        delta = payload.get("delta")
+        score = None
+        if isinstance(ratio, (int, float)):
+            score = abs(ratio - 1.0)
+        elif isinstance(delta, (int, float)):
+            score = abs(delta)
+        if score is None:
+            continue
+        ranked.append((score, {"name": name, **payload}))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return {
+        "kernel": top_kernel.get("kernel"),
+        "top_metrics": [item[1] for item in ranked[:limit]],
+    }
+
+
+def _extract_promoted_targets(results_json: Path) -> List[Dict[str, Any]]:
+    try:
+        raw = json.loads(results_json.read_text())
+    except Exception:
+        return []
+    chapters = raw.get("results", []) if isinstance(raw, dict) else []
+    promoted: List[Dict[str, Any]] = []
+    for chapter_entry in chapters:
+        if not isinstance(chapter_entry, dict):
+            continue
+        chapter = chapter_entry.get("chapter", "")
+        for bench in chapter_entry.get("benchmarks", []) or []:
+            if not isinstance(bench, dict):
+                continue
+            best_patch = bench.get("best_llm_patch") or {}
+            promoted_file = best_patch.get("promoted_file")
+            if not promoted_file:
+                continue
+            promoted_path = Path(str(promoted_file))
+            alias = promoted_path.stem
+            if alias.startswith("optimized_"):
+                alias = alias.replace("optimized_", "", 1)
+            promoted.append(
+                {
+                    "chapter": chapter,
+                    "example": bench.get("example", ""),
+                    "alias": alias,
+                    "promoted_file": promoted_file,
+                    "variant_name": best_patch.get("variant_name"),
+                    "actual_speedup": best_patch.get("actual_speedup"),
+                }
+            )
+    return promoted
+
+
+@register_tool(
+    "aisp_benchmark_llm_patch_loop",
+    "Tags: benchmark, llm, patches, deep_dive, compare, baseline, optimized, one-shot. "
+    "Run the full LLM patch loop: deep-dive profile baseline/optimized, force LLM analysis, "
+    "apply patches, rebenchmark, generate explanation, promote best patch, then run a clean "
+    "baseline-vs-patch deep-dive compare and summarize nsys/ncu deltas. "
+    "Returns: {run_dir, results_json, promoted_targets, compare_runs, summary}. "
+    "USE when: You want the full loop in one call without chaining multiple tools. "
+    "Example: targets=['ch12:kernel_fusion'].",
+    {
+        "type": "object",
+        "properties": with_context_params(
+            {
+                "targets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Benchmark targets (chapter or chapter:example). Prefer a single example.",
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Base directory for artifacts from the LLM patch run.",
+                    "default": "artifacts/mcp-llm-loop",
+                },
+                "compare_output_dir": {
+                    "type": "string",
+                    "description": "Base directory for artifacts from the follow-up compare run.",
+                    "default": "artifacts/mcp-llm-loop-compare",
+                },
+                "iterations": {
+                    "type": "integer",
+                    "description": "Override iterations for the LLM patch run (default 1 for profiling).",
+                    "default": 1,
+                },
+                "warmup": {
+                    "type": "integer",
+                    "description": "Override warmup iterations for the LLM patch run (default 5).",
+                    "default": 5,
+                },
+                "compare_iterations": {
+                    "type": "integer",
+                    "description": "Override iterations for the compare run (default 1).",
+                    "default": 1,
+                },
+                "compare_warmup": {
+                    "type": "integer",
+                    "description": "Override warmup iterations for the compare run (default 5).",
+                    "default": 5,
+                },
+                "force_llm": {
+                    "type": "boolean",
+                    "description": "Force LLM analysis on all benchmarks regardless of speedup (costs API credits).",
+                    "default": True,
+                },
+                "llm_explain": {
+                    "type": "boolean",
+                    "description": "Generate LLM explanations for best patches.",
+                    "default": True,
+                },
+                "async": {
+                    "type": "boolean",
+                    "description": "Run in background and return job_id; poll with aisp_job_status",
+                    "default": False,
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Max runtime for the full loop; set 0/null for no timeout.",
+                    "default": 0,
+                },
+                "allow_invalid_environment": {
+                    "type": "boolean",
+                    "description": (
+                        "Allow running benchmarks even if validate_environment() reports errors. "
+                        "Still emits warnings; results may be invalid. Intended for unit tests and diagnostics."
+                    ),
+                    "default": False,
+                },
+                "allow_virtualization": {
+                    "type": "boolean",
+                    "description": (
+                        "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                        "virtualization check to a loud warning. Results are still invalid; bare metal is required."
+                    ),
+                    "default": False,
+                },
+            }
+        ),
+        "required": ["targets"],
+    },
+)
+def tool_benchmark_llm_patch_loop(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
+    targets = params.get("targets") or []
+    if not targets:
+        return make_error("targets is required", include_context, context_level)
+
+    output_dir = params.get("output_dir") or "artifacts/mcp-llm-loop"
+    compare_output_dir = params.get("compare_output_dir") or "artifacts/mcp-llm-loop-compare"
+    iterations = params.get("iterations", 1)
+    warmup = params.get("warmup", 5)
+    compare_iterations = params.get("compare_iterations", 1)
+    compare_warmup = params.get("compare_warmup", 5)
+    force_llm = bool(params.get("force_llm", True))
+    llm_explain = bool(params.get("llm_explain", True))
+    allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
+    allow_virtualization = bool(params.get("allow_virtualization", False))
+    run_async = bool(params.get("async", False))
+    timeout_param = params.get("timeout_seconds")
+    timeout_seconds = None if timeout_param is None else int(timeout_param)
+
+    def _run_loop() -> Dict[str, Any]:
+        bench_params = {
+            "targets": targets,
+            "profile": "deep_dive",
+            "artifacts_dir": output_dir,
+            "iterations": iterations,
+            "warmup": warmup,
+            "llm_analysis": True,
+            "force_llm": force_llm,
+            "apply_patches": True,
+            "rebenchmark_llm_patches": True,
+            "llm_explain": llm_explain,
+            "allow_invalid_environment": allow_invalid_environment,
+            "allow_virtualization": allow_virtualization,
+            "timeout_seconds": timeout_seconds,
+        }
+
+        bench_result = tool_run_benchmarks(bench_params)
+        bench_result = _attach_bench_artifact_paths(bench_result)
+
+        results_json = bench_result.get("results_json")
+        run_dir = bench_result.get("run_dir")
+
+        if bench_result.get("returncode", 0) != 0:
+            return {
+                "error": "llm patch run failed",
+                "bench_result": {k: v for k, v in bench_result.items() if k not in {"stdout", "stderr"}},
+                "results_json": results_json,
+                "run_dir": run_dir,
+                "success": False,
+            }
+
+        if not results_json or not run_dir:
+            return {
+                "error": "bench run succeeded but results_json/run_dir could not be discovered",
+                "bench_result": {k: v for k, v in bench_result.items() if k not in {"stdout", "stderr"}},
+                "success": False,
+            }
+
+        promoted_targets = _extract_promoted_targets(Path(str(results_json)))
+        if not promoted_targets:
+            return {
+                "error": "no promoted LLM patches found; ensure rebenchmark_llm_patches succeeded",
+                "run_dir": run_dir,
+                "results_json": results_json,
+                "success": False,
+            }
+
+        compare_runs: List[Dict[str, Any]] = []
+        for promoted in promoted_targets:
+            alias_target = f"{promoted.get('chapter')}:{promoted.get('alias')}"
+            compare_params = {
+                "targets": [alias_target],
+                "output_dir": compare_output_dir,
+                "iterations": compare_iterations,
+                "warmup": compare_warmup,
+                "allow_invalid_environment": allow_invalid_environment,
+                "allow_virtualization": allow_virtualization,
+                "timeout_seconds": timeout_seconds,
+            }
+            compare_result = tool_benchmark_deep_dive_compare(compare_params)
+
+            summaries: Dict[str, Any] = {}
+            benchmarks = compare_result.get("benchmarks") or []
+            if benchmarks:
+                entry = benchmarks[0]
+                nsys_summary = _summarize_metric_deltas(
+                    entry.get("nsys_comparison", {}).get("metrics", []) or []
+                )
+                ncu_summary = _summarize_ncu_comparison(entry.get("ncu_comparison"))
+                summaries = {
+                    "nsys_top_deltas": nsys_summary,
+                    "ncu_top_deltas": ncu_summary,
+                }
+
+            compare_runs.append(
+                {
+                    "target": alias_target,
+                    "promoted_file": promoted.get("promoted_file"),
+                    "compare_result": compare_result,
+                    "summary": summaries,
+                }
+            )
+
+        summary = {
+            "targets": targets,
+            "promoted_targets": promoted_targets,
+            "compare_targets": [c.get("target") for c in compare_runs],
+        }
+
+        return {
+            "run_dir": run_dir,
+            "results_json": results_json,
+            "promoted_targets": promoted_targets,
+            "compare_runs": compare_runs,
+            "summary": summary,
+            "success": True,
+        }
+
+    if run_async:
+        queued = _queue_job("aisp_benchmark_llm_patch_loop", _run_loop, params)
+        queued["targets"] = targets
+        queued["note"] = "Background LLM patch loop started; poll with aisp_job_status using job_id."
+        return queued
+
+    result = _run_loop()
     return attach_context_if_requested(result, include_context, context_level)
 
 
@@ -2722,6 +3197,8 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
 
     output_name = params.get("output_name", "mcp_nsys")
     output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles"))
+    run_id = output_name
+    progress_path = _progress_path_in_dir(output_dir, run_id)
     trace_cuda = bool(params.get("trace_cuda", True))
     trace_nvtx = bool(params.get("trace_nvtx", True))
     trace_osrt = bool(params.get("trace_osrt", True))
@@ -2770,9 +3247,23 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "planned_output": str(output_path),
             "note": "Set dry_run=false to execute; use async=true to background the run. Default preset is full; set preset=light for smaller/faster traces.",
+            "run_id": run_id,
+            "progress_path": str(progress_path),
         }
 
     def _execute_capture():
+        progress_recorder = ProgressRecorder(run_id=run_id, progress_path=progress_path)
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="capture",
+                phase_index=1,
+                total_phases=2,
+                step="nsys",
+                step_detail="capture start",
+                percent_complete=0.0,
+            ),
+        )
         auto = NsightAutomation(output_dir)
         path = auto.profile_nsys(
             command=command,
@@ -2804,13 +3295,33 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
                 "If disk space is low, set TMPDIR to a directory with >200MB free before capturing.",
                 "If capture fails, try preset=light to reduce trace size."
             ],
+            "run_id": run_id,
+            "progress_path": str(progress_path),
         }
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="capture",
+                phase_index=2,
+                total_phases=2,
+                step="nsys",
+                step_detail="capture complete",
+                percent_complete=100.0,
+                artifacts=[str(path)] if path else [],
+            ),
+        )
         return attach_context_if_requested(result, include_context, context_level)
 
     if run_async:
-        queued = _queue_job("aisp_profile_nsys", _execute_capture, params)
+        run_metadata = {
+            "run_id": run_id,
+            "run_dir": str(output_dir),
+            "progress_path": str(progress_path),
+        }
+        queued = _queue_job("aisp_profile_nsys", _execute_capture, params, run_metadata=run_metadata)
         queued["note"] = "Background capture started; poll with aisp_job_status using job_id."
         queued["preset"] = preset
+        queued["run_id"] = run_id
         return queued
 
     return _execute_capture()
@@ -2895,6 +3406,8 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
 
     output_name = params.get("output_name", "mcp_ncu")
     output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles"))
+    run_id = output_name
+    progress_path = _progress_path_in_dir(output_dir, run_id)
     workload_type = normalize_param("workload_type", params.get("workload_type"), "memory_bound")
     kernel_filter = params.get("kernel_filter")
     force_lineinfo = bool(params.get("force_lineinfo", True))
@@ -2943,9 +3456,23 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "pm_sampling_interval": sampling_interval,
             "planned_output": str(output_path),
             "note": "Set dry_run=false to execute; use async=true to background the run.",
+            "run_id": run_id,
+            "progress_path": str(progress_path),
         }
 
     def _execute_capture():
+        progress_recorder = ProgressRecorder(run_id=run_id, progress_path=progress_path)
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="capture",
+                phase_index=1,
+                total_phases=2,
+                step="ncu",
+                step_detail="capture start",
+                percent_complete=0.0,
+            ),
+        )
         auto = NsightAutomation(output_dir)
         path = auto.profile_ncu(
             command=command,
@@ -2969,13 +3496,33 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "timeout_hit": bool(auto.last_run.get("timeout_hit")) if hasattr(auto, "last_run") else False,  # type: ignore[attr-defined]
             "error": auto.last_error if path is None else None,
             "run_details": getattr(auto, "last_run", {}),  # type: ignore[attr-defined]
+            "run_id": run_id,
+            "progress_path": str(progress_path),
         }
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="capture",
+                phase_index=2,
+                total_phases=2,
+                step="ncu",
+                step_detail="capture complete",
+                percent_complete=100.0,
+                artifacts=[str(path)] if path else [],
+            ),
+        )
         return attach_context_if_requested(result, include_context, context_level)
 
     if run_async:
-        queued = _queue_job("aisp_profile_ncu", _execute_capture, params)
+        run_metadata = {
+            "run_id": run_id,
+            "run_dir": str(output_dir),
+            "progress_path": str(progress_path),
+        }
+        queued = _queue_job("aisp_profile_ncu", _execute_capture, params, run_metadata=run_metadata)
         queued["note"] = "Background capture started; poll with aisp_job_status using job_id."
         queued["workload_type"] = workload_type
+        queued["run_id"] = run_id
         return queued
 
     return _execute_capture()
@@ -3017,6 +3564,8 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
     script_path = Path(script)
     output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles/torch"))
     output_name = params.get("output_name") or script_path.stem or "mcp_torch"
+    run_id = output_name
+    progress_path = _progress_path_in_dir(output_dir, run_id)
     mode = normalize_param("torch_mode", params.get("mode"), "full")
     script_args = params.get("script_args") or []
     if isinstance(script_args, str):
@@ -3062,9 +3611,23 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
             "planned_output": str(planned),
             "timeout_seconds": timeout_seconds,
             "mode": mode,
+            "run_id": run_id,
+            "progress_path": str(progress_path),
         }
 
     def _execute_capture():
+        progress_recorder = ProgressRecorder(run_id=run_id, progress_path=progress_path)
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="capture",
+                phase_index=1,
+                total_phases=2,
+                step="torch",
+                step_detail="capture start",
+                percent_complete=0.0,
+            ),
+        )
         runner = TorchProfilerAutomation(output_dir)
         result = runner.profile(
             script=script_path,
@@ -3079,13 +3642,33 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
         result.update({"torch_available": torch_available, "cuda_available": cuda_available})
         if not result.get("success"):
             result.setdefault("error", runner.last_error or "torch profiler failed")
+        result["run_id"] = run_id
+        result["progress_path"] = str(progress_path)
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="capture",
+                phase_index=2,
+                total_phases=2,
+                step="torch",
+                step_detail="capture complete",
+                percent_complete=100.0,
+                artifacts=[str(result.get("trace_path"))] if result.get("trace_path") else [],
+            ),
+        )
         return attach_context_if_requested(result, include_context, context_level)
 
     if run_async:
-        queued = _queue_job("aisp_profile_torch", _execute_capture, params)
+        run_metadata = {
+            "run_id": run_id,
+            "run_dir": str(output_dir),
+            "progress_path": str(progress_path),
+        }
+        queued = _queue_job("aisp_profile_torch", _execute_capture, params, run_metadata=run_metadata)
         queued["note"] = "Background torch.profiler capture started; poll with aisp_job_status using job_id."
         queued["mode"] = mode
         queued["nvtx_label"] = nvtx_label
+        queued["run_id"] = run_id
         return queued
 
     return _execute_capture()
@@ -3127,6 +3710,8 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
 
     output_dir = Path(params.get("output_dir", "artifacts/hta"))
     output_name = params.get("output_name", "mcp_hta")
+    run_id = output_name
+    progress_path = _progress_path_in_dir(output_dir, run_id)
     preset = normalize_param("preset", params.get("preset"), "full")
     force_lineinfo = bool(params.get("force_lineinfo", True))
     precheck_only = bool(params.get("precheck_only"))
@@ -3161,9 +3746,23 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
             **precheck,
             "planned_output": str(base),
             "timeout_seconds": timeout_seconds,
+            "run_id": run_id,
+            "progress_path": str(progress_path),
         }
 
     def _execute_capture():
+        progress_recorder = ProgressRecorder(run_id=run_id, progress_path=progress_path)
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="capture",
+                phase_index=1,
+                total_phases=2,
+                step="hta",
+                step_detail="capture start",
+                percent_complete=0.0,
+            ),
+        )
         runner = HTACaptureAutomation(output_dir)
         result = runner.capture(
             command=command_list,
@@ -3175,12 +3774,32 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
         result.update({"hta_available": hta_available, "nsys_available": nsight.nsys_available})
         if not result.get("success"):
             result.setdefault("error", runner.last_error or "HTA capture failed")
+        result["run_id"] = run_id
+        result["progress_path"] = str(progress_path)
+        _emit_progress_safe(
+            progress_recorder,
+            ProgressEvent(
+                phase="capture",
+                phase_index=2,
+                total_phases=2,
+                step="hta",
+                step_detail="capture complete",
+                percent_complete=100.0,
+                artifacts=[str(result.get("nsys_rep_path"))] if result.get("nsys_rep_path") else [],
+            ),
+        )
         return attach_context_if_requested(result, include_context, context_level)
 
     if run_async:
-        queued = _queue_job("aisp_profile_hta", _execute_capture, params)
+        run_metadata = {
+            "run_id": run_id,
+            "run_dir": str(output_dir),
+            "progress_path": str(progress_path),
+        }
+        queued = _queue_job("aisp_profile_hta", _execute_capture, params, run_metadata=run_metadata)
         queued["note"] = "Background HTA capture started; poll with aisp_job_status using job_id."
         queued["preset"] = preset
+        queued["run_id"] = run_id
         return queued
 
     return _execute_capture()
@@ -4357,7 +4976,7 @@ def tool_triage(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_job_status",
     "Tags: job, status, poll, async, background, queue, progress. "
     "Check status of a background job started with async=true. "
-    "Returns: {job_id, status: running|completed|error, result (if completed), duration_ms}. "
+    "Returns: {job_id, status: running|completed|error, result (if completed), duration_ms, progress?}. "
     "⚡ FAST (<1s). USE when: Polling for completion of background jobs. "
     "Example: \"Check job status\" or \"Is my benchmark done?\" or \"Poll nsys capture\". "
     "STATUS VALUES: "
@@ -4395,6 +5014,20 @@ def tool_job_status(params: Dict[str, Any]) -> Dict[str, Any]:
             payload["error"] = result.get("error")
         else:
             payload["error"] = "Job failed"
+    progress_path = None
+    if payload.get("progress_path"):
+        progress_path = Path(str(payload.get("progress_path")))
+    else:
+        run_dir = payload.get("run_dir")
+        run_id = payload.get("run_id")
+        if run_dir and run_id:
+            progress_path = _progress_path_for_run(Path(str(run_dir)), str(run_id))
+    progress_payload = _read_progress_payload(progress_path)
+    if progress_payload:
+        payload["progress"] = progress_payload.get("current")
+        payload["progress_history"] = progress_payload.get("history", [])[-5:]
+        if progress_path:
+            payload["progress_path"] = str(progress_path)
     if "success" not in payload:
         payload["success"] = payload.get("status") not in {"error", "not_found"}
     return attach_context_if_requested(payload, include_context, context_level)

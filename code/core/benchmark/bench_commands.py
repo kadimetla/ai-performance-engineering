@@ -82,6 +82,7 @@ _expand_multi_value_option(["--targets", "-t"])
 from core.env import apply_env_defaults, dump_environment_and_capabilities
 from core.utils.logger import setup_logging, get_logger
 from core.benchmark.artifact_manager import ArtifactManager
+from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.profiling import profiler_config as profiler_config_mod
 from core.discovery import chapter_slug, discover_all_chapters, resolve_target_chapters, discover_benchmarks
 
@@ -303,6 +304,7 @@ def _execute_benchmarks(
     warmup: Optional[int] = None,
     force_pipeline: bool = False,
     artifacts_dir: Optional[str] = None,
+    run_id: Optional[str] = None,
     log_level: str = "INFO",
     log_file: Optional[str] = None,
     single_gpu: bool = False,
@@ -349,7 +351,7 @@ def _execute_benchmarks(
         pass  # cuda_capabilities not available
 
     artifact_base = Path(artifacts_dir) if artifacts_dir else active_bench_root / "artifacts"
-    artifact_manager = ArtifactManager(base_dir=artifact_base)
+    artifact_manager = ArtifactManager(base_dir=artifact_base, run_id=run_id)
     if log_file is None:
         log_file = artifact_manager.get_log_path()
 
@@ -400,6 +402,21 @@ def _execute_benchmarks(
 
     _apply_suite_timeout(suite_timeout)
 
+    progress_recorder = ProgressRecorder(
+        run_id=artifact_manager.run_id,
+        progress_path=artifact_manager.progress_dir / "run_progress.json",
+    )
+    progress_recorder.emit(
+        ProgressEvent(
+            phase="run",
+            phase_index=1,
+            total_phases=2,
+            step="start",
+            step_detail=f"targets={targets or ['all']}",
+            percent_complete=0.0,
+        )
+    )
+
     all_results = []
     for chapter_dir in chapter_dirs:
         chapter_id = chapter_slug(chapter_dir, active_bench_root, bench_root=active_bench_root)
@@ -432,6 +449,7 @@ def _execute_benchmarks(
             target_extra_args=parsed_extra_args,
             only_cuda=only_cuda,
             only_python=only_python,
+            progress_recorder=progress_recorder,
             # Verification - both enabled by default for valid benchmark comparisons
             verify_input=verify_input,
             verify_output=verify_output,
@@ -447,6 +465,16 @@ def _execute_benchmarks(
             llm_explain=llm_explain,
         )
         all_results.append(result)
+
+    progress_recorder.emit(
+        ProgressEvent(
+            phase="run",
+            phase_index=2,
+            total_phases=2,
+            step="complete",
+            percent_complete=100.0,
+        )
+    )
 
     manifests = []
     for result in all_results:
@@ -510,6 +538,7 @@ if TYPER_AVAILABLE:
         warmup: Optional[int] = Option(None, "--warmup", help="Number of warmup iterations (default: chapter-specific)"),
         force_pipeline: bool = Option(False, "--force-pipeline", help="Force enable CUDA Pipeline API even on compute capability 12.0+ (may cause instability on Blackwell GPUs)"),
         artifacts_dir: Optional[str] = Option(None, "--artifacts-dir", help="Directory for artifacts (default: ./artifacts)"),
+        run_id: Optional[str] = Option(None, "--run-id", help="Run ID for artifact directory (default: timestamp)"),
         log_level: str = Option("INFO", "--log-level", help="Log level: DEBUG, INFO, WARNING, ERROR"),
         log_file: Optional[str] = Option(None, "--log-file", help="Path to log file (default: artifacts/<run_id>/logs/benchmark.log)"),
         single_gpu: bool = Option(False, "--single-gpu", help="Force single-GPU visibility (sets CUDA_VISIBLE_DEVICES=0 for this run)."),
@@ -611,6 +640,7 @@ if TYPER_AVAILABLE:
             warmup=warmup,
             force_pipeline=force_pipeline,
             artifacts_dir=artifacts_dir,
+            run_id=run_id,
             log_level=log_level,
             log_file=log_file,
             single_gpu=single_gpu,

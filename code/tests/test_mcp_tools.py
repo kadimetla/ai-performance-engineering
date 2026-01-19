@@ -56,6 +56,7 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_list_chapters",
         "aisp_run_benchmarks",
         "aisp_benchmark_deep_dive_compare",
+        "aisp_benchmark_llm_patch_loop",
         "aisp_benchmark_report",
         "aisp_benchmark_export",
         "aisp_benchmark_compare_runs",
@@ -152,6 +153,7 @@ SLOW_TOOLS = {
     "aisp_gpu_bandwidth",
     "aisp_run_benchmarks",
     "aisp_benchmark_deep_dive_compare",
+    "aisp_benchmark_llm_patch_loop",
     "aisp_profile_nsys",
     "aisp_profile_ncu",
     "aisp_profile_torch",
@@ -173,7 +175,11 @@ SLOW_TOOLS = {
     "aisp_hw_p2p",
 }
 
-BENCHMARK_SLOW_TOOLS = {"aisp_run_benchmarks", "aisp_benchmark_deep_dive_compare"}
+BENCHMARK_SLOW_TOOLS = {
+    "aisp_run_benchmarks",
+    "aisp_benchmark_deep_dive_compare",
+    "aisp_benchmark_llm_patch_loop",
+}
 
 TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "aisp_run_benchmarks": {
@@ -252,6 +258,17 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
         "warmup": 5,
         "timeout_seconds": 900,
     },
+    "aisp_benchmark_llm_patch_loop": {
+        "targets": ["ch10:atomic_reduction"],
+        "output_dir": str(REPO_ROOT / "artifacts" / "mcp-llm-loop-tests"),
+        "compare_output_dir": str(REPO_ROOT / "artifacts" / "mcp-llm-loop-compare-tests"),
+        "iterations": 1,
+        "warmup": 5,
+        "compare_iterations": 1,
+        "compare_warmup": 5,
+        "force_llm": True,
+        "llm_explain": True,
+    },
     "aisp_profile_torch": {"script": str(REPO_ROOT / "tests" / "fixtures" / "mcp_torch_profile_target.py")},
     "aisp_profile_hta": {"command": ["python", "-c", "print('hta')"]},
     "aisp_hf": {"action": "search", "query": "llama", "limit": 3},
@@ -324,7 +341,7 @@ def test_expected_tool_registration_matches_catalog():
     expected = {case.name for case in ALL_TOOL_CASES}
     registered = set(mcp_server.TOOLS.keys())
     assert expected == registered, "Tool catalog must mirror MCP server registry"
-    assert len(expected) == 80
+    assert len(expected) == 81
 
 
 def test_tool_list_protocol_matches_registration(server: mcp_server.MCPServer):

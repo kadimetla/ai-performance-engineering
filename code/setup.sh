@@ -146,10 +146,10 @@ VLLM_WHEEL_PATTERN="${VLLM_WHEEL_PATTERN:-${VLLM_WHEEL_DIR}/vllm-*-${PYTHON_ABI_
 #
 TE_REPO_URL="${TE_REPO_URL:-https://github.com/NVIDIA/TransformerEngine.git}"
 # TE v2.9 release (2025-11-11) - stable release with CUDA 13 support
-TE_GIT_COMMIT="${TE_GIT_COMMIT:-70f536662ae1f11f8ee3dc9acc63ee28127c64a8}"
+TE_GIT_COMMIT="${TE_GIT_COMMIT:-v2.9}"
 TE_VERSION="v2.9"
 TE_BUNDLED_CUTLASS_VERSION="4.2.0"  # What TE bundles (needs symlink override)
-TE_SRC_DIR="${TE_SRC_DIR:-${THIRD_PARTY_DIR}/TransformerEngine}"
+TE_SRC_DIR="${TE_SRC_DIR:-${THIRD_PARTY_DIR}/TransformerEngine-src}"
 CUTLASS_REPO_URL="${CUTLASS_REPO_URL:-https://github.com/NVIDIA/cutlass.git}"
 # CUTLASS 4.3.0 release tag
 CUTLASS_REF="${CUTLASS_REF:-v4.3.0}"
@@ -545,6 +545,17 @@ install_proton_cli_stub() {
     echo "Installed Proton stub CLI at ${target}"
 }
 
+install_aisp_cli_wrapper() {
+    local target="/usr/local/bin/aisp"
+    cat > "${target}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec python3 "${PROJECT_ROOT}/cli/aisp.py" "\$@"
+EOF
+    chmod 755 "${target}"
+    echo "Installed aisp CLI wrapper at ${target}"
+}
+
 remove_conflicting_user_triton() {
     if [ -z "${SUDO_USER:-}" ] || [ "${SUDO_USER}" = "root" ]; then
         return 0
@@ -626,6 +637,7 @@ PY
 
 patch_transformer_engine_loader
 install_proton_cli_stub
+install_aisp_cli_wrapper
 remove_conflicting_user_triton
 remove_usercustomize_shim
 
@@ -1596,6 +1608,7 @@ if [ -f "$TEMP_REQUIREMENTS" ]; then
         echo "Installing core packages individually..."
             pip_install --no-input --ignore-installed \
             blinker==1.9.0 \
+            nvidia-mathdx==25.6.0 \
             nvidia-ml-py3 nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
             numpy==2.1.2 pandas==2.3.2 scikit-learn==1.7.2 pillow==11.3.0 \
             matplotlib==3.10.6 seaborn==0.13.2 tensorboard==2.20.0 wandb==0.22.0 plotly==6.3.0 bokeh==3.8.0 dash==3.2.0 \
@@ -1613,6 +1626,7 @@ else
     echo "Requirements file not found at $REQUIREMENTS_FILE. Installing core packages directly..."
     pip_install --no-input --ignore-installed \
         blinker==1.9.0 \
+        nvidia-mathdx==25.6.0 \
         nvidia-ml-py3 nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
         numpy==2.1.2 pandas==2.3.2 scikit-learn==1.7.2 pillow==11.3.0 \
         matplotlib==3.10.6 seaborn==0.13.2 tensorboard==2.20.0 wandb==0.22.0 plotly==6.3.0 bokeh==3.8.0 dash==3.2.0 \
@@ -2188,7 +2202,6 @@ for name in (
 PY
 
 python3 <<'PY'
-import ast
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
@@ -2201,8 +2214,9 @@ def ensure_te_import_tolerant(dist_name: str) -> bool:
     if not init_path.exists():
         return False
     source = init_path.read_text()
-    if "_IN_TREE_TRANSFORMER_ENGINE" in source:
-        return True
+    marker = "import transformer_engine.common"
+    if marker not in source:
+        return False
     injection = (
         "\ntry:\n"
         "    from importlib.metadata import PackageNotFoundError, distribution\n"
@@ -2219,7 +2233,11 @@ def ensure_te_import_tolerant(dist_name: str) -> bool:
         "else:\n"
         "    _IN_TREE_TRANSFORMER_ENGINE = True\n"
     )
-    source = source.replace("from . import pytorch", "from . import pytorch" + injection, 1)
+    if marker + injection in source:
+        return True
+    if injection in source:
+        source = source.replace(injection, "", 1)
+    source = source.replace(marker, marker + injection, 1)
     init_path.write_text(source)
     return True
 
@@ -3232,7 +3250,53 @@ fi
 echo ""
 echo "Running Peak Performance Benchmark..."
 echo "======================================"
-if python3 "$PROJECT_ROOT/core/benchmark/benchmark_peak.py" --output-dir "$PROJECT_ROOT" 2>&1; then
+if python3 <<'PY'
+import json
+import os
+import runpy
+from datetime import datetime
+from pathlib import Path
+
+from core.harness.benchmark_harness import lock_gpu_clocks
+
+try:
+    import pynvml
+except ImportError as exc:
+    raise SystemExit(f"pynvml required for clock verification: {exc}")
+
+output_dir = Path(os.environ["PROJECT_ROOT"])
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+manifest_path = output_dir / f"benchmark_peak_manifest_{timestamp}.json"
+
+with lock_gpu_clocks():
+    pynvml.nvmlInit()
+    try:
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        app_sm = int(pynvml.nvmlDeviceGetApplicationsClock(handle, pynvml.NVML_CLOCK_SM))
+        app_mem = int(pynvml.nvmlDeviceGetApplicationsClock(handle, pynvml.NVML_CLOCK_MEM))
+    finally:
+        pynvml.nvmlShutdown()
+
+    print(f"App clocks locked: SM={app_sm}MHz Mem={app_mem}MHz")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "timestamp": timestamp,
+                "device_index": 0,
+                "app_clock": {"sm_mhz": app_sm, "mem_mhz": app_mem},
+                "notes": "benchmark_peak run with lock_gpu_clocks wrapper",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    import sys
+    sys.argv = ["benchmark_peak.py", "--output-dir", str(output_dir)]
+    runpy.run_path(str(output_dir / "core/benchmark/benchmark_peak.py"), run_name="__main__")
+
+print(f"Peak run manifest saved to: {manifest_path}")
+PY
+then
     echo "Peak performance benchmark completed successfully"
 else
     echo "ERROR: Peak performance benchmark failed"
