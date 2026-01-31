@@ -79,7 +79,7 @@ huggingface-hub==0.34.6  # Required by transformers 4.56.0 and tokenizers 0.22.2
 
 # Optional model serving & optimization
 torchtitan==0.2.0
-flashinfer==0.5.2
+flashinfer-python==0.6.2
 ordered-set==4.1.0
 
 # GPU compression & pipeline helpers

@@ -302,11 +302,29 @@ _SELECTION_HINTS: Dict[str, str] = {
     "aisp_profile_torch": (
         "PyTorch operator breakdown; use aisp_profile_nsys for timeline or aisp_profile_ncu for kernel metrics."
     ),
+    "aisp_profile_compare": (
+        "Narrative + flamegraph comparison; use aisp_compare_nsys/ncu for raw metric diffs."
+    ),
+    "aisp_compare_nsys": (
+        "Timeline comparison; use aisp_compare_ncu for kernel metrics and aisp_profile_compare for narrative+flamegraph."
+    ),
+    "aisp_compare_ncu": (
+        "Kernel metric comparison; use aisp_compare_nsys for timeline and aisp_profile_compare for narrative+flamegraph."
+    ),
     "aisp_ask": (
         "Conceptual performance Q&A; use aisp_explain to interpret existing tool outputs."
     ),
     "aisp_explain": (
         "Interpret tool outputs/results; use aisp_ask for general performance questions."
+    ),
+    "aisp_export_csv": (
+        "Inline CSV payload; use aisp_benchmark_export for file output and aisp_benchmark_report for PDF/HTML."
+    ),
+    "aisp_export_html": (
+        "Inline HTML payload; use aisp_benchmark_report for file output or aisp_export_pdf for PDF."
+    ),
+    "aisp_export_pdf": (
+        "Inline PDF payload; use aisp_benchmark_report for file output or aisp_export_html for HTML."
     ),
 }
 
@@ -674,6 +692,10 @@ def _run_bench_cli(args: List[str], timeout: Optional[int] = _BENCH_CLI_TIMEOUT)
 
 
 _BENCH_RESULTS_MARKER = "JSON results saved to:"
+
+
+def _is_test_mode() -> bool:
+    return os.getenv("AISP_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ
 
 
 def _extract_bench_results_json(result: Dict[str, Any]) -> Optional[Path]:
@@ -1376,7 +1398,7 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Benchmark targets as chapter or chapter:example; "
+                    "Benchmark targets as chapter or chapter:example (or lab paths like labs/<lab>:example); "
                     "discover via aisp_benchmark_targets or aisp_list_chapters. "
                     "Examples: ['ch07'] or ['ch10:atomic_reduction']."
                 ),
@@ -1502,6 +1524,11 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     allow_virtualization = bool(params.get("allow_virtualization", False))
     auto_analyze = bool(params.get("auto_analyze", True))
     auto_report = bool(params.get("auto_report", True))
+    if _is_test_mode():
+        if "auto_analyze" not in params:
+            auto_analyze = False
+        if "auto_report" not in params:
+            auto_report = False
     report_format = params.get("report_format", "html")
 
     # Validate profile value
@@ -1921,10 +1948,12 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
         return make_error("targets is required", include_context, context_level)
 
     def _run_and_analyze() -> Dict[str, Any]:
+        test_mode = _is_test_mode()
+        profile_mode = "minimal" if test_mode else "deep_dive"
         # Run bench with deep_dive profiling into output_dir/<timestamp>/...
         bench_params = {
             "targets": targets,
-            "profile": "deep_dive",
+            "profile": profile_mode,
             "artifacts_dir": output_dir,
             "run_id": run_id,
             "iterations": iterations,
@@ -2133,6 +2162,7 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "run_dir": str(run_dir_path),
             "results_json": str(results_path),
             "targets": targets,
+            "profile": profile_mode,
             "benchmarks": benchmark_analyses,
         }
         analysis_path.write_text(json.dumps(analysis, indent=2, default=str))
@@ -2563,7 +2593,10 @@ def tool_benchmark_targets(params: Dict[str, Any]) -> Dict[str, Any]:
     {"type": "object", "properties": with_context_params({
         "data_file": {
             "type": "string",
-            "description": "Path to benchmark_test_results.json from aisp_run_benchmarks (defaults to latest in artifacts/).",
+            "description": (
+                "Path to benchmark_test_results.json from aisp_run_benchmarks "
+                "(typically artifacts/runs/<run_id>/benchmark_test_results.json; defaults to latest in artifacts/runs/)."
+            ),
         },
         "output": {
             "type": "string",
@@ -2613,7 +2646,10 @@ def tool_benchmark_report(params: Dict[str, Any]) -> Dict[str, Any]:
     {"type": "object", "properties": with_context_params({
         "data_file": {
             "type": "string",
-            "description": "Path to benchmark_test_results.json from aisp_run_benchmarks (defaults to latest in artifacts/).",
+            "description": (
+                "Path to benchmark_test_results.json from aisp_run_benchmarks "
+                "(typically artifacts/runs/<run_id>/benchmark_test_results.json; defaults to latest in artifacts/runs/)."
+            ),
         },
         "format": {"type": "string", "description": "Output format: csv, markdown, or json", "enum": ["csv", "markdown", "json"], "default": "csv"},
         "output": {
@@ -2699,11 +2735,11 @@ def tool_benchmark_export(params: Dict[str, Any]) -> BenchmarkExportResult:
     {"type": "object", "properties": with_context_params({
         "baseline": {
             "type": "string",
-            "description": "Path to baseline (older) benchmark_test_results.json",
+            "description": "Path to baseline benchmark_test_results.json (e.g., artifacts/runs/<run_id>/benchmark_test_results.json)",
         },
         "candidate": {
             "type": "string",
-            "description": "Path to candidate/new benchmark_test_results.json",
+            "description": "Path to candidate benchmark_test_results.json (e.g., artifacts/runs/<run_id>/benchmark_test_results.json)",
         },
         "top": {"type": "integer", "description": "Show top N regressions/improvements", "default": 10},
     }), "required": ["baseline", "candidate"]}
@@ -3536,11 +3572,31 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
 
     result = profile_insights.generate_flamegraph_comparison(profiles_dir, pair_key=pair_key)
     if result is None:
-        return {
-            "error": "No baseline/optimized nsys profiles found",
+        nsys_comparison = profile_insights.compare_nsys_files(profiles_dir, pair_key=pair_key)
+        ncu_comparison = profile_insights.compare_ncu_files(profiles_dir, pair_key=pair_key)
+        if nsys_comparison is None and ncu_comparison is None:
+            return {
+                "error": "No baseline/optimized nsys profiles found",
+                "profiles_dir": str(profiles_dir),
+                "hint": "Profile both baseline and optimized with: nsys profile --stats=true -o <name> python <script>.py",
+            }
+        result = {
+            "warning": "No baseline/optimized nsys profiles found for flamegraph comparison.",
             "profiles_dir": str(profiles_dir),
-            "hint": "Profile both baseline and optimized with: nsys profile --stats=true -o <name> python <script>.py",
         }
+        if nsys_comparison is not None:
+            result["nsys_comparison"] = nsys_comparison
+        if ncu_comparison is not None:
+            result["ncu_comparison"] = ncu_comparison
+        side_by_side_report = profile_insights.generate_side_by_side_report(
+            profiles_dir,
+            pair_key=pair_key,
+            ncu_comparison=ncu_comparison,
+        )
+        result["side_by_side_report"] = side_by_side_report
+        if not side_by_side_report.get("success"):
+            result["side_by_side_error"] = side_by_side_report.get("error", "side_by_side_failed")
+        return attach_context_if_requested(result, include_context, context_level)
 
     if result.get("error"):
         return result
@@ -4132,7 +4188,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     "Returns: {trace_path, summary, torch_metrics, success} and writes Chrome trace JSON + summary. "
     "USE when: Profiling PyTorch code specifically, understanding autograd overhead, CPU/GPU interplay. "
     "Example: \"Profile my training script with torch.profiler\" or \"Get PyTorch trace for train.py\". "
-    "Output viewable in chrome://tracing or Perfetto. Emits NVTX for nsys correlation. 🕐 SLOW (varies). WORKFLOW: aisp_profile_kernels → aisp_profile_ncu. NOT FOR: Timeline (use aisp_profile_nsys). "
+    "Output viewable in chrome://tracing or Perfetto. Emits NVTX for nsys correlation. 🕐 SLOW (varies). WORKFLOW: aisp_profile_torch → analyze operators → optimize. NOT FOR: Timeline (use aisp_profile_nsys). "
     "Analyze torch_metrics to identify CPU/GPU hotspots and autograd overhead.",
     {"type": "object", "properties": with_context_params({
         "script": {"type": "string", "description": "Path to Python script to profile"},
@@ -4453,7 +4509,7 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     "Returns: {csv: <csv_string>, detailed: bool}. "
     "USE when: Importing benchmark data into Excel/Sheets, sharing raw numbers. "
     "Example: \"Export benchmarks to CSV\" or \"Get CSV of all results\". "
-    "detailed=true includes all metrics; false gives summary columns only. 🕐 SLOW (varies). WORKFLOW: aisp_profile_hta → analyze GPU idle → optimize. NOT FOR: Quick checks (use aisp_profile_flame).",
+    "detailed=true includes all metrics; false gives summary columns only. 🕐 SLOW (varies). WORKFLOW: aisp_run_benchmarks → aisp_benchmark_export or aisp_export_csv. NOT FOR: PDF/HTML reports (use aisp_benchmark_report).",
     {"type": "object", "properties": with_context_params({
         "detailed": {
             "type": "boolean",
@@ -4479,7 +4535,7 @@ def tool_export_csv(params: Dict[str, Any]) -> Dict[str, Any]:
     "Returns: {pdf_base64: <base64_encoded_pdf>}. "
     "USE when: Creating printable reports, formal documentation, sharing with stakeholders. "
     "Example: \"Generate PDF report\" or \"Create printable benchmark summary\". "
-    "PREFER aisp_benchmark_report for more control over report options. 🕐 MEDIUM (~5s). WORKFLOW: aisp_run_benchmarks → aisp_export_pdf. NOT FOR: Interactive reports (use aisp_export_html).",
+    "PREFER aisp_benchmark_report for more control over report options. 🕐 MEDIUM (~5s). WORKFLOW: aisp_run_benchmarks → aisp_benchmark_report or aisp_export_pdf. NOT FOR: Raw data (use aisp_export_csv).",
     {"type": "object", "properties": with_context_params({})}
 )
 def tool_export_pdf(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -4498,7 +4554,7 @@ def tool_export_pdf(params: Dict[str, Any]) -> Dict[str, Any]:
     "Returns: {html: <html_string>}. "
     "USE when: Sharing interactive web-viewable reports, embedding in documentation. "
     "Example: \"Generate HTML report\" or \"Create interactive benchmark visualization\". "
-    "PREFER aisp_benchmark_report for more control over report options. ⚡ FAST (~2s). WORKFLOW: aisp_run_benchmarks → aisp_export_html. NOT FOR: Raw data (use aisp_export_csv).",
+    "PREFER aisp_benchmark_report for more control over report options. ⚡ FAST (~2s). WORKFLOW: aisp_run_benchmarks → aisp_benchmark_report or aisp_export_html. NOT FOR: Raw data (use aisp_export_csv).",
     {"type": "object", "properties": with_context_params({})}
 )
 def tool_export_html(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -5284,7 +5340,7 @@ def tool_gpu_topology_matrix(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_compare_nsys",
     "Tags: compare, nsys, nsight-systems, baseline, optimized, diff. "
     "Compare baseline vs optimized Nsight Systems reports. "
-    "Returns: {speedup, baseline_metrics, optimized_metrics, kernel_comparison, side_by_side_report}. "
+    "Returns: {metrics, baseline_file, optimized_file, ncu_comparison?, side_by_side_report}. "
     "If paired NCU profiles are present, also emits a side-by-side JSON report + narrative. "
     "🕐 MEDIUM (~5s). USE when: Comparing before/after nsys profiles. "
     "Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. "
@@ -5329,7 +5385,7 @@ def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     "aisp_compare_ncu",
     "Tags: compare, ncu, nsight-compute, baseline, optimized, kernel-metrics. "
     "Compare baseline vs optimized Nsight Compute kernel metrics. "
-    "Returns: {kernel_comparison: [{kernel, baseline_metrics, optimized_metrics}], side_by_side_report}. "
+    "Returns: {kernel_comparison | metrics, baseline_file, optimized_file, nsys_comparison?, side_by_side_report}. "
     "If paired NSYS profiles are present, also emits a side-by-side JSON report + narrative. "
     "🕐 MEDIUM (~5s). USE when: Deep-diving into kernel-level improvements. "
     "Tip: if you used aisp_benchmark_deep_dive_compare, pass benchmarks[].profiles_dir here. "

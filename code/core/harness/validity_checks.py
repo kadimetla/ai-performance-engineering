@@ -765,7 +765,7 @@ def validate_environment(
         if allow_virtualization:
             warnings_list.append(f"{message} Continuing because allow_virtualization=True.")
         else:
-            warnings_list.append(message)
+            errors.append(message)
 
     # torch.compile backend sanity (Compile category)
     try:

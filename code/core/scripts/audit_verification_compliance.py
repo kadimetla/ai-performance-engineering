@@ -37,6 +37,8 @@ def _scan_source_compliance(filepath: Path) -> Dict[str, bool]:
         # NOTE: This is a *lint-style* signal; it should not run benchmark code.
         "backend_toggles_present": False,
         "no_backend_toggles": True,
+        "determinism_toggles_present": False,
+        "no_determinism_enable_without_justification": True,
     }
 
     try:
@@ -89,6 +91,7 @@ def _scan_source_compliance(filepath: Path) -> Dict[str, bool]:
     class _Visitor(ast.NodeVisitor):
         def __init__(self) -> None:
             self._stack: List[str] = []
+            self._determinism_enable_found = False
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
             self._stack.append(node.name)
@@ -108,9 +111,17 @@ def _scan_source_compliance(filepath: Path) -> Dict[str, bool]:
                 if _is_payload_set_call(node):
                     flags["no_payload_set_in_benchmark_fn"] = False
             call_name = _dotted_name(node.func)
+            if call_name in {"torch.use_deterministic_algorithms", "torch.set_deterministic_debug_mode"}:
+                flags["determinism_toggles_present"] = True
+                if node.args:
+                    first = node.args[0]
+                    if isinstance(first, ast.Constant) and first.value is False:
+                        pass
+                    else:
+                        self._determinism_enable_found = True
+                else:
+                    self._determinism_enable_found = True
             if call_name in {
-                "torch.use_deterministic_algorithms",
-                "torch.set_deterministic_debug_mode",
                 "torch.set_float32_matmul_precision",
                 "enable_tf32",
                 "configure_tf32",
@@ -123,8 +134,14 @@ def _scan_source_compliance(filepath: Path) -> Dict[str, bool]:
         def visit_Assign(self, node: ast.Assign) -> None:
             for target in node.targets:
                 target_name = _dotted_name(target)
+                if target_name == "torch.backends.cudnn.deterministic":
+                    flags["determinism_toggles_present"] = True
+                    value = node.value
+                    if isinstance(value, ast.Constant) and value.value is False:
+                        pass
+                    else:
+                        self._determinism_enable_found = True
                 if target_name in {
-                    "torch.backends.cudnn.deterministic",
                     "torch.backends.cudnn.benchmark",
                     "torch.backends.cuda.matmul.allow_tf32",
                     "torch.backends.cudnn.allow_tf32",
@@ -134,8 +151,12 @@ def _scan_source_compliance(filepath: Path) -> Dict[str, bool]:
                     flags["backend_toggles_present"] = True
             self.generic_visit(node)
 
-    _Visitor().visit(tree)
+    visitor = _Visitor()
+    visitor.visit(tree)
     flags["no_backend_toggles"] = not flags["backend_toggles_present"]
+    allowlist = "aisp: allow_determinism" in source
+    if visitor._determinism_enable_found and not allowlist:
+        flags["no_determinism_enable_without_justification"] = False
     return flags
 
 
@@ -186,6 +207,8 @@ def check_compliance(benchmark: Any) -> Dict[str, bool]:
         # Hot-path hygiene (static analysis) populated by caller.
         "no_seed_setting_in_benchmark_fn": False,
         "no_payload_set_in_benchmark_fn": False,
+        "determinism_toggles_present": False,
+        "no_determinism_enable_without_justification": False,
     }
     
     # Check methods (including inherited)
@@ -317,12 +340,17 @@ def audit_directory(directory: Path) -> Dict[str, Dict[str, Any]]:
             "no_seed_setting_in_benchmark_fn",
             "no_payload_set_in_benchmark_fn",
             "no_backend_toggles",
+            "no_determinism_enable_without_justification",
         ]
         is_compliant = all(compliance.get(m, False) for m in critical_methods)
 
         warnings: List[str] = []
         if compliance.get("backend_toggles_present", False):
             warnings.append("Backend policy toggles detected in benchmark file.")
+        if compliance.get("determinism_toggles_present", False):
+            warnings.append("Determinism toggles detected in benchmark file.")
+        if not compliance.get("no_determinism_enable_without_justification", True):
+            warnings.append("Determinism enabled without allowlist comment (# aisp: allow_determinism ...).")
 
         results[str(filepath)] = {
             "status": "compliant" if is_compliant else "needs_work",

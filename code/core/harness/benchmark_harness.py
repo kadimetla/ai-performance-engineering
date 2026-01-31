@@ -3022,6 +3022,61 @@ class BenchmarkHarness:
         # Get benchmark name for error messages (same as subprocess path)
         benchmark_class = benchmark.__class__.__name__
         benchmark_name = getattr(benchmark, '__name__', None) or getattr(benchmark, 'name', None) or benchmark_class
+
+        # Environment validity gate for direct thread invocations (tests call this directly).
+        from core.harness.validity_checks import validate_environment
+
+        env_result = validate_environment(
+            device=self.device,
+            probe=self._environment_probe,
+            allow_virtualization=bool(getattr(config, "allow_virtualization", False)),
+        )
+        if LOGGER_AVAILABLE:
+            for warning in env_result.warnings:
+                logger.warning("ENVIRONMENT WARNING: %s", warning)
+        if env_result.errors:
+            message = "ENVIRONMENT INVALID: " + " | ".join(env_result.errors)
+            enforce_env = bool(getattr(config, "enforce_environment_validation", True))
+            if enforce_env and _is_chapter_or_labs_benchmark(benchmark):
+                errors.append(message)
+                timing = TimingStats(
+                    mean_ms=0.0,
+                    median_ms=0.0,
+                    std_ms=0.0,
+                    min_ms=0.0,
+                    max_ms=0.0,
+                    p50_ms=None,
+                    p90_ms=None,
+                    p95_ms=None,
+                    p99_ms=None,
+                    percentiles={},
+                    iterations=0,
+                    warmup_iterations=config.warmup,
+                    raw_times_ms=[],
+                    schemaVersion="1.0",
+                )
+                result = PydanticBenchmarkResult(
+                    timing=timing,
+                    errors=errors,
+                    inference_timing=None,
+                    memory=None,
+                    artifacts=None,
+                    profiler_metrics=None,
+                    validation_status=None,
+                    validation_message=None,
+                    benchmark_name=benchmark_name,
+                    device=str(self.device),
+                    mode=self.mode.value,
+                    timeout_stage=None,
+                    timeout_duration_seconds=None,
+                    timeout_limit_seconds=None,
+                    seeds=copy.deepcopy(getattr(self, "_seed_info", None)),
+                    schemaVersion="1.0",
+                )
+                self._annotate_launch_metadata(result, config)
+                return result
+            if LOGGER_AVAILABLE:
+                logger.warning(message)
         
         # Use a lock to prevent teardown from running while benchmark is executing
         execution_lock = threading.Lock()

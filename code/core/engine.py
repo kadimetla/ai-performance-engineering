@@ -174,7 +174,7 @@ DOMAINS = {
     },
     "benchmark": {
         "description": "Run benchmarks, track history, list targets",
-        "operations": ["run", "targets", "history", "data", "compare_runs"]
+        "operations": ["run", "targets", "history", "data", "overview", "compare", "compare_runs"]
     },
     "ai": {
         "description": "LLM-powered analysis, questions, explanations",
@@ -758,6 +758,8 @@ class BenchmarkDomain:
         targets()           - List available benchmark targets
         history()           - Get historical benchmark runs
         data()              - Load benchmark results data
+        overview()          - Summarize latest benchmark results
+        compare(params)     - Compare two benchmark runs (baseline vs candidate)
         compare_runs(a, b)  - Compare two benchmark runs
         available()         - Get available benchmarks with details
     """
@@ -817,6 +819,21 @@ class BenchmarkDomain:
     def data(self) -> Dict[str, Any]:
         """Load current benchmark results data."""
         return _get_handler().load_benchmark_data()
+
+    def overview(self) -> Dict[str, Any]:
+        """Summarize the latest benchmark results (top speedups, status counts)."""
+        from core.api import handlers
+        return handlers.benchmark_overview({})
+
+    def compare(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Compare two benchmark runs (baseline vs candidate)."""
+        from core.api import handlers
+        return handlers.benchmark_compare(params)
+
+    def compare_runs(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Compare two benchmark runs (baseline vs candidate)."""
+        from core.api import handlers
+        return handlers.benchmark_compare(params)
     
     def available(self) -> Dict[str, Any]:
         """Get available benchmarks with detailed info."""

@@ -68,6 +68,7 @@ TOOL_METADATA = {
         "tags": "profile, nsys, nsight, trace, timeline, cuda",
         "speed": "🕐 SLOW (varies)",
         "use_when": "Deep-diving into CUDA kernel timing, CPU-GPU overlap",
+        "selection": "Timeline + CPU/GPU overlap. Use profile.ncu for per-kernel metrics; profile.torch for PyTorch operators.",
         "not_for": "Quick checks (status), memory profiling (profile.ncu)",
         "examples": ["Profile this training script", "Get kernel timeline"],
     },
@@ -75,6 +76,7 @@ TOOL_METADATA = {
         "tags": "profile, ncu, nsight-compute, kernel, occupancy, memory",
         "speed": "🕐 SLOW (varies)",
         "use_when": "Analyzing specific kernel performance, occupancy, memory access",
+        "selection": "Kernel metrics/occupancy. Use profile.nsys for timeline; profile.torch for PyTorch ops.",
         "not_for": "Full trace (profile.nsys), quick checks (status)",
         "examples": ["Profile kernel occupancy", "Analyze memory coalescing"],
     },
@@ -82,6 +84,7 @@ TOOL_METADATA = {
         "tags": "profile, pytorch, torch, profiler, tensorboard",
         "speed": "🕐 MEDIUM (~30s)",
         "use_when": "PyTorch-specific profiling, operator breakdown",
+        "selection": "PyTorch operator breakdown. Use profile.nsys for timeline; profile.ncu for kernel metrics.",
         "not_for": "CUDA-level profiling (profile.nsys/ncu)",
         "examples": ["Profile PyTorch model", "Get operator breakdown"],
     },
@@ -178,6 +181,7 @@ TOOL_METADATA = {
         "tags": "benchmark, test, measure, performance, baseline",
         "speed": "🕐 SLOW (varies)",
         "use_when": "Running performance benchmarks",
+        "selection": "Run benchmarks. Use benchmark.targets to discover names; benchmark.report to summarize results.",
         "not_for": "Quick checks (status)",
         "examples": ["Run memory bandwidth test", "Benchmark my GPU"],
     },
@@ -185,6 +189,7 @@ TOOL_METADATA = {
         "tags": "benchmark, targets, goals, expected, comparison",
         "speed": "⚡ FAST (~1s)",
         "use_when": "Getting expected performance targets",
+        "selection": "List targets and expectations. Use benchmark.run to execute or benchmark.report to summarize results.",
         "not_for": "Running benchmarks (benchmark.run)",
         "examples": ["What should H100 achieve?", "Expected bandwidth for A100"],
     },
@@ -193,6 +198,7 @@ TOOL_METADATA = {
         "tags": "ai, llm, question, help, explain",
         "speed": "🕐 MEDIUM (~5s)",
         "use_when": "Asking performance questions in natural language",
+        "selection": "Ask a new question. Use ai.explain to interpret specific results/metrics.",
         "not_for": "Specific analysis (use domain tools)",
         "examples": ["Why is my GPU at 50% utilization?", "Explain tensor parallelism"],
     },
@@ -200,6 +206,7 @@ TOOL_METADATA = {
         "tags": "ai, llm, explain, interpret, results",
         "speed": "🕐 MEDIUM (~5s)",
         "use_when": "Getting AI explanation of results",
+        "selection": "Explain provided results/metrics. Use ai.ask for new questions.",
         "not_for": "Getting raw data (use domain tools)",
         "examples": ["Explain these bottlenecks", "What do these metrics mean?"],
     },
@@ -250,6 +257,10 @@ def get_tool_description(domain: str, method: str, docstring: str) -> str:
     # Use when
     if meta.get("use_when"):
         parts.append(f"USE WHEN: {meta['use_when']}.")
+
+    # Selection hint
+    if meta.get("selection"):
+        parts.append(f"Selection: {meta['selection']}")
     
     # Examples
     if meta.get("examples"):
@@ -931,7 +942,6 @@ CONSOLIDATED_TOOLS = {
 # Total: 50 tools (down from 88)
 # Core: 4, GPU: 4, System: 3, Profile: 5, Analyze: 5, Optimize: 3
 # Distributed: 3, Inference: 2, Benchmark: 4, AI: 3, Export: 3, HW: 10, HF: 1
-
 
 
 

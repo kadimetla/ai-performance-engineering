@@ -1,4 +1,5 @@
 #!/bin/bash
+
 #
 # AI Performance Engineering Setup Script
 # ========================================
@@ -22,6 +23,7 @@
 #
 # Usage:
 #   sudo ./setup.sh
+#   (logs to ./setup.log by default; override with SETUP_LOG_FILE)
 #
 # Duration: 10-20 minutes (first run may require reboot for driver upgrade)
 #
@@ -46,6 +48,8 @@
 #   - If driver upgrade is needed, script will exit and ask you to reboot
 #   - After reboot, simply re-run: sudo ./setup.sh
 #   - The script is idempotent and safe to re-run
+#   - Disk cleanup is enabled by default (CLEAN_APT_CACHE/CLEAN_PIP_CACHE/CLEAN_BUILD_ARTIFACTS)
+#   - Minimum free space thresholds: SETUP_MIN_FREE_GB / SETUP_MIN_TE_BUILD_FREE_GB
 #
 # After running this script, you can:
 #   - Run examples: python3 ch01/performance_basics.py
@@ -54,6 +58,88 @@
 #
 
 set -e  # Exit on any error
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}"
+
+# =============================================================================
+# Logging + Disk Hygiene (always-on logging, keep disk usage tidy)
+# =============================================================================
+LOG_FILE="${SETUP_LOG_FILE:-${PROJECT_ROOT}/setup.log}"
+LOG_MAX_BYTES="${SETUP_LOG_MAX_BYTES:-104857600}"  # 100 MB
+LOG_COMPRESS="${SETUP_LOG_COMPRESS:-1}"
+SETUP_MIN_FREE_GB="${SETUP_MIN_FREE_GB:-6}"
+SETUP_MIN_TE_BUILD_FREE_GB="${SETUP_MIN_TE_BUILD_FREE_GB:-8}"
+CLEAN_APT_CACHE="${CLEAN_APT_CACHE:-1}"
+CLEAN_PIP_CACHE="${CLEAN_PIP_CACHE:-1}"
+CLEAN_BUILD_ARTIFACTS="${CLEAN_BUILD_ARTIFACTS:-1}"
+
+rotate_setup_log() {
+    if [ -f "${LOG_FILE}" ]; then
+        local log_size
+        log_size="$(stat -c %s "${LOG_FILE}" 2>/dev/null || echo 0)"
+        if [ "${log_size}" -ge "${LOG_MAX_BYTES}" ]; then
+            local ts rotated
+            ts="$(date +%Y%m%d_%H%M%S)"
+            rotated="${LOG_FILE}.${ts}"
+            mv "${LOG_FILE}" "${rotated}" 2>/dev/null || true
+            if [ "${LOG_COMPRESS}" -eq 1 ] && command -v gzip >/dev/null 2>&1; then
+                gzip -f "${rotated}" >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+}
+
+start_setup_logging() {
+    local log_dir
+    log_dir="$(dirname "${LOG_FILE}")"
+    mkdir -p "${log_dir}"
+    rotate_setup_log
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+        touch "${LOG_FILE}" 2>/dev/null || true
+        chown "${SUDO_USER}":"${SUDO_USER}" "${LOG_FILE}" 2>/dev/null || true
+    fi
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+    echo "Logging to ${LOG_FILE}"
+}
+
+get_free_kb() {
+    df -Pk "${PROJECT_ROOT}" | awk 'NR==2 {print $4}'
+}
+
+reclaim_disk_space_basic() {
+    echo "Reclaiming disk space (APT + pip caches)..."
+    if [ "${CLEAN_APT_CACHE}" -eq 1 ] && [ "$(id -u)" -eq 0 ]; then
+        apt-get clean >/dev/null 2>&1 || true
+        rm -rf /var/lib/apt/lists/* >/dev/null 2>&1 || true
+    fi
+    if [ "${CLEAN_PIP_CACHE}" -eq 1 ]; then
+        python3 -m pip cache purge >/dev/null 2>&1 || true
+        rm -rf /root/.cache/pip >/dev/null 2>&1 || true
+    fi
+}
+
+ensure_free_space_gb() {
+    local min_gb="$1"
+    local reason="$2"
+    local free_kb free_gb
+    free_kb="$(get_free_kb)"
+    free_gb=$((free_kb / 1024 / 1024))
+    if [ "${free_gb}" -lt "${min_gb}" ]; then
+        echo "Low disk space: ${free_gb} GB free (need ${min_gb} GB) for ${reason}."
+        reclaim_disk_space_basic
+        free_kb="$(get_free_kb)"
+        free_gb=$((free_kb / 1024 / 1024))
+        if [ "${free_gb}" -lt "${min_gb}" ]; then
+            echo "ERROR: Insufficient disk space after cleanup (${free_gb} GB free)."
+            echo "       Free up space or set SETUP_MIN_FREE_GB/SETUP_MIN_TE_BUILD_FREE_GB."
+            exit 1
+        fi
+    fi
+}
+
+start_setup_logging
+ensure_free_space_gb "${SETUP_MIN_FREE_GB}" "setup start"
 
 echo "AI Performance Engineering Setup Script"
 echo "=========================================="
@@ -70,7 +156,6 @@ echo ""
 echo "Note: If driver upgrade is needed, you'll be prompted to reboot."
 echo ""
 
-PROJECT_ROOT="$(dirname "$(realpath "$0")")"
 REQUIRED_DRIVER_VERSION="580.126.09"
 PYTHON_TARGET_VERSION="3.12"
 PYTHON_TARGET_MAJOR="${PYTHON_TARGET_VERSION%%.*}"
@@ -189,7 +274,7 @@ CUTLASS_NVCC_ARCHS_VALUE_DEFAULT="100;103;121;122"
 CUTLASS_NVCC_ARCHS_VALUE="${CUTLASS_NVCC_ARCHS_VALUE_DEFAULT}"
 PYTORCH_NIGHTLY_DATE="20251213"
 PYTORCH_TORCH_VERSION="2.10.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
-PYTORCH_TORCHVISION_VERSION="0.25.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
+# PYTORCH_TORCHVISION_VERSION="0.25.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
 PYTORCH_TORCHAUDIO_VERSION="2.10.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
 PYTORCH_TORCHAO_VERSION="0.16.0.dev${PYTORCH_NIGHTLY_DATE}+cu130"
 PYTORCH_TRITON_VERSION="3.6.0+git8fedd49b"
@@ -1124,9 +1209,15 @@ if command -v nvidia-smi &> /dev/null; then
         echo "Current driver ($CURRENT_DRIVER) is too old for CUDA ${CUDA_SHORT_VERSION} Update 2"
         echo "Upgrading to NVIDIA driver 580 (open kernel modules)..."
         
+        # Unhold any NVIDIA packages to avoid resolver conflicts
+        if apt-mark showhold 2>/dev/null | grep -Eq '^(nvidia|libnvidia|cuda)-'; then
+            echo "Releasing held NVIDIA/CUDA packages..."
+            apt-mark unhold $(apt-mark showhold | grep -E '^(nvidia|libnvidia|cuda)-' | tr '\n' ' ') || true
+        fi
+
         # Remove old driver packages that might conflict
         echo "Removing old NVIDIA driver packages..."
-        apt remove -y nvidia-driver-* nvidia-dkms-* nvidia-kernel-common-* \
+        apt remove -y nvidia-driver-* nvidia-dkms-* nvidia-kernel-common nvidia-kernel-common-* \
             libnvidia-compute-* libnvidia-extra-* nvidia-utils-* \
             python3-jax-cuda* python3-torch-cuda python3-torchvision-cuda 2>/dev/null || true
         apt autoremove -y
@@ -1649,12 +1740,37 @@ pip_uninstall -y torchvision >/dev/null 2>&1 || true
 # Use the updated requirements file with pinned versions
 REQUIREMENTS_FILE="$PROJECT_ROOT/requirements_latest.txt"
 
+# Detect FlashInfer availability (flashinfer-python wheels target Python 3.10-3.14)
+FLASHINFER_SPEC=""
+SKIP_FLASHINFER=0
+if [ -f "$REQUIREMENTS_FILE" ]; then
+    FLASHINFER_SPEC="$(grep -E '^flashinfer-python==' "$REQUIREMENTS_FILE" | head -n 1 || true)"
+    if [ -n "${FLASHINFER_SPEC}" ]; then
+        if python3 - <<'PY' >/dev/null 2>&1
+import sys
+v = sys.version_info[:2]
+raise SystemExit(0 if (3, 10) <= v <= (3, 14) else 1)
+PY
+        then
+            :
+        else
+            SKIP_FLASHINFER=1
+            echo "NOTE: ${FLASHINFER_SPEC} skipped in bulk install for Python $(python3 -c 'import sys; print(\"%d.%d\" % sys.version_info[:2])')."
+            echo "      Set FORCE_FLASHINFER_INSTALL=1 to attempt install anyway."
+        fi
+    fi
+fi
+
 # Create temporary requirements file WITHOUT accelerate and torchtitan
 # (they pull in torch>=1.10.0 which installs CPU version)
 # We'll install them separately AFTER PyTorch CUDA is installed
 TEMP_REQUIREMENTS="/tmp/requirements_no_torch_deps.txt"
 if [ -f "$REQUIREMENTS_FILE" ]; then
-    grep -v "^accelerate==" "$REQUIREMENTS_FILE" | grep -v "^torchtitan==" > "$TEMP_REQUIREMENTS" || true
+    REQUIREMENTS_EXCLUDE_REGEX='^(accelerate==|torchtitan==)'
+    if [ "${SKIP_FLASHINFER}" -eq 1 ]; then
+        REQUIREMENTS_EXCLUDE_REGEX='^(accelerate==|torchtitan==|flashinfer-python==)'
+    fi
+    grep -Ev "${REQUIREMENTS_EXCLUDE_REGEX}" "$REQUIREMENTS_FILE" > "$TEMP_REQUIREMENTS" || true
     echo "Created temporary requirements file excluding accelerate and torchtitan"
     echo "  (these will be installed after PyTorch CUDA to prevent CPU version override)"
 fi
@@ -1662,10 +1778,10 @@ fi
 # Install dependencies with error handling (excluding accelerate/torchtitan)
 if [ -f "$TEMP_REQUIREMENTS" ]; then
     echo "Installing Python packages from requirements file (excluding accelerate/torchtitan)..."
-    if ! pip_install --no-input --ignore-installed -r "$TEMP_REQUIREMENTS"; then
+    if ! pip_install --no-cache-dir --no-input --ignore-installed -r "$TEMP_REQUIREMENTS"; then
         echo "Some packages failed to install from requirements file."
         echo "Installing core packages individually..."
-            pip_install --no-input --ignore-installed \
+            pip_install --no-cache-dir --no-input --ignore-installed \
             blinker==1.9.0 \
             nvidia-mathdx==25.6.0 \
             nvidia-ml-py3 nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
@@ -1683,7 +1799,7 @@ if [ -f "$TEMP_REQUIREMENTS" ]; then
     rm -f "$TEMP_REQUIREMENTS"
 else
     echo "Requirements file not found at $REQUIREMENTS_FILE. Installing core packages directly..."
-    pip_install --no-input --ignore-installed \
+    pip_install --no-cache-dir --no-input --ignore-installed \
         blinker==1.9.0 \
         nvidia-mathdx==25.6.0 \
         nvidia-ml-py3 nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
@@ -1699,6 +1815,13 @@ else
         "fsspec[http]==2024.6.1"
 fi
 
+if [ -n "${FLASHINFER_SPEC}" ] && [ "${SKIP_FLASHINFER}" -eq 1 ] && [ "${FORCE_FLASHINFER_INSTALL:-0}" -eq 1 ]; then
+    echo "Attempting optional ${FLASHINFER_SPEC} install (forced)..."
+    if ! pip_install --no-cache-dir --upgrade --ignore-installed --only-binary=:all: "${FLASHINFER_SPEC}"; then
+        echo "Warning: ${FLASHINFER_SPEC} install failed; continuing without it."
+    fi
+fi
+
 # Install PyTorch CUDA 13 stack (binary wheels only, no source builds)
 echo ""
 echo "============================================================================"
@@ -1709,7 +1832,7 @@ echo ""
 echo "Removing any existing PyTorch installations..."
 pip_uninstall -y torch torchvision torchdata functorch pytorch-triton >/dev/null 2>&1 || true
 
-echo "Installing torch ${PYTORCH_TORCH_VERSION} + torchvision/torchaudio/torchao (cu130 nightly)..."
+echo "Installing torch ${PYTORCH_TORCH_VERSION} + torchaudio/torchao (cu130 nightly)..."
 if ! pip_install --no-cache-dir --upgrade --ignore-installed \
     --index-url "${PYTORCH_CU130_INDEX}" \
     --find-links "${PYTORCH_TORCH_FIND_LINKS}" \
@@ -1720,14 +1843,16 @@ if ! pip_install --no-cache-dir --upgrade --ignore-installed \
     exit 1
 fi
 
-if ! pip_install --no-cache-dir --upgrade --ignore-installed \
-    --index-url "${PYTORCH_CU130_INDEX}" \
-    --extra-index-url "https://pypi.org/simple" \
-    --only-binary=":all:" \
-    "torchvision==${PYTORCH_TORCHVISION_VERSION}"; then
-    echo "ERROR: torchvision install failed from nightly cu130 index"
-    exit 1
-fi
+# NOTE: torchvision is intentionally skipped for now; nightly cu130 wheels have been failing.
+# If/when needed, re-enable this block and validate that cu130 wheels exist.
+# if ! pip_install --no-cache-dir --upgrade --ignore-installed \
+#     --index-url "${PYTORCH_CU130_INDEX}" \
+#     --extra-index-url "https://pypi.org/simple" \
+#     --only-binary=":all:" \
+#     "torchvision==${PYTORCH_TORCHVISION_VERSION}"; then
+#     echo "ERROR: torchvision install failed from nightly cu130 index"
+#     exit 1
+# fi
 
 if ! pip_install --no-cache-dir --upgrade --ignore-installed \
     --index-url "${PYTORCH_CU130_INDEX}" \
@@ -1923,21 +2048,23 @@ else
 fi
 
 # Install torchvision from cu130 binaries (no source builds)
-echo ""
-echo "Installing torchvision (cu13 wheel, no-build)..."
-pip_install --no-input --no-deps \
-    --index-url "${PYTORCH_CU130_INDEX}" \
-    --extra-index-url "https://pypi.org/simple" \
-    --only-binary=":all:" \
-    torchvision || {
-    echo "Warning: torchvision cu13 install failed. Continuing without it."
-}
+# NOTE: torchvision is intentionally skipped for now; nightly cu130 wheels have been failing.
+# echo ""
+# echo "Installing torchvision (cu13 wheel, no-build)..."
+# pip_install --no-input --no-deps \
+#     --index-url "${PYTORCH_CU130_INDEX}" \
+#     --extra-index-url "https://pypi.org/simple" \
+#     --only-binary=":all:" \
+#     torchvision || {
+#     echo "Warning: torchvision cu13 install failed. Continuing without it."
+# }
 
 # Verify PyTorch CUDA wasn't overridden by torchvision installation
-if ! verify_and_restore_pytorch_cuda "torchvision installation"; then
-    echo "ERROR: PyTorch CUDA missing after torchvision!"
-    exit 1
-fi
+# NOTE: torchvision is intentionally skipped for now; keep this check disabled until re-enabled.
+# if ! verify_and_restore_pytorch_cuda "torchvision installation"; then
+#     echo "ERROR: PyTorch CUDA missing after torchvision!"
+#     exit 1
+# fi
 
 echo ""
 echo "Refreshing CUTLASS source tree (${CUTLASS_REF}) for local CUDA builds..."
@@ -1978,6 +2105,8 @@ echo "  CUTLASS headers available at ${CUTLASS_SRC_DIR}/include"
 # Ensure monitoring/runtime dependencies are available even if requirements were cached
 echo ""
 echo "Ensuring monitoring/runtime packages (Prometheus, Transformer Engine)..."
+
+ensure_free_space_gb "${SETUP_MIN_TE_BUILD_FREE_GB}" "Transformer Engine build"
 
 echo ""
 echo "Installing Transformer Engine from source (cu13, arch sm_${GPU_COMPUTE_SM_NUM:-unknown})..."
@@ -2056,6 +2185,11 @@ if ! TORCH_CUDA_ARCH_LIST="${TE_BUILD_ARCH_LIST}" \
        pip_install --no-cache-dir --upgrade --ignore-installed --no-build-isolation --no-deps "${TE_SRC_DIR}"; then
     echo "ERROR: Transformer Engine source installation failed (arch list ${TE_BUILD_ARCH_LIST}, NVCC archs ${TE_BUILD_NVCC_ARCHS})."
     exit 1
+fi
+
+if [ "${CLEAN_BUILD_ARTIFACTS}" -eq 1 ]; then
+    echo "Cleaning Transformer Engine build artifacts..."
+    rm -rf "${TE_SRC_DIR}/build" "${TE_SRC_DIR}/.eggs" "${TE_SRC_DIR}/dist" 2>/dev/null || true
 fi
 
 # Ensure TE runtime dependencies for FP8 tooling
@@ -3633,3 +3767,7 @@ fi
 if ! python3 -m gpt_oss.chat --backend "${GPT_OSS_BACKEND}" "${GPT_OSS_MODEL_DIR}"; then
     echo "WARNING: gpt_oss chat invocation failed; skipping."
 fi
+
+echo ""
+echo "Final cleanup (APT/pip caches)..."
+reclaim_disk_space_basic

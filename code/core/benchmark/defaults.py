@@ -85,12 +85,12 @@ class BenchmarkDefaults:
     enable_memory_tracking: bool = False
     enable_profiling: bool = False
     # When profiling is enabled, prefer collecting both nsys + ncu by default.
-    enable_nsys: bool = True
+    enable_nsys: bool = False
     enable_ncu: bool = True
     enable_proton: bool = False
     # Always emit NVTX ranges when profiling is active (can be overridden per-run).
     enable_nvtx: Optional[bool] = True
-    allow_virtualization: bool = True
+    allow_virtualization: bool = False
     # Free allocator state between benchmarks by default.
     enable_cleanup: bool = True
     # Lock GPU clocks by default for consistent benchmarking.

@@ -34,11 +34,23 @@ def gpu_bandwidth(_: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def system_software(_: Dict[str, Any]) -> Dict[str, Any]:
-    return get_engine().system.software()
+    result = get_engine().system.software()
+    if isinstance(result, dict):
+        result = dict(result)
+        result.setdefault("python_version", result.get("python"))
+        result.setdefault("pytorch_version", result.get("pytorch"))
+        result.setdefault("cuda_version", result.get("cuda_runtime"))
+        result.setdefault("triton_version", result.get("triton"))
+    return result
 
 
 def system_dependencies(_: Dict[str, Any]) -> Dict[str, Any]:
-    return get_engine().system.dependencies()
+    result = get_engine().system.dependencies()
+    if isinstance(result, dict):
+        result = dict(result)
+        result.setdefault("missing", result.get("issues", []))
+        result.setdefault("outdated", result.get("warnings", []))
+    return result
 
 
 def system_context(_: Dict[str, Any]) -> Dict[str, Any]:

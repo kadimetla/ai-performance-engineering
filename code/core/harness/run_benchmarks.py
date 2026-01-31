@@ -2417,7 +2417,7 @@ def _compute_locked_fields(
     base_config: BenchmarkConfig,
     cli_iterations_provided: bool,
     cli_warmup_provided: bool,
-    cli_ncu_replay_mode_provided: bool,
+    cli_ncu_replay_mode_provided: bool = False,
     enable_profiling: bool,
 ) -> Set[str]:
     """Compute run-level config fields that benchmarks may not override."""
@@ -5157,7 +5157,11 @@ def _apply_llm_patches_for_benchmark(
     if not source_file.exists():
         return []
     
-    output_dir = chapter_dir / "llm_patches"
+    if profiling_output_dir:
+        output_dir = profiling_output_dir / "llm_patches"
+    else:
+        chapter_id = chapter_slug(chapter_dir, repo_root)
+        output_dir = default_artifacts_root(repo_root) / "llm_patches" / chapter_id / example_name
     output_dir.mkdir(parents=True, exist_ok=True)
     
     original_code = source_file.read_text()

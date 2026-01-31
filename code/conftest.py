@@ -103,3 +103,208 @@ def pytest_runtest_call(item):
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous)
+
+
+def _install_fastapi_stub() -> None:
+    import asyncio
+    import types
+    import sys
+    import urllib.parse
+    from contextlib import contextmanager
+
+    class Request:
+        def __init__(self, *, method="GET", query_params=None, json_body=None):
+            self.method = method
+            self.query_params = query_params or {}
+            self._json_body = json_body
+
+        async def json(self):
+            if self._json_body is None:
+                raise ValueError("No JSON body")
+            return self._json_body
+
+        async def is_disconnected(self):
+            return False
+
+    class JSONResponse:
+        def __init__(self, content, status_code=200, **_):
+            self.content = content
+            self.status_code = status_code
+
+    class StreamingResponse:
+        def __init__(self, content, status_code=200, **_):
+            self.content = content
+            self.status_code = status_code
+
+    class CORSMiddleware:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+    class _StubRoute:
+        def __init__(self, path, methods, endpoint):
+            self.path = path
+            self.methods = methods
+            self.endpoint = endpoint
+
+    class FastAPI:
+        def __init__(self, *_args, **_kwargs):
+            self.routes = []
+
+        def add_middleware(self, *_args, **_kwargs):
+            return None
+
+        def get(self, path):
+            def decorator(fn):
+                self.routes.append(_StubRoute(path, {"GET"}, fn))
+                return fn
+
+            return decorator
+
+        def post(self, path):
+            def decorator(fn):
+                self.routes.append(_StubRoute(path, {"POST"}, fn))
+                return fn
+
+            return decorator
+
+    class _Response:
+        def __init__(self, status_code, payload=None, text_chunks=None):
+            self.status_code = status_code
+            self._payload = payload
+            self._text_chunks = text_chunks or []
+
+        def json(self):
+            return self._payload
+
+        def iter_text(self):
+            return iter(self._text_chunks)
+
+    class TestClient:
+        def __init__(self, app):
+            self._app = app
+
+        def _coerce_param(self, value, param):
+            from typing import get_args, get_origin
+            if value is None:
+                return value
+            annotation = param.annotation if param.annotation is not param.empty else None
+            target_type = None
+            if annotation:
+                if isinstance(annotation, str):
+                    lowered = annotation.lower()
+                    if "float" in lowered:
+                        target_type = float
+                    elif "int" in lowered:
+                        target_type = int
+                    elif "bool" in lowered:
+                        target_type = bool
+                    elif "str" in lowered:
+                        target_type = str
+                else:
+                    origin = get_origin(annotation)
+                    if origin is None:
+                        target_type = annotation
+                    else:
+                        for arg in get_args(annotation):
+                            if arg in (int, float, bool, str):
+                                target_type = arg
+                                break
+            if target_type is None and param.default is not param.empty:
+                if isinstance(param.default, bool):
+                    target_type = bool
+                elif isinstance(param.default, int):
+                    target_type = int
+                elif isinstance(param.default, float):
+                    target_type = float
+            try:
+                if target_type is bool:
+                    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+                if target_type is int:
+                    return int(value)
+                if target_type is float:
+                    return float(value)
+            except Exception:
+                return value
+            return value
+
+        def _find_route(self, path, method):
+            for route in getattr(self._app, "routes", []):
+                if route.path == path and method in route.methods:
+                    return route
+            return None
+
+        def _request(self, method, url):
+            parsed = urllib.parse.urlparse(url)
+            path = parsed.path
+            query_params = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+            route = self._find_route(path, method)
+            if route is None:
+                return _Response(404, payload={"error": "Not Found"})
+
+            request = Request(method=method, query_params=query_params)
+            import inspect
+            signature = inspect.signature(route.endpoint)
+            kwargs = {}
+            for name, param in signature.parameters.items():
+                if name == "request":
+                    continue
+                if name in query_params:
+                    kwargs[name] = self._coerce_param(query_params[name], param)
+
+            async def _call_endpoint():
+                return await route.endpoint(request, **kwargs)
+
+            result = asyncio.run(_call_endpoint())
+
+            if isinstance(result, StreamingResponse):
+                async def _consume_async_gen(gen):
+                    chunks = []
+                    async for chunk in gen:
+                        chunks.append(str(chunk))
+                    return chunks
+
+                chunks = asyncio.run(_consume_async_gen(result.content))
+                return _Response(result.status_code, text_chunks=chunks)
+
+            if isinstance(result, JSONResponse):
+                return _Response(result.status_code, payload=result.content)
+
+            return _Response(200, payload=result)
+
+        def get(self, url):
+            return self._request("GET", url)
+
+        @contextmanager
+        def stream(self, method, url):
+            response = self._request(method, url)
+            yield response
+
+    TestClient.__test__ = False
+
+    fastapi_module = types.ModuleType("fastapi")
+    fastapi_module.FastAPI = FastAPI
+    fastapi_module.Request = Request
+    fastapi_module.__dict__["__all__"] = ["FastAPI", "Request"]
+
+    middleware_module = types.ModuleType("fastapi.middleware")
+    cors_module = types.ModuleType("fastapi.middleware.cors")
+    cors_module.CORSMiddleware = CORSMiddleware
+
+    responses_module = types.ModuleType("fastapi.responses")
+    responses_module.JSONResponse = JSONResponse
+    responses_module.StreamingResponse = StreamingResponse
+
+    testclient_module = types.ModuleType("fastapi.testclient")
+    testclient_module.TestClient = TestClient
+
+    sys.modules.setdefault("fastapi", fastapi_module)
+    sys.modules.setdefault("fastapi.middleware", middleware_module)
+    sys.modules.setdefault("fastapi.middleware.cors", cors_module)
+    sys.modules.setdefault("fastapi.responses", responses_module)
+    sys.modules.setdefault("fastapi.testclient", testclient_module)
+
+
+try:
+    import fastapi  # noqa: F401
+except Exception:
+    _install_fastapi_stub()

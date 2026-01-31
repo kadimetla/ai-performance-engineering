@@ -227,13 +227,19 @@ def get_input_signature_safe(benchmark: Any) -> Tuple[Optional[InputSignature], 
 # Pair Discovery
 # =============================================================================
 
-def discover_benchmark_pairs(root_dir: Path, chapter: Optional[str] = None) -> Dict[str, Dict[str, Path]]:
+def discover_benchmark_pairs(
+    root_dir: Path,
+    chapter: Optional[str] = None,
+    allow_unvalidated: Optional[bool] = None,
+) -> Dict[str, Dict[str, Path]]:
     """Discover baseline/optimized benchmark pairs.
     
     Returns:
         Dict mapping (chapter, example_name) to {baseline: path, optimized: path}
     """
     pairs: Dict[Tuple[str, str], Dict[str, Path]] = defaultdict(dict)
+    if allow_unvalidated is None:
+        allow_unvalidated = not (root_dir / "core").exists()
 
     if chapter:
         chapter_dir = root_dir / chapter
@@ -245,14 +251,31 @@ def discover_benchmark_pairs(root_dir: Path, chapter: Optional[str] = None) -> D
 
     for chapter_dir in chapter_dirs:
         chapter_name = str(chapter_dir.relative_to(root_dir))
-        discovered = discover_benchmarks(chapter_dir, validate=False, warn_missing=False)
-        for baseline_path, optimized_paths, _example_name in discovered:
-            for optimized_path in optimized_paths:
-                # Align with harness pairing: baseline_<name>.py matches optimized_<name>.py and
-                # optimized_<name>_*.py variants; the pair key is derived from the optimized stem.
-                key = optimized_path.stem.replace("optimized_", "", 1)
-                pairs[(chapter_name, key)]["baseline"] = baseline_path
-                pairs[(chapter_name, key)]["optimized"] = optimized_path
+        if allow_unvalidated:
+            baseline_files = sorted(chapter_dir.glob("baseline_*.py"))
+            for baseline_path in baseline_files:
+                example_name = baseline_path.stem.replace("baseline_", "", 1)
+                optimized_paths: List[Path] = []
+                for opt_path in sorted(chapter_dir.glob(f"optimized_{example_name}_*.py")):
+                    optimized_paths.append(opt_path)
+                opt_exact = chapter_dir / f"optimized_{example_name}.py"
+                if opt_exact.exists():
+                    optimized_paths.append(opt_exact)
+                if not optimized_paths:
+                    continue
+                for optimized_path in optimized_paths:
+                    key = optimized_path.stem.replace("optimized_", "", 1)
+                    pairs[(chapter_name, key)]["baseline"] = baseline_path
+                    pairs[(chapter_name, key)]["optimized"] = optimized_path
+        else:
+            discovered = discover_benchmarks(chapter_dir, validate=False, warn_missing=False)
+            for baseline_path, optimized_paths, _example_name in discovered:
+                for optimized_path in optimized_paths:
+                    # Align with harness pairing: baseline_<name>.py matches optimized_<name>.py and
+                    # optimized_<name>_*.py variants; the pair key is derived from the optimized stem.
+                    key = optimized_path.stem.replace("optimized_", "", 1)
+                    pairs[(chapter_name, key)]["baseline"] = baseline_path
+                    pairs[(chapter_name, key)]["optimized"] = optimized_path
 
     return {f"{ch}:{name}": paths for (ch, name), paths in pairs.items()}
 

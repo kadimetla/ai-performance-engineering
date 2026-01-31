@@ -28,14 +28,17 @@ class IssueEntry:
 
 
 def list_result_files(artifacts_dir: Path) -> List[Path]:
-    """Return every benchmark_test_results.json underneath artifacts/.
+    """Return every benchmark_test_results.json underneath artifacts/runs.
 
-    Supports both legacy layouts that stored results at artifacts/<timestamp>/results/*
-    and the newer structure that keeps per-example results at
-    artifacts/<timestamp>/<example>/results/*.
+    Supports legacy layouts that stored results at artifacts/<timestamp>/results/*
+    and the newer structure that keeps results at artifacts/runs/<run_id>/results/*.
     """
     result_files: List[Path] = []
-    for timestamp_dir in artifacts_dir.iterdir():
+    run_root = artifacts_dir
+    if (artifacts_dir / "runs").exists() and artifacts_dir.name == "artifacts":
+        run_root = artifacts_dir / "runs"
+
+    for timestamp_dir in run_root.iterdir():
         if not timestamp_dir.is_dir():
             continue
 
@@ -43,6 +46,11 @@ def list_result_files(artifacts_dir: Path) -> List[Path]:
         direct_result = timestamp_dir / "results" / "benchmark_test_results.json"
         if direct_result.exists():
             result_files.append(direct_result)
+
+        # Direct run root results (current)
+        run_root_result = timestamp_dir / "benchmark_test_results.json"
+        if run_root_result.exists():
+            result_files.append(run_root_result)
 
         # Nested timestamp/<run>/results/ layouts (current)
         for run_dir in timestamp_dir.iterdir():
@@ -342,8 +350,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--artifacts-dir",
         type=Path,
-        default=Path("artifacts"),
-        help="Directory containing benchmark artifacts (default: artifacts/)",
+        default=Path("artifacts/runs"),
+        help="Directory containing benchmark artifacts (default: artifacts/runs)",
     )
     parser.add_argument(
         "--output-csv",
