@@ -769,7 +769,7 @@ def _diff_metrics(
     Identifies what improved, what regressed, and what bottlenecks shifted.
     
     NOTE: This is an internal helper. Use the unified `compare_profiles()` from
-    `core.perf_core_base` or `core.engine.ProfileEngine.compare()` which
+    `core.perf_core_base` or `core.engine.get_engine().profile.compare()` which
     integrates this analysis with file-level comparison.
     """
     speedup = baseline_time_us / optimized_time_us if optimized_time_us > 0 else 1.0
@@ -1005,4 +1005,3 @@ __all__ = [
     # Internal helper for integration (prefixed with _)
     # _diff_metrics - used by core.perf_core_base.compare_profiles()
 ]
-

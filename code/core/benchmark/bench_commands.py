@@ -315,6 +315,7 @@ def _execute_benchmarks(
     single_gpu: bool = False,
     accept_regressions: bool = False,
     update_expectations: bool = False,
+    allow_mixed_provenance: bool = False,
     ncu_metric_set: str = "auto",
     ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
@@ -452,6 +453,7 @@ def _execute_benchmarks(
             only_examples=only_examples,
             accept_regressions=accept_regressions,
             update_expectations=update_expectations,
+            allow_mixed_provenance=allow_mixed_provenance,
             ncu_metric_set=ncu_metric_set,
             ncu_replay_mode=ncu_replay_mode,
             pm_sampling_interval=pm_sampling_interval,
@@ -462,6 +464,7 @@ def _execute_benchmarks(
             rdzv_endpoint=rdzv_endpoint,
             env_passthrough=torchrun_env,
             target_extra_args=parsed_extra_args,
+            subprocess_stderr_dir=artifact_manager.logs_dir,
             only_cuda=only_cuda,
             only_python=only_python,
             progress_recorder=progress_recorder,
@@ -542,9 +545,8 @@ if TYPER_AVAILABLE:
             True,
             "--allow-virtualization/--disallow-virtualization",
             help=(
-                "Allow running in a virtualized environment (VM/hypervisor); the virtualization check "
-                "emits a loud warning and never blocks runs. Use --disallow-virtualization to keep the "
-                "warning but omit the explicit allow marker."
+                "Allow running in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                "virtualization check to a loud warning. Default is allow (virtualization is warned)."
             ),
         ),
         reproducible: bool = Option(False, "--reproducible", help="Enable reproducible mode: set all seeds to 42 and force deterministic algorithms (uses slower fallbacks; ops without deterministic support may error)."),
@@ -587,6 +589,7 @@ if TYPER_AVAILABLE:
         only_python: bool = Option(False, "--only-python", help="Run only Python benchmarks (skip CUDA)."),
         accept_regressions: bool = Option(False, "--accept-regressions", help="Update expectation files when improvements are detected instead of flagging regressions.", is_flag=True),
         update_expectations: bool = Option(False, "--update-expectations", help="Force-write observed metrics into expectation files (overrides regressions). Useful for refreshing baselines on new hardware.", is_flag=True),
+        allow_mixed_provenance: bool = Option(False, "--allow-mixed-provenance", help="Allow expectation updates when provenance differs (commit/hardware/profile mismatch) without forcing updates. Does NOT accept regressions (use --accept-regressions or --update-expectations).", is_flag=True),
         launch_via: str = Option("python", "--launch-via", help="Launcher to use for benchmarks: python or torchrun."),
         nproc_per_node: Optional[int] = Option(None, "--nproc-per-node", help="torchrun --nproc_per_node value."),
         nnodes: Optional[str] = Option(None, "--nnodes", help="torchrun --nnodes value."),
@@ -651,6 +654,7 @@ if TYPER_AVAILABLE:
                 "single_gpu": single_gpu,
                 "allow_invalid_environment": allow_invalid_environment,
                 "allow_virtualization": allow_virtualization,
+                "allow_mixed_provenance": allow_mixed_provenance,
             }
             typer.echo(json.dumps(plan, indent=2))
             raise typer.Exit(code=0)
@@ -675,6 +679,7 @@ if TYPER_AVAILABLE:
             single_gpu=single_gpu,
             accept_regressions=accept_regressions,
             update_expectations=update_expectations,
+            allow_mixed_provenance=allow_mixed_provenance,
             ncu_metric_set=ncu_metric_set,
             ncu_replay_mode=ncu_replay_mode,
             only_cuda=only_cuda,

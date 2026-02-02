@@ -152,6 +152,14 @@ class FailingBenchmark(BaseBenchmark):
         return {"scalar": 0.0}
 
 
+class StderrFailingBenchmark(FailingBenchmark):
+    """Benchmark that emits stderr before failing - for stderr capture tests."""
+
+    def benchmark_fn(self) -> None:
+        print("INTENTIONAL STDERR MARKER", file=sys.stderr, flush=True)
+        raise RuntimeError("Intentional benchmark failure")
+
+
 class TestSubprocessTimeoutKill:
     """Test subprocess timeout kill and error propagation."""
     
@@ -198,6 +206,26 @@ class TestSubprocessTimeoutKill:
         result = harness.benchmark(benchmark)
         assert len(result.errors) > 0
         assert any("intentional benchmark failure" in err.lower() for err in result.errors)
+
+    def test_subprocess_stderr_capture(self, tmp_path):
+        """Ensure subprocess stderr is persisted when a benchmark fails."""
+        benchmark = StderrFailingBenchmark()
+        config = BenchmarkConfig(
+            iterations=5,
+            warmup=5,
+            enable_profiling=False,
+            enable_memory_tracking=False,
+            subprocess_stderr_dir=str(tmp_path),
+        )
+        harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
+
+        result = harness.benchmark(benchmark)
+        assert len(result.errors) > 0
+
+        stderr_logs = list(tmp_path.glob("*_subprocess.stderr.log"))
+        assert stderr_logs, "Expected subprocess stderr log to be captured"
+        combined = "\n".join(path.read_text() for path in stderr_logs)
+        assert "INTENTIONAL STDERR MARKER" in combined
 
 
 class TestPyTorchTimerCorrectness:

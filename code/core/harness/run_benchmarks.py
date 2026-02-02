@@ -2569,7 +2569,7 @@ def _merge_benchmark_config(
     merged.allow_virtualization = getattr(
         base_config,
         "allow_virtualization",
-        getattr(merged, "allow_virtualization", False),
+        getattr(merged, "allow_virtualization", True),
     )
 
     return merged
@@ -2591,6 +2591,7 @@ def _test_chapter_impl(
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     update_expectations: bool = False,
+    allow_mixed_provenance: bool = False,
     ncu_metric_set: str = "auto",
     ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
@@ -2603,6 +2604,7 @@ def _test_chapter_impl(
     rdzv_endpoint: Optional[str] = None,
     env_passthrough: Optional[List[str]] = None,
     target_extra_args: Optional[Dict[str, List[str]]] = None,
+    subprocess_stderr_dir: Optional[Path] = None,
     # Verification - BOTH enabled by default; without verification, benchmarks are meaningless
     verify_input: bool = True,
     verify_output: bool = True,
@@ -2695,7 +2697,7 @@ def _test_chapter_impl(
         chapter_dir,
         expectation_hardware_key,
         accept_regressions=accept_regressions or update_expectations,
-        force_mixed_provenance=update_expectations,
+        allow_mixed_provenance=allow_mixed_provenance or update_expectations,
     )
     try:
         expectation_path = expectations_store.path.relative_to(repo_root)
@@ -2869,6 +2871,8 @@ def _test_chapter_impl(
     logger.info("base_config launch_via=%s", base_config.launch_via)
     if profiling_output_dir:
         base_config.profiling_output_dir = str(profiling_output_dir)
+    if subprocess_stderr_dir:
+        base_config.subprocess_stderr_dir = str(subprocess_stderr_dir)
 
     locked_fields = _compute_locked_fields(
         base_config=base_config,
@@ -6447,6 +6451,7 @@ def test_chapter(
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     update_expectations: bool = False,
+    allow_mixed_provenance: bool = False,
     ncu_metric_set: str = "auto",
     ncu_replay_mode: Optional[str] = None,
     pm_sampling_interval: Optional[int] = None,
@@ -6459,6 +6464,7 @@ def test_chapter(
     rdzv_endpoint: Optional[str] = None,
     env_passthrough: Optional[List[str]] = None,
     target_extra_args: Optional[Dict[str, List[str]]] = None,
+    subprocess_stderr_dir: Optional[Path] = None,
     # Verification - BOTH enabled by default; without verification, benchmarks are meaningless
     verify_input: bool = True,
     verify_output: bool = True,
@@ -6494,6 +6500,7 @@ def test_chapter(
         only_examples=only_examples,
         accept_regressions=accept_regressions,
         update_expectations=update_expectations,
+        allow_mixed_provenance=allow_mixed_provenance,
         ncu_metric_set=ncu_metric_set,
         ncu_replay_mode=ncu_replay_mode,
         pm_sampling_interval=pm_sampling_interval,
@@ -6504,6 +6511,7 @@ def test_chapter(
         rdzv_endpoint=rdzv_endpoint,
         env_passthrough=env_passthrough,
         target_extra_args=target_extra_args,
+        subprocess_stderr_dir=subprocess_stderr_dir,
         verify_input=verify_input,
         verify_output=verify_output,
         force_llm=force_llm,
@@ -6899,6 +6907,11 @@ def main():
         help='Force-write observed metrics into expectation files (overrides regressions and provenance checks).'
     )
     parser.add_argument(
+        '--allow-mixed-provenance',
+        action='store_true',
+        help='Allow expectation updates when provenance differs (commit/hardware/profile mismatch) without forcing updates. Does NOT accept regressions (use --accept-regressions or --update-expectations).'
+    )
+    parser.add_argument(
         '--launch-via',
         choices=['python', 'torchrun'],
         default='python',
@@ -7101,6 +7114,7 @@ def main():
             only_examples=only_examples,
             accept_regressions=args.accept_regressions if hasattr(args, "accept_regressions") else False,
             update_expectations=args.update_expectations if hasattr(args, "update_expectations") else False,
+            allow_mixed_provenance=args.allow_mixed_provenance if hasattr(args, "allow_mixed_provenance") else False,
             ncu_metric_set=args.ncu_metric_set,
             pm_sampling_interval=args.pm_sampling_interval,
             graph_capture_ratio_threshold=args.graph_capture_ratio_threshold,

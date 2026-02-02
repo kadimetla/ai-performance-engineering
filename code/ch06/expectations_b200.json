@@ -109,32 +109,32 @@
       "type": "python"
     },
     "add_cuda": {
-      "example": "add_cuda",
+      "example": "add",
       "metadata": {
         "best_optimization": "parallel",
         "best_optimization_file": "optimized_add_parallel.cu",
-        "best_optimization_speedup": 845.5932515337423,
+        "best_optimization_speedup": 731.1620616365568,
         "best_optimization_technique": "parallel",
-        "best_optimization_time_ms": 0.05433333333333333,
+        "best_optimization_time_ms": 0.06273333333333334,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 45.9444,
-        "baseline_p90_ms": 45.9444,
-        "baseline_time_ms": 45.9439,
-        "best_optimized_p75_ms": 0.053,
-        "best_optimized_p90_ms": 0.053,
-        "best_optimized_speedup": 845.5932515337423,
-        "best_optimized_time_ms": 0.05433333333333333,
-        "best_speedup": 845.5932515337423,
+        "baseline_p75_ms": 45.8715,
+        "baseline_p90_ms": 45.8715,
+        "baseline_time_ms": 45.86823333333333,
+        "best_optimized_p75_ms": 0.0649,
+        "best_optimized_p90_ms": 0.0649,
+        "best_optimized_speedup": 731.1620616365568,
+        "best_optimized_time_ms": 0.06273333333333334,
+        "best_speedup": 731.1620616365568,
         "is_regression": false
       },
       "provenance": {
-        "git_commit": "489f8e76c8483bf32be03da6c663a2b1bd27ecd7",
+        "git_commit": "5a57ee2b3d2d05ca96430b2aa511af9c1244cd73",
         "hardware_key": "b200",
         "iterations": 20,
-        "profile_name": "none",
-        "timestamp": "2025-12-18T00:51:53.565685",
+        "profile_name": "minimal",
+        "timestamp": "2026-02-02T03:27:20.755976",
         "warmup_iterations": 5
       },
       "type": "cuda"
@@ -194,32 +194,32 @@
       "type": "python"
     },
     "add_tensors_cuda": {
-      "example": "add_tensors_cuda",
+      "example": "add_tensors",
       "metadata": {
         "best_optimization": "optimized_add_tensors",
         "best_optimization_file": "optimized_add_tensors.cu",
-        "best_optimization_speedup": 957.373611111111,
+        "best_optimization_speedup": 726.3087071240107,
         "best_optimization_technique": "optimized_add_tensors",
-        "best_optimization_time_ms": 0.048,
+        "best_optimization_time_ms": 0.06316666666666666,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 45.9539,
-        "baseline_p90_ms": 45.9539,
-        "baseline_time_ms": 45.95393333333333,
-        "best_optimized_p75_ms": 0.048,
-        "best_optimized_p90_ms": 0.048,
-        "best_optimized_speedup": 957.373611111111,
-        "best_optimized_time_ms": 0.048,
-        "best_speedup": 957.373611111111,
+        "baseline_p75_ms": 45.8737,
+        "baseline_p90_ms": 45.8737,
+        "baseline_time_ms": 45.8785,
+        "best_optimized_p75_ms": 0.0668,
+        "best_optimized_p90_ms": 0.0668,
+        "best_optimized_speedup": 726.3087071240107,
+        "best_optimized_time_ms": 0.06316666666666666,
+        "best_speedup": 726.3087071240107,
         "is_regression": false
       },
       "provenance": {
-        "git_commit": "489f8e76c8483bf32be03da6c663a2b1bd27ecd7",
+        "git_commit": "5a57ee2b3d2d05ca96430b2aa511af9c1244cd73",
         "hardware_key": "b200",
         "iterations": 20,
-        "profile_name": "none",
-        "timestamp": "2025-12-18T00:51:51.601887",
+        "profile_name": "minimal",
+        "timestamp": "2026-02-02T03:25:44.924448",
         "warmup_iterations": 5
       },
       "type": "cuda"
@@ -387,32 +387,32 @@
       "type": "python"
     },
     "bank_conflicts_cuda": {
-      "example": "bank_conflicts_cuda",
+      "example": "bank_conflicts",
       "metadata": {
         "best_optimization": "optimized_bank_conflicts",
         "best_optimization_file": "optimized_bank_conflicts.cu",
-        "best_optimization_speedup": 4.1195737122557725,
+        "best_optimization_speedup": 4.119407754580315,
         "best_optimization_technique": "optimized_bank_conflicts",
-        "best_optimization_time_ms": 9.383333333333333,
+        "best_optimization_time_ms": 9.388,
         "optimization_goal": "speed"
       },
       "metrics": {
-        "baseline_p75_ms": 38.655,
-        "baseline_p90_ms": 38.655,
-        "baseline_time_ms": 38.65533333333333,
-        "best_optimized_p75_ms": 9.383,
-        "best_optimized_p90_ms": 9.383,
-        "best_optimized_speedup": 4.1195737122557725,
-        "best_optimized_time_ms": 9.383333333333333,
-        "best_speedup": 4.1195737122557725,
+        "baseline_p75_ms": 38.673,
+        "baseline_p90_ms": 38.673,
+        "baseline_time_ms": 38.673,
+        "best_optimized_p75_ms": 9.387,
+        "best_optimized_p90_ms": 9.387,
+        "best_optimized_speedup": 4.119407754580315,
+        "best_optimized_time_ms": 9.388,
+        "best_speedup": 4.119407754580315,
         "is_regression": false
       },
       "provenance": {
-        "git_commit": "489f8e76c8483bf32be03da6c663a2b1bd27ecd7",
+        "git_commit": "5a57ee2b3d2d05ca96430b2aa511af9c1244cd73",
         "hardware_key": "b200",
         "iterations": 20,
-        "profile_name": "none",
-        "timestamp": "2025-12-18T00:51:49.700642",
+        "profile_name": "minimal",
+        "timestamp": "2026-02-02T03:24:08.151561",
         "warmup_iterations": 5
       },
       "type": "cuda"

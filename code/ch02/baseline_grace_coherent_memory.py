@@ -208,7 +208,7 @@ def run_benchmark(
     
     benchmark = GraceCoherentMemoryBenchmark(size_mb=size_mb, iterations=iterations)
     harness = BenchmarkHarness(
-        mode=BenchmarkMode.TRAINING,
+        mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(
             iterations=1,
             warmup=5,

@@ -86,11 +86,11 @@ class BenchmarkDefaults:
     enable_profiling: bool = False
     # When profiling is enabled, prefer collecting both nsys + ncu by default.
     enable_nsys: bool = False
-    enable_ncu: bool = True
+    enable_ncu: bool = False
     enable_proton: bool = False
     # Always emit NVTX ranges when profiling is active (can be overridden per-run).
     enable_nvtx: Optional[bool] = True
-    allow_virtualization: bool = False
+    allow_virtualization: bool = True
     # Free allocator state between benchmarks by default.
     enable_cleanup: bool = True
     # Lock GPU clocks by default for consistent benchmarking.
@@ -149,6 +149,8 @@ class BenchmarkDefaults:
     
     # Output defaults
     profiling_output_dir: Optional[str] = None
+    # Optional directory for subprocess stderr capture (defaults to None).
+    subprocess_stderr_dir: Optional[str] = None
     # Default to speed-of-light (minimal) for routine compares.
     ncu_metric_set: str = "minimal"  # 'auto', 'deep_dive', 'roofline', 'minimal'
     ncu_replay_mode: str = "application"  # 'kernel' or 'application'
@@ -217,6 +219,7 @@ class BenchmarkDefaults:
             "timeout_multiplier": self.timeout_multiplier,
             "timeout_seconds": self.timeout_seconds,
             "profiling_output_dir": self.profiling_output_dir,
+            "subprocess_stderr_dir": self.subprocess_stderr_dir,
             "ncu_metric_set": self.ncu_metric_set,
             "pm_sampling_interval": self.pm_sampling_interval,
             "ncu_replay_mode": self.ncu_replay_mode,

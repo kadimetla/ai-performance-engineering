@@ -267,17 +267,31 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
         if sm_clock_mhz is None or mem_clock_mhz is None:
             raise RuntimeError("Unable to determine target SM/memory clocks for lock_gpu_clocks")
         
-        # Lock GPU clocks
-        subprocess.check_output([
-            "nvidia-smi", "-i", str(physical_index),
-            f"--lock-gpu-clocks={sm_clock_mhz},{sm_clock_mhz}"
-        ], stderr=subprocess.STDOUT)
-        
-        # Lock memory clocks
-        subprocess.check_output([
-            "nvidia-smi", "-i", str(physical_index),
-            f"--lock-memory-clocks={mem_clock_mhz},{mem_clock_mhz}"
-        ], stderr=subprocess.STDOUT)
+        lock_error: Optional[Exception] = None
+        try:
+            # Lock GPU clocks
+            subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "-i",
+                    str(physical_index),
+                    f"--lock-gpu-clocks={sm_clock_mhz},{sm_clock_mhz}",
+                ],
+                stderr=subprocess.STDOUT,
+            )
+
+            # Lock memory clocks
+            subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "-i",
+                    str(physical_index),
+                    f"--lock-memory-clocks={mem_clock_mhz},{mem_clock_mhz}",
+                ],
+                stderr=subprocess.STDOUT,
+            )
+        except subprocess.CalledProcessError as exc:
+            lock_error = exc
         
         # Verify application clocks via NVML (current clocks may be lower when idle)
         try:
@@ -300,9 +314,19 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
                 pass
         
         if abs(app_sm - sm_clock_mhz) > 50 or abs(app_mem - mem_clock_mhz) > 50:
+            if lock_error is not None:
+                raise RuntimeError(
+                    f"GPU clock lock failed: requested SM={sm_clock_mhz}MHz Mem={mem_clock_mhz}MHz, "
+                    f"applications SM={app_sm}MHz Mem={app_mem}MHz (lock error: {lock_error})"
+                ) from lock_error
             raise RuntimeError(
                 f"GPU clock lock failed: requested SM={sm_clock_mhz}MHz Mem={mem_clock_mhz}MHz, "
                 f"applications SM={app_sm}MHz Mem={app_mem}MHz"
+            )
+        if lock_error is not None and LOGGER_AVAILABLE:
+            logger.warning(
+                "GPU clock lock command failed (%s) but application clocks already match target; proceeding.",
+                lock_error,
             )
         if LOGGER_AVAILABLE and (abs(cur_sm - sm_clock_mhz) > 50 or abs(cur_mem - mem_clock_mhz) > 50):
             logger.info(
@@ -448,8 +472,6 @@ class BenchmarkMode(Enum):
     TRITON = "triton"  # Use triton.testing.do_bench
     PYTORCH = "pytorch"  # Use torch.utils.benchmark.Timer
     CUSTOM = "custom"  # Use CUDA Events / time.perf_counter
-    TRAINING = "training"  # Alias for CUSTOM; kept for backward compatibility
-    INFERENCE = "inference"  # Alias for CUSTOM; kept for backward compatibility
 
 
 class ExecutionMode(str, Enum):
@@ -517,6 +539,7 @@ class BenchmarkConfig:
     enable_ncu: bool = field(default_factory=lambda: _get_default_value("enable_ncu", False))
     enable_proton: bool = field(default_factory=lambda: _get_default_value("enable_proton", False))
     profiling_output_dir: Optional[str] = field(default_factory=lambda: _get_default_value("profiling_output_dir", None))
+    subprocess_stderr_dir: Optional[str] = field(default_factory=lambda: _get_default_value("subprocess_stderr_dir", None))
     profile_mode: Optional[str] = field(default_factory=lambda: _get_default_value("profile_mode", "none"))
     profile_type: str = field(default_factory=lambda: _get_default_value("profile_type", "minimal"))
     nsys_nvtx_include: Optional[List[str]] = field(default_factory=lambda: _get_default_value("nsys_nvtx_include", None))
@@ -682,10 +705,9 @@ class BenchmarkConfig:
     allow_virtualization: bool = field(default_factory=lambda: _get_default_value("allow_virtualization", True))
     """Allow running benchmarks under virtualization (VM/hypervisor).
 
-    Enabled by default: virtualized environments are allowed with a loud warning
-    because profiling tools (nsys/ncu) and system-level controls can be unavailable
-    or misleading. Only the virtualization check is downgraded; other environment
-    errors remain fatal when enforce_environment_validation=True.
+    Enabled by default: virtualized environments emit loud warnings by default.
+    Only the virtualization check is downgraded when enabled; other
+    environment errors remain fatal when enforce_environment_validation=True.
     """
 
     # Legacy timeout field (deprecated, use measurement_timeout_seconds)
@@ -1418,9 +1440,13 @@ class BaseBenchmark:
 
 
 def _maybe_write_subprocess_stderr(stderr: str, benchmark_name: str, config: BenchmarkConfig) -> None:
-    if not os.environ.get("AISP_CAPTURE_SUBPROCESS_STDERR"):
+    if not stderr:
         return
-    output_dir = getattr(config, "profiling_output_dir", None)
+    env_flag = os.environ.get("AISP_CAPTURE_SUBPROCESS_STDERR")
+    if env_flag is not None:
+        if str(env_flag).strip().lower() not in {"1", "true", "yes", "y", "on"}:
+            return
+    output_dir = getattr(config, "subprocess_stderr_dir", None) or getattr(config, "profiling_output_dir", None)
     if not output_dir:
         return
     try:
@@ -1928,6 +1954,8 @@ class BenchmarkHarness:
             if process.returncode != 0:
                 stderr_lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
                 errors.append(f"torchrun exited with code {process.returncode}")
+                if stderr:
+                    _maybe_write_subprocess_stderr(stderr, f"torchrun_{spec.name or benchmark.__class__.__name__}", config)
                 if stderr_lines:
                     # Prefer showing the root-cause message (e.g., seed mutation) instead of only the
                     # torchrun elastic summary tail.
@@ -2201,7 +2229,7 @@ class BenchmarkHarness:
         env_result = validate_environment(
             device=self.device,
             probe=self._environment_probe,
-            allow_virtualization=bool(getattr(config, "allow_virtualization", False)),
+            allow_virtualization=bool(getattr(config, "allow_virtualization", True)),
         )
         if LOGGER_AVAILABLE:
             for warning in env_result.warnings:
@@ -2209,7 +2237,7 @@ class BenchmarkHarness:
         if env_result.errors:
             message = "ENVIRONMENT INVALID: " + " | ".join(env_result.errors)
             enforce_env = bool(getattr(config, "enforce_environment_validation", True))
-            if enforce_env and _is_chapter_or_labs_benchmark(benchmark):
+            if enforce_env:
                 raise RuntimeError(message)
             if LOGGER_AVAILABLE:
                 logger.warning(message)
@@ -2600,9 +2628,27 @@ class BenchmarkHarness:
             
             # Send input JSON and wait for result
             input_json = json.dumps(input_data)
-            stdout, stderr = process.communicate(input=input_json, timeout=measurement_timeout)
-            
-            if process.returncode != 0:
+            subprocess_failed = False
+            try:
+                stdout, stderr = process.communicate(input=input_json, timeout=measurement_timeout)
+            except BrokenPipeError as exc:
+                subprocess_failed = True
+                errors.append(f"Subprocess stdin closed early: {exc}")
+                try:
+                    if process.stdin:
+                        process.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except Exception as follow_exc:
+                    errors.append(f"Failed to read subprocess output after broken pipe: {follow_exc}")
+                    stdout = stdout or ""
+                    stderr = stderr or ""
+                if stderr:
+                    _maybe_write_subprocess_stderr(stderr, benchmark_name, config)
+
+            if subprocess_failed or process.returncode != 0:
                 error_msg = f"Subprocess exited with code {process.returncode}"
                 errors.append(error_msg)
                 if stderr:
@@ -2640,7 +2686,8 @@ class BenchmarkHarness:
                     suffix = stdout[json_end:].strip()
                     if suffix and LOGGER_AVAILABLE:
                         logger.debug(f"Stripped non-JSON suffix from subprocess output: {suffix[:200]}")
-                    if result_dict.get("success") and result_dict.get("result_json"):
+                    result_success = bool(result_dict.get("success"))
+                    if result_success and result_dict.get("result_json"):
                         # Deserialize Pydantic BenchmarkResult from JSON
                         result_json_str = result_dict["result_json"]
                         benchmark_result = PydanticBenchmarkResult.model_validate_json(result_json_str)
@@ -2762,6 +2809,8 @@ class BenchmarkHarness:
                     else:
                         errors.extend(result_dict.get("errors", ["Subprocess execution failed"]))
                         times_ms = cast(List[float], [])
+                        if stderr:
+                            _maybe_write_subprocess_stderr(stderr, benchmark_name, config)
                 except json.JSONDecodeError as e:
                     errors.append(f"Failed to parse subprocess output: {e}")
                     errors.append(f"Output: {stdout[:500]}")
@@ -3029,7 +3078,7 @@ class BenchmarkHarness:
         env_result = validate_environment(
             device=self.device,
             probe=self._environment_probe,
-            allow_virtualization=bool(getattr(config, "allow_virtualization", False)),
+            allow_virtualization=bool(getattr(config, "allow_virtualization", True)),
         )
         if LOGGER_AVAILABLE:
             for warning in env_result.warnings:
@@ -3037,7 +3086,7 @@ class BenchmarkHarness:
         if env_result.errors:
             message = "ENVIRONMENT INVALID: " + " | ".join(env_result.errors)
             enforce_env = bool(getattr(config, "enforce_environment_validation", True))
-            if enforce_env and _is_chapter_or_labs_benchmark(benchmark):
+            if enforce_env:
                 errors.append(message)
                 timing = TimingStats(
                     mean_ms=0.0,
@@ -3883,16 +3932,15 @@ class BenchmarkHarness:
         env_result = validate_environment(
             device=self.device,
             probe=self._environment_probe,
-            allow_virtualization=bool(getattr(config, "allow_virtualization", False)),
+            allow_virtualization=bool(getattr(config, "allow_virtualization", True)),
         )
         for warning in env_result.warnings:
             import warnings as warn_module
             warn_module.warn(f"ENVIRONMENT WARNING: {warning}", RuntimeWarning)
         if env_result.errors:
             message = "ENVIRONMENT INVALID: " + " | ".join(env_result.errors)
-            # Enforce environment correctness for chapter/labs benchmarks.
             enforce_env = bool(getattr(config, "enforce_environment_validation", True))
-            if enforce_env and (_is_chapter_or_labs_benchmark(benchmark_obj) if benchmark_obj else False):
+            if enforce_env:
                 raise RuntimeError(message)
             import warnings as warn_module
             warn_module.warn(message, RuntimeWarning)

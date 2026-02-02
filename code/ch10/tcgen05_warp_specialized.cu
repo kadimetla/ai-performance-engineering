@@ -32,8 +32,8 @@ using Accumulator = float;
 constexpr int kStages = 4;
 constexpr int kWarpSize = 32;
 constexpr int kBlockThreads = 128;
-constexpr int kProducerWarpIdx = 0;
-constexpr int kConsumerWarpIdx = 1;
+constexpr int kProducerWarpIdx = 1;
+constexpr int kConsumerWarpIdx = 0;
 
 template <class TypeA_, class TypeB_, class ASmemLayout, class BSmemLayout>
 struct WarpSpecializedSharedStorage {
@@ -101,7 +101,7 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
   Tensor tCgD = cta_mma.partition_C(gD);
 
   cute::TMEM::Allocator1Sm tmem_allocator{};
-  if (is_producer && is_lane0) {
+  if (is_consumer) {
     tmem_allocator.allocate(
         decltype(tmem_allocator)::Sm100TmemCapacityColumns,
         &storage.tmem_base_ptr);
@@ -235,14 +235,12 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
         tiled_mma.accumulate_ = UMMA::ScaleOut::One;
       }
 
-      if (is_lane0) {
-        uint64_t* empty_ptr = reinterpret_cast<uint64_t*>(&storage.empty_barrier[curr]);
-        cutlass::arch::umma_arrive(empty_ptr);
-      }
+      uint64_t* empty_ptr = reinterpret_cast<uint64_t*>(&storage.empty_barrier[curr]);
+      cutlass::arch::umma_arrive(empty_ptr);
     }
   }
 
-  if (is_consumer && is_lane0) {
+  if (is_consumer) {
     cutlass::arch::umma_arrive(&storage.mma_barrier);
   }
 
@@ -267,7 +265,7 @@ gemm_warp_specialized(ATensor mA, BTensor mB, CTensor mC, DTensor mD,
   copy(tDrC, tDgD);
 
   __syncthreads();
-  if (is_producer && is_lane0) {
+  if (is_consumer) {
     tmem_allocator.release_allocation_lock();
     tmem_allocator.free(tmem_base, decltype(tmem_allocator)::Sm100TmemCapacityColumns);
   }

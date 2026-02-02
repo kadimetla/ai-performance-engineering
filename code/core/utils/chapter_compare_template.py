@@ -44,7 +44,6 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-# Re-export for backward compatibility
 __all__ = ['discover_benchmarks', 'load_benchmark', 'create_standard_metrics', 'profile_template', 'get_last_load_error']
 
 _LAST_LOAD_ERROR: Optional[str] = None

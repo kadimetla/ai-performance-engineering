@@ -274,7 +274,7 @@ def run_benchmark(
         profile_mode=profile,
     )
 
-    harness = BenchmarkHarness(mode=BenchmarkMode.TRAINING, config=config)
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
 
     result = harness.benchmark(
         benchmark,

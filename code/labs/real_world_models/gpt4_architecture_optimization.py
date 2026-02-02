@@ -170,7 +170,7 @@ def run_benchmark(
     benchmark.setup()
     
     config = BenchmarkConfig(iterations=3, warmup=5, profile_mode=profile)
-    harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
     
     result = harness.benchmark(benchmark.run, name="gpt4_architecture")
     benchmark.cleanup()

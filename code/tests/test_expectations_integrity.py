@@ -672,7 +672,7 @@ class TestAtomicProvenanceConsistency:
 class TestMixedProvenanceRejection:
     """Property 4: For any update attempt where the new metrics have different
     provenance than existing metrics, the update SHALL be rejected unless
-    force_mixed_provenance=True.
+    allow_mixed_provenance=True.
     """
 
     def test_rejects_different_git_commit(self, tmp_path):
@@ -768,10 +768,10 @@ class TestMixedProvenanceRejection:
         # Should be allowed (improved or updated)
         assert result2.status in ("improved", "updated")
 
-    def test_force_mixed_provenance_allows_update(self, tmp_path):
-        """force_mixed_provenance=True should allow mismatched commits."""
+    def test_allow_mixed_provenance_allows_update(self, tmp_path):
+        """allow_mixed_provenance=True should allow mismatched commits."""
         store = ExpectationsStore(
-            tmp_path, "test_hw", accept_regressions=True, force_mixed_provenance=True
+            tmp_path, "test_hw", accept_regressions=True, allow_mixed_provenance=True
         )
 
         # First entry

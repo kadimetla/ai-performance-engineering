@@ -12,6 +12,7 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -68,12 +69,15 @@ def _load_ch_fake_benchmark(module_dir: Path) -> object:
     return module.EnvBench()
 
 
-def _run_harness(env_root: Path, *, probe: EnvironmentProbe) -> list[str]:
+def _run_harness(env_root: Path, *, probe: EnvironmentProbe, allow_virtualization: Optional[bool] = None) -> list[str]:
     bench_dir = env_root / "bench_mod"
     bench_dir.mkdir(parents=True, exist_ok=True)
     bench = _load_ch_fake_benchmark(bench_dir)
     harness = BenchmarkHarness(environment_probe=probe)
-    config = BenchmarkConfig(iterations=1, warmup=5, use_subprocess=False)
+    config_kwargs = dict(iterations=1, warmup=5, use_subprocess=False)
+    if allow_virtualization is not None:
+        config_kwargs["allow_virtualization"] = allow_virtualization
+    config = BenchmarkConfig(**config_kwargs)
     result = harness._benchmark_with_threading(bench, config)
     return list(result.errors)
 
@@ -137,5 +141,5 @@ def test_environment_enforcement_virtualization_detected() -> None:
         env_root = Path(env_dir)
         _make_base_env(env_root)
         _write_file(env_root, "/proc/cpuinfo", "processor\t: 0\nflags\t: hypervisor\n")
-        errors = _run_harness(env_root, probe=EnvironmentProbe(root=env_root, env={}))
+        errors = _run_harness(env_root, probe=EnvironmentProbe(root=env_root, env={}), allow_virtualization=False)
         assert any("ENVIRONMENT INVALID" in e and "Virtualization detected" in e for e in errors), errors

@@ -397,10 +397,6 @@ class PerformanceCoreBase:
         _HISTORY_CACHE["trends"] = None
         return result
 
-    def get_historical_runs(self) -> dict:
-        """Alias for compatibility with older handlers."""
-        return self.get_history_runs()
-
     def get_performance_trends(self, runs_data: Optional[dict] = None) -> dict:
         """Compute trend data (avg/max speedup) across historical runs."""
         if runs_data is None:

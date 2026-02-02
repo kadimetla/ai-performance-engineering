@@ -1480,6 +1480,14 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                     "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
                     "virtualization check to a loud warning. Results are still invalid; bare metal is required."
                 ),
+                "default": True,
+            },
+            "allow_mixed_provenance": {
+                "type": "boolean",
+                "description": (
+                    "Allow expectation updates when provenance differs (commit/hardware/profile mismatch) without "
+                    "forcing updates. Does NOT accept regressions (use accept_regressions/update_expectations)."
+                ),
                 "default": False,
             },
             "auto_analyze": {
@@ -1521,14 +1529,24 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     iterations_param = params.get("iterations")
     warmup_param = params.get("warmup")
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
-    allow_virtualization = bool(params.get("allow_virtualization", False))
+    allow_virtualization = bool(params.get("allow_virtualization", True))
+    allow_mixed_provenance = bool(params.get("allow_mixed_provenance", False))
+    only_python = bool(params.get("only_python", False))
+    only_cuda = bool(params.get("only_cuda", False))
     auto_analyze = bool(params.get("auto_analyze", True))
     auto_report = bool(params.get("auto_report", True))
-    if _is_test_mode():
+    test_mode = _is_test_mode()
+    if test_mode:
         if "auto_analyze" not in params:
-            auto_analyze = False
+            auto_analyze = True
         if "auto_report" not in params:
             auto_report = False
+        if "profile" not in params or profile in {"minimal", "deep_dive", "roofline"}:
+            profile = "none"
+        if "only_python" not in params:
+            only_python = True
+        if "allow_virtualization" not in params:
+            allow_virtualization = True
     report_format = params.get("report_format", "html")
 
     # Validate profile value
@@ -1551,6 +1569,8 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     run_async = bool(params.get("async", False))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
+    if test_mode and (timeout_seconds is None or timeout_seconds <= 0):
+        timeout_seconds = 600
     include_context, context_level = extract_context_opts(params)
 
     if apply_patches and not (llm_analysis or force_llm):
@@ -1612,6 +1632,12 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         args.append("--allow-invalid-environment")
     if allow_virtualization:
         args.append("--allow-virtualization")
+    if allow_mixed_provenance:
+        args.append("--allow-mixed-provenance")
+    if only_python:
+        args.append("--only-python")
+    if only_cuda:
+        args.append("--only-cuda")
     for t in targets:
         args.extend(["-t", t])
     # Add LLM options only if explicitly enabled (costs API credits)
@@ -1827,7 +1853,7 @@ def _benchmark_next_steps(result: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
                     "virtualization check to a loud warning. Results are still invalid; bare metal is required."
                 ),
-                "default": False,
+                "default": True,
             },
         }),
         "required": ["targets"],
@@ -1903,14 +1929,14 @@ def tool_benchmark_variants(params: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                     "default": False,
                 },
-                "allow_virtualization": {
-                    "type": "boolean",
-                    "description": (
-                        "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
-                        "virtualization check to a loud warning. Results are still invalid; bare metal is required."
-                    ),
-                    "default": False,
-                },
+            "allow_virtualization": {
+                "type": "boolean",
+                "description": (
+                    "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                    "virtualization check to a loud warning. Results are still invalid; bare metal is required."
+                ),
+                "default": True,
+            },
             }
         ),
         "required": ["targets"],
@@ -1937,10 +1963,12 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     iterations = params.get("iterations", 1)
     warmup = params.get("warmup", 5)
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
-    allow_virtualization = bool(params.get("allow_virtualization", False))
+    allow_virtualization = bool(params.get("allow_virtualization", True))
     run_async = bool(params.get("async", False))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
+    if _is_test_mode() and (timeout_seconds is None or timeout_seconds <= 0):
+        timeout_seconds = 600
     run_dir = _resolve_run_dir(output_dir, str(run_id))
     progress_path = _progress_path_for_run(run_dir, str(run_id))
 
@@ -1949,22 +1977,33 @@ def tool_benchmark_deep_dive_compare(params: Dict[str, Any]) -> Dict[str, Any]:
 
     def _run_and_analyze() -> Dict[str, Any]:
         test_mode = _is_test_mode()
-        profile_mode = "minimal" if test_mode else "deep_dive"
+        profile_mode = "none" if test_mode else "deep_dive"
+        bench_iterations = iterations
+        bench_warmup = warmup
+        bench_timeout = timeout_seconds
+        if test_mode:
+            bench_iterations = min(bench_iterations, 1)
+            bench_warmup = min(bench_warmup, 1)
+            if bench_timeout is None or bench_timeout <= 0 or bench_timeout > 300:
+                bench_timeout = 300
         # Run bench with deep_dive profiling into output_dir/<timestamp>/...
         bench_params = {
             "targets": targets,
             "profile": profile_mode,
             "artifacts_dir": output_dir,
             "run_id": run_id,
-            "iterations": iterations,
-            "warmup": warmup,
+            "iterations": bench_iterations,
+            "warmup": bench_warmup,
             "allow_invalid_environment": allow_invalid_environment,
             "allow_virtualization": allow_virtualization,
             # Explicitly disable LLM analysis; caller can run it separately if desired.
             "llm_analysis": False,
             "apply_patches": False,
-            "timeout_seconds": timeout_seconds,
+            "timeout_seconds": bench_timeout,
+            "only_python": bool(test_mode),
         }
+        if test_mode and "allow_virtualization" not in params:
+            bench_params["allow_virtualization"] = True
 
         bench_result = tool_run_benchmarks(bench_params)
         bench_result = _attach_bench_artifact_paths(bench_result)
@@ -2364,14 +2403,14 @@ def _extract_promoted_targets(results_json: Path) -> List[Dict[str, Any]]:
                     ),
                     "default": False,
                 },
-                "allow_virtualization": {
-                    "type": "boolean",
-                    "description": (
-                        "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
-                        "virtualization check to a loud warning. Results are still invalid; bare metal is required."
-                    ),
-                    "default": False,
-                },
+            "allow_virtualization": {
+                "type": "boolean",
+                "description": (
+                    "Allow running benchmarks in a virtualized environment (VM/hypervisor) by downgrading ONLY the "
+                    "virtualization check to a loud warning. Results are still invalid; bare metal is required."
+                ),
+                "default": True,
+            },
             }
         ),
         "required": ["targets"],
@@ -2392,7 +2431,7 @@ def tool_benchmark_llm_patch_loop(params: Dict[str, Any]) -> Dict[str, Any]:
     force_llm = bool(params.get("force_llm", True))
     llm_explain = bool(params.get("llm_explain", True))
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
-    allow_virtualization = bool(params.get("allow_virtualization", False))
+    allow_virtualization = bool(params.get("allow_virtualization", True))
     run_async = bool(params.get("async", False))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)

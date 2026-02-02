@@ -286,7 +286,7 @@ def run_benchmark(
         warmup=5,
         profile_mode=profile,
     )
-    harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=config)
 
     result = harness.benchmark(benchmark, name="optimized_kv_fp8_compressed")
 

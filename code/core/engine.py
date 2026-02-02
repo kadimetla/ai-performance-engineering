@@ -1326,19 +1326,3 @@ def reset_engine() -> None:
     _handler_instance = None
     _analyzer_instance = None
 
-
-# =============================================================================
-# BACKWARDS COMPATIBILITY - Deprecated aliases
-# =============================================================================
-
-# These are kept for backwards compatibility but will be removed in future versions
-GPUEngine = GPUDomain
-SystemEngine = SystemDomain
-ProfileEngine = ProfileDomain
-AnalyzeEngine = AnalyzeDomain
-OptimizeEngine = OptimizeDomain
-DistributedEngine = DistributedDomain
-InferenceEngine = InferenceDomain
-TestEngine = BenchmarkDomain  # Renamed
-AIEngine = AIDomain
-ExportEngine = ExportDomain

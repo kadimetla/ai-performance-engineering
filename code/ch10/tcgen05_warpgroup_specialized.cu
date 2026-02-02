@@ -42,8 +42,8 @@ using OperatorClass = cutlass::arch::OpClassTensorOp;
 
 using LayoutA = cutlass::layout::RowMajor;
 using LayoutB = cutlass::layout::ColumnMajor;
-using LayoutC = cutlass::layout::ColumnMajor;
-using LayoutD = cutlass::layout::ColumnMajor;
+using LayoutC = cutlass::layout::RowMajor;
+using LayoutD = cutlass::layout::RowMajor;
 
 constexpr int AlignmentA = 128 / cutlass::sizeof_bits<ElementA>::value;
 constexpr int AlignmentB = 128 / cutlass::sizeof_bits<ElementB>::value;
@@ -143,14 +143,17 @@ torch::Tensor run_warpgroup_specialized_matmul(torch::Tensor a, torch::Tensor b)
   args.scheduler.max_swizzle_size = 0;
 
   size_t workspace_size = Gemm::get_workspace_size(args);
-  std::unique_ptr<uint8_t[]> workspace;
+  torch::Tensor workspace;
+  void* workspace_ptr = nullptr;
   if (workspace_size) {
-    workspace = std::make_unique<uint8_t[]>(workspace_size);
+    workspace = torch::empty({static_cast<long long>(workspace_size)},
+                             a.options().dtype(torch::kUInt8));
+    workspace_ptr = workspace.data_ptr<uint8_t>();
   }
 
   auto stream = at::cuda::getCurrentCUDAStream();
   check_status(Gemm::can_implement(args), "gemm.can_implement failed");
-  check_status(gemm.initialize(args, workspace.get(), stream), "gemm.initialize failed");
+  check_status(gemm.initialize(args, workspace_ptr, stream), "gemm.initialize failed");
   check_status(gemm.run(stream), "gemm.run failed");
   AT_CUDA_CHECK(cudaGetLastError());
 

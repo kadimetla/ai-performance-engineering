@@ -198,6 +198,7 @@ detect_default_sm() {
 FLASH_ATTENTION_FORCE_CUDA_SM_VALUE="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE:-$(detect_default_sm)}"
 VLLM_REPO_URL="${VLLM_REPO_URL:-https://github.com/vllm-project/vllm.git}"
 VLLM_VERSION_TAG="${VLLM_VERSION_TAG:-main}"
+INSTALL_GPT_OSS="${INSTALL_GPT_OSS:-0}"
 VLLM_GIT_REF="${VLLM_GIT_REF:-${VLLM_VERSION_TAG}}"
 VLLM_SRC_DIR="${VLLM_SRC_DIR:-${THIRD_PARTY_DIR}/vllm-src}"
 VLLM_WHEEL_DIR="${THIRD_PARTY_DIR}/wheels"
@@ -3673,6 +3674,71 @@ else
     echo "Skipping Blackwell verification (non-Blackwell GPU detected)."
 fi
 
+if [ "${INSTALL_GPT_OSS}" -eq 1 ]; then
+    echo ""
+    echo "Downloading GPT-OSS model and installing CLI..."
+    GPT_OSS_MODEL_DIR="${GPT_OSS_MODEL_DIR:-${PROJECT_ROOT}/gpt-oss-20b}"
+    huggingface-cli download openai/gpt-oss-20b --include "original/*" --local-dir "${GPT_OSS_MODEL_DIR}/" || {
+        echo "ERROR: Failed to download gpt-oss-20b model"
+        exit 1
+    }
+    if ! pip_install --no-cache-dir --upgrade gpt-oss; then
+        echo "ERROR: Failed to install gpt-oss package"
+        exit 1
+    fi
+    TRITON_KERNELS_SRC_DIR="${TRITON_KERNELS_SRC_DIR:-${PROJECT_ROOT}/third_party/triton-kernels}"
+    if [ -z "${TRITON_KERNELS_SPEC:-}" ]; then
+        if [ ! -d "${TRITON_KERNELS_SRC_DIR}" ]; then
+            if ! git clone --depth 1 https://github.com/openai/triton-kernels.git "${TRITON_KERNELS_SRC_DIR}"; then
+                echo "WARNING: Failed to clone https://github.com/openai/triton-kernels.git into ${TRITON_KERNELS_SRC_DIR}."
+            fi
+        fi
+        if [ -f "${TRITON_KERNELS_SRC_DIR}/pyproject.toml" ] || [ -f "${TRITON_KERNELS_SRC_DIR}/setup.py" ]; then
+            TRITON_KERNELS_SPEC="${TRITON_KERNELS_SRC_DIR}"
+        else
+            TRITON_KERNELS_SPEC="git+https://github.com/openai/triton-kernels.git"
+        fi
+    fi
+    if [[ "${TRITON_KERNELS_SPEC}" == git+https://github.com/openai/triton-kernels.git ]]; then
+        if ! git ls-remote https://github.com/openai/triton-kernels.git >/dev/null 2>&1; then
+            echo "WARNING: Cannot access https://github.com/openai/triton-kernels.git without credentials."
+            echo "         Provide TRITON_KERNELS_SPEC (wheel/URL) or clone into ${TRITON_KERNELS_SRC_DIR}."
+        fi
+    fi
+    if ! pip_install --no-cache-dir --upgrade --no-deps "${TRITON_KERNELS_SPEC}"; then
+        echo "WARNING: Failed to install ${TRITON_KERNELS_SPEC}; gpt_oss chat may not work."
+    fi
+    GPT_OSS_BACKEND="${GPT_OSS_BACKEND:-triton}"
+    if [ "${GPT_OSS_BACKEND}" = "triton" ]; then
+        if ! python3 - <<'PY'
+import importlib
+modules = [
+    "triton_kernels.swiglu",
+    "triton_kernels.numerics_details.mxfp",
+    "triton_kernels.matmul_ogs",
+    "triton_kernels.routing",
+    "triton_kernels.tensor",
+]
+for name in modules:
+    importlib.import_module(name)
+PY
+        then
+            echo "WARNING: triton_kernels missing required modules; falling back to torch backend."
+            GPT_OSS_BACKEND="torch"
+        fi
+    fi
+    if ! python3 -m gpt_oss.chat --backend "${GPT_OSS_BACKEND}" "${GPT_OSS_MODEL_DIR}"; then
+        echo "WARNING: gpt_oss chat invocation failed; skipping."
+    fi
+else
+    echo ""
+    echo "Skipping GPT-OSS model/CLI install (set INSTALL_GPT_OSS=1 to enable)."
+fi
+
+echo ""
+echo "Final cleanup (APT/pip caches)..."
+reclaim_disk_space_basic
+
 # Final summary
 echo ""
 echo "Setup Complete!"
@@ -3711,63 +3777,3 @@ echo "  • Before additional builds: source /etc/profile.d/cuda-${CUDA_SHORT_VE
 echo "For more information, see the README.md file and chapter-specific documentation."
 echo ""
 echo "Happy performance engineering!"
-
-echo ""
-echo "Downloading GPT-OSS model and installing CLI..."
-GPT_OSS_MODEL_DIR="${GPT_OSS_MODEL_DIR:-${PROJECT_ROOT}/gpt-oss-20b}"
-huggingface-cli download openai/gpt-oss-20b --include "original/*" --local-dir "${GPT_OSS_MODEL_DIR}/" || {
-    echo "ERROR: Failed to download gpt-oss-20b model"
-    exit 1
-}
-if ! pip_install --no-cache-dir --upgrade gpt-oss; then
-    echo "ERROR: Failed to install gpt-oss package"
-    exit 1
-fi
-TRITON_KERNELS_SRC_DIR="${TRITON_KERNELS_SRC_DIR:-${PROJECT_ROOT}/third_party/triton-kernels}"
-if [ -z "${TRITON_KERNELS_SPEC:-}" ]; then
-    if [ ! -d "${TRITON_KERNELS_SRC_DIR}" ]; then
-        if ! git clone --depth 1 https://github.com/openai/triton-kernels.git "${TRITON_KERNELS_SRC_DIR}"; then
-            echo "WARNING: Failed to clone https://github.com/openai/triton-kernels.git into ${TRITON_KERNELS_SRC_DIR}."
-        fi
-    fi
-    if [ -f "${TRITON_KERNELS_SRC_DIR}/pyproject.toml" ] || [ -f "${TRITON_KERNELS_SRC_DIR}/setup.py" ]; then
-        TRITON_KERNELS_SPEC="${TRITON_KERNELS_SRC_DIR}"
-    else
-        TRITON_KERNELS_SPEC="git+https://github.com/openai/triton-kernels.git"
-    fi
-fi
-if [[ "${TRITON_KERNELS_SPEC}" == git+https://github.com/openai/triton-kernels.git ]]; then
-    if ! git ls-remote https://github.com/openai/triton-kernels.git >/dev/null 2>&1; then
-        echo "WARNING: Cannot access https://github.com/openai/triton-kernels.git without credentials."
-        echo "         Provide TRITON_KERNELS_SPEC (wheel/URL) or clone into ${TRITON_KERNELS_SRC_DIR}."
-    fi
-fi
-if ! pip_install --no-cache-dir --upgrade --no-deps "${TRITON_KERNELS_SPEC}"; then
-    echo "WARNING: Failed to install ${TRITON_KERNELS_SPEC}; gpt_oss chat may not work."
-fi
-GPT_OSS_BACKEND="${GPT_OSS_BACKEND:-triton}"
-if [ "${GPT_OSS_BACKEND}" = "triton" ]; then
-    if ! python3 - <<'PY'
-import importlib
-modules = [
-    "triton_kernels.swiglu",
-    "triton_kernels.numerics_details.mxfp",
-    "triton_kernels.matmul_ogs",
-    "triton_kernels.routing",
-    "triton_kernels.tensor",
-]
-for name in modules:
-    importlib.import_module(name)
-PY
-    then
-        echo "WARNING: triton_kernels missing required modules; falling back to torch backend."
-        GPT_OSS_BACKEND="torch"
-    fi
-fi
-if ! python3 -m gpt_oss.chat --backend "${GPT_OSS_BACKEND}" "${GPT_OSS_MODEL_DIR}"; then
-    echo "WARNING: gpt_oss chat invocation failed; skipping."
-fi
-
-echo ""
-echo "Final cleanup (APT/pip caches)..."
-reclaim_disk_space_basic

@@ -46,6 +46,9 @@
 - Example: run a single benchmark with `--ncu-metric-set minimal --ncu-replay-mode kernel` instead of changing default NCU settings.
 - When Nsight Compute application replay is unstable (dynamic kernels), use `aisp bench run --ncu-replay-mode kernel` to override the minimal preset for that run.
 
+## Defaults Consistency (CRITICAL)
+- CLI, MCP tools, dashboard, and any other entrypoints must stay in sync on defaults (flags, behaviors, and help text). If a default changes, update all entrypoints together in the same change.
+
 ## Test Realism (CRITICAL)
 - Tests MUST NOT use `precheck_only`, `dry_run`, `estimate_only`, or any other short-circuit/preview mode.
 - Tests MUST NOT use mocks, stubs, `monkeypatch`, or similar; tests must execute real code paths end-to-end.

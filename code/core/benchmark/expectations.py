@@ -559,7 +559,7 @@ class ExpectationsStore:
         hardware_key: str,
         *,
         accept_regressions: bool = False,
-        force_mixed_provenance: bool = False,
+        allow_mixed_provenance: bool = False,
         validate_on_load: bool = False,
     ) -> None:
         self.chapter_dir = chapter_dir
@@ -568,7 +568,7 @@ class ExpectationsStore:
         self._data = self._load()
         self._changed = False
         self._accept_regressions = accept_regressions
-        self._force_mixed_provenance = force_mixed_provenance
+        self._allow_mixed_provenance = allow_mixed_provenance
 
         # Optionally validate on load to catch drift early
         if validate_on_load and self.path.exists():
@@ -707,7 +707,7 @@ class ExpectationsStore:
         - All metrics are updated together (atomic)
         - Speedup is always derived from timing values
         - Provenance is tracked and validated
-        - Mixed-provenance updates are rejected unless forced
+        - Mixed-provenance updates are rejected unless explicitly allowed
 
         Args:
             example_key: Key identifying the benchmark example (e.g., "matmul_cuda")
@@ -722,17 +722,33 @@ class ExpectationsStore:
         goal = (entry.optimization_goal or "speed").strip().lower()
 
         # Check provenance consistency if entry already exists
-        if existing and not self._force_mixed_provenance:
+        if existing and not self._allow_mixed_provenance:
             existing_provenance = existing.get("provenance")
             if existing_provenance:
                 existing_prov = RunProvenance.from_dict(existing_provenance)
                 if not entry.provenance.matches(existing_prov):
+                    mismatches: List[str] = []
+                    if entry.provenance.git_commit != existing_prov.git_commit:
+                        mismatches.append(
+                            f"git_commit: new='{entry.provenance.git_commit}' "
+                            f"stored='{existing_prov.git_commit}'"
+                        )
+                    if entry.provenance.hardware_key != existing_prov.hardware_key:
+                        mismatches.append(
+                            f"hardware_key: new='{entry.provenance.hardware_key}' "
+                            f"stored='{existing_prov.hardware_key}'"
+                        )
+                    if entry.provenance.profile_name != existing_prov.profile_name:
+                        mismatches.append(
+                            f"profile_name: new='{entry.provenance.profile_name}' "
+                            f"stored='{existing_prov.profile_name}'"
+                        )
+                    mismatch_summary = ", ".join(mismatches) if mismatches else "unknown mismatch"
                     return UpdateResult(
                         status="rejected",
                         message=(
-                            f"Provenance mismatch: new run from commit {entry.provenance.git_commit} "
-                            f"differs from existing commit {existing_prov.git_commit}. "
-                            f"Use force_mixed_provenance=True to override."
+                            f"Provenance mismatch: {mismatch_summary}. "
+                            f"Use allow_mixed_provenance=True (or --allow-mixed-provenance / --update-expectations) to override."
                         ),
                         entry=entry,
                         validation_issues=[
@@ -740,8 +756,8 @@ class ExpectationsStore:
                                 example_key=example_key,
                                 issue_type="provenance_mismatch",
                                 message="Mixed provenance update rejected",
-                                stored_value=existing_prov.git_commit,
-                                expected_value=entry.provenance.git_commit,
+                                stored_value=existing_prov.to_dict(),
+                                expected_value=entry.provenance.to_dict(),
                             )
                         ],
                     )

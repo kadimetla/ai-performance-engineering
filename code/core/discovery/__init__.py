@@ -76,10 +76,6 @@ def validate_benchmark_file(file_path: Path, warn: bool = True) -> bool:
     
     return has_fn
 
-# LAB_NAMES is deprecated - labs are now auto-discovered based on
-# presence of baseline_*.py or level*.py files in labs/ subdirectories.
-# Kept for backward compatibility but no longer required for registration.
-LAB_NAMES = set()  # Auto-discovery handles this now
 # Shorthand aliases for common labs (optional convenience)
 LAB_ALIASES: Dict[str, str] = {
     "capstone": "labs/fullstack_cluster",
