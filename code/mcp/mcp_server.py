@@ -1466,6 +1466,21 @@ def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
                 "description": "Max runtime before returning with partial output; set 0/null for no timeout",
                 "default": 900
             },
+            "timeout_multiplier": {
+                "type": "number",
+                "description": "Multiply all benchmark timeouts by this factor (e.g., 2.0 = double all timeouts).",
+                "default": 3.0
+            },
+            "nsys_timeout_seconds": {
+                "type": "integer",
+                "description": "Override Nsight Systems timeout in seconds (default from BenchmarkDefaults).",
+                "default": None
+            },
+            "ncu_timeout_seconds": {
+                "type": "integer",
+                "description": "Override Nsight Compute timeout in seconds (default from BenchmarkDefaults).",
+                "default": None
+            },
             "allow_invalid_environment": {
                 "type": "boolean",
                 "description": (
@@ -1528,6 +1543,9 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         run_id = _default_run_id("bench", run_label, base_dir)
     iterations_param = params.get("iterations")
     warmup_param = params.get("warmup")
+    timeout_multiplier = params.get("timeout_multiplier")
+    nsys_timeout_seconds = params.get("nsys_timeout_seconds")
+    ncu_timeout_seconds = params.get("ncu_timeout_seconds")
     allow_invalid_environment = bool(params.get("allow_invalid_environment", False))
     allow_virtualization = bool(params.get("allow_virtualization", True))
     allow_mixed_provenance = bool(params.get("allow_mixed_provenance", False))
@@ -1628,6 +1646,12 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
         args.extend(["--iterations", str(int(iterations_param))])
     if warmup_param is not None:
         args.extend(["--warmup", str(int(warmup_param))])
+    if timeout_multiplier is not None:
+        args.extend(["--timeout-multiplier", str(float(timeout_multiplier))])
+    if nsys_timeout_seconds is not None:
+        args.extend(["--nsys-timeout-seconds", str(int(nsys_timeout_seconds))])
+    if ncu_timeout_seconds is not None:
+        args.extend(["--ncu-timeout-seconds", str(int(ncu_timeout_seconds))])
     if allow_invalid_environment:
         args.append("--allow-invalid-environment")
     if allow_virtualization:
