@@ -1034,41 +1034,33 @@ class AIDomain:
             llm_routing: If True, use LLM-based routing (requires configured LLM backend)
             max_suggestions: Optional cap on the number of suggestions returned
         """
-        from core.analysis.tool_router import (
-            DEFAULT_SUGGEST_RULES,
-            suggest_tools_heuristic,
-            suggest_tools_llm,
-        )
+        from core.analysis.tool_router import DEFAULT_SUGGEST_RULES, suggest_tools_auto
 
         try:
-            if llm_routing:
-                suggestions = suggest_tools_llm(
-                    query,
-                    DEFAULT_SUGGEST_RULES,
-                    max_suggestions=max_suggestions,
-                )
-                routing = "llm"
-            else:
-                suggestions = suggest_tools_heuristic(
-                    query,
-                    DEFAULT_SUGGEST_RULES,
-                    max_suggestions=max_suggestions,
-                )
-                routing = "heuristic"
-        except (RuntimeError, ValueError) as exc:
+            routing_result = suggest_tools_auto(
+                query,
+                llm_routing=llm_routing,
+                rules=DEFAULT_SUGGEST_RULES,
+                max_suggestions=max_suggestions,
+            )
+        except ValueError as exc:
             return {
                 "query": query,
                 "success": False,
                 "error": str(exc),
             }
 
-        return {
+        result = {
             "query": query,
-            "suggestions": suggestions,
-            "routing": routing,
+            "suggestions": routing_result.get("suggestions", []),
+            "routing": routing_result.get("routing"),
+            "llm_available": routing_result.get("llm_available"),
             "note": "Call suggested tools in order for best results",
             "success": True,
         }
+        if routing_result.get("warning"):
+            result["warning"] = routing_result["warning"]
+        return result
 
     def troubleshoot(
         self,

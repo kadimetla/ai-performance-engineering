@@ -21,7 +21,7 @@
  * - CUDA 13.0+
  * 
  * Compile:
- *   nvcc -O3 -std=c++17 -arch=sm_100 nvlink_c2c_p2p_blackwell.cu -o nvlink_c2c
+ *   nvcc -O3 -std=c++17 -arch=sm_100 memory_transfer_nvlink_demo.cu -o memory_transfer_nvlink_demo
  * 
  * Expected Performance:
  * - NVLink-C2C: ~900 GB/s (Grace-Blackwell)

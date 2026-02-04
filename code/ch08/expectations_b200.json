@@ -109,12 +109,12 @@
       "type": "python"
     },
     "hbm_cuda": {
-      "example": "hbm",
+      "example": "hbm_cuda",
       "metadata": {
-        "best_optimization": "vectorized",
-        "best_optimization_file": "optimized_hbm_vectorized.cu",
+        "best_optimization": "optimized_hbm_cuda_vectorized",
+        "best_optimization_file": "optimized_hbm_cuda_vectorized.cu",
         "best_optimization_speedup": 1.2336955251112796,
-        "best_optimization_technique": "vectorized",
+        "best_optimization_technique": "optimized_hbm_cuda_vectorized",
         "best_optimization_time_ms": 0.0698617,
         "optimization_goal": "speed"
       },

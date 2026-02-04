@@ -1,4 +1,5 @@
 // optimized_cutlass_gemm.cu -- CUTLASS Tensor Core GEMM optimized.
+// Inputs are preloaded on device; H2D transfers are excluded from timing.
 
 #include <cuda_runtime.h>
 

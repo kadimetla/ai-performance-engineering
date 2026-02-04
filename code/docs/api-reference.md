@@ -335,7 +335,7 @@ engine.ai.suggest_tools("Profile and compare baseline vs optimized", llm_routing
 engine.ai.status()                              # Check LLM availability
 ```
 
-**Routing options:** `suggest_tools` defaults to LLM-based routing. Set `llm_routing=false` to use keyword heuristics. Use `max_suggestions` to cap results.
+**Routing options:** `suggest_tools` defaults to LLM-based routing. If no LLM backend is configured, it automatically falls back to keyword heuristics and includes a WARNING in the response. Set `llm_routing=false` to force heuristics (also returns a WARNING). Use `max_suggestions` to cap results.
 
 ---
 

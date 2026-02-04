@@ -12,8 +12,8 @@ Moves from Python into CUDA C++: write first kernels, reason about occupancy, co
 ## Directory Layout
 | Path | Description |
 | --- | --- |
-| `my_first_kernel.cu`, `simple_kernel.cu`, `baseline_add.cu`, `optimized_add_parallel.cu`, `baseline_add.py`, `optimized_add.py` | Hello-world kernels plus Python wrappers for verifying CUDA build chains and launch parameters. |
-| `baseline_add_tensors.cu`, `optimized_add_tensors.cu`, `baseline_add_tensors.py`, `optimized_add_tensors.py` | Tensor-oriented adds with automatic pinned-memory staging and correctness checks. |
+| `my_first_kernel.cu`, `simple_kernel.cu`, `baseline_add_cuda.cu`, `optimized_add_cuda_parallel.cu`, `baseline_add.py`, `optimized_add.py`, `baseline_add_cuda.py`, `optimized_add_cuda_parallel.py` | Hello-world kernels plus Python wrappers for verifying CUDA build chains and launch parameters. |
+| `baseline_add_tensors_cuda.cu`, `optimized_add_tensors_cuda.cu`, `baseline_add_tensors.py`, `optimized_add_tensors.py`, `baseline_add_tensors_cuda.py`, `optimized_add_tensors_cuda.py` | Tensor-oriented adds with automatic pinned-memory staging and correctness checks. |
 | `baseline_attention_ilp.py`, `baseline_gemm_ilp.py`, `optimized_gemm_ilp.py`, `ilp_low_occupancy_vec4_demo.cu`, `ilp_extreme_low_occupancy_vec4_demo.cu` | Instruction-level parallelism studies that manipulate loop unrolling, registers, and vector width. |
 | `baseline_bank_conflicts.cu`, `optimized_bank_conflicts.cu`, `baseline_launch_bounds*.{py,cu}`, `optimized_launch_bounds*.{py,cu}` | Bank conflict and launch-bound exercises to highlight shared memory layouts and CTA sizing. |
 | `baseline_autotuning.py`, `optimized_autotuning.py`, `memory_pool_tuning.cu`, `stream_ordered_allocator/` | Autotuning harness plus allocator experiments for controlling fragmentation and stream ordering. |
@@ -31,7 +31,7 @@ python -m cli.aisp bench run --targets ch06 --profile minimal
 - Expectation baselines live next to each chapter in `expectations_{hardware_key}.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
-- `nvcc -o baseline_add_sm121 baseline_add.cu` vs the optimized vectorized version shows a clear bandwidth delta when inspected with Nsight Compute.
+- `nvcc -o baseline_add_cuda_sm121 baseline_add_cuda.cu` vs the optimized vectorized version shows a clear bandwidth delta when inspected with Nsight Compute.
 - `python optimized_autotuning.py --search` converges to the same schedule as the curated preset and logs the score table under `artifacts/`.
 - `python compare.py --examples ilp` confirms optimized ILP kernels achieving higher instructions-per-byte with identical outputs.
 

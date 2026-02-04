@@ -1,4 +1,4 @@
-"""Python harness wrapper for baseline_hbm_peak.cu."""
+"""Python harness wrapper for baseline_add_cuda.cu."""
 
 from __future__ import annotations
 from typing import Optional
@@ -10,39 +10,41 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode
+from core.harness.benchmark_harness import BaseBenchmark
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
-class BaselineHBMPeakBenchmark(CudaBinaryBenchmark):
-    """Wraps the baseline peak bandwidth kernel."""
+class BaselineAddCudaBenchmark(CudaBinaryBenchmark):
+    """Wraps the baseline CUDA add binary."""
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
-        target_bytes = 512 * 1024 * 1024
+        n = 1_000_000
+        bytes_per_iter = n * 3 * 4  # A, B, C (float32)
         super().__init__(
             chapter_dir=chapter_dir,
-            binary_name="baseline_hbm_peak",
-            friendly_name="Baseline Hbm Peak",
-            iterations=3,
+            binary_name="baseline_add_cuda",
+            friendly_name="Baseline Add CUDA",
+            iterations=10,
             warmup=5,
-            timeout_seconds=90,
+            timeout_seconds=60,
+            time_regex=r"TIME_MS:\s*([0-9.]+)",
             workload_params={
-                "bytes": target_bytes,
+                "N": n,
                 "dtype": "float32",
             },
         )
-        self.register_workload_metadata(bytes_per_iteration=float(target_bytes * 2))
+        self.register_workload_metadata(bytes_per_iteration=float(bytes_per_iter))
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return memory access metrics."""
         return None
 
-def get_benchmark() -> BaselineHBMPeakBenchmark:
-    """Factory for discover_benchmarks()."""
-    return BaselineHBMPeakBenchmark()
+
+def get_benchmark() -> BaseBenchmark:
+    return BaselineAddCudaBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
+
     benchmark_main(get_benchmark)

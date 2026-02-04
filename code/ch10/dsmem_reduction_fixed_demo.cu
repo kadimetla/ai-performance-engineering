@@ -1,4 +1,4 @@
-// optimized_dsmem_reduction_v3.cu - WORKING DSMEM reduction for B200
+// dsmem_reduction_fixed_demo.cu - WORKING DSMEM reduction for B200 (demo)
 // 
 // KEY FIXES for B200/CUDA 13.0:
 // 1. NO __cluster_dims__ attribute (conflicts with runtime cluster dims)

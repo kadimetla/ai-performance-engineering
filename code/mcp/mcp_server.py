@@ -127,7 +127,7 @@ CODE_ROOT = Path(__file__).resolve().parent.parent
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
-from core.analysis.tool_router import DEFAULT_SUGGEST_RULES, suggest_tools_heuristic, suggest_tools_llm
+from core.analysis.tool_router import DEFAULT_SUGGEST_RULES, suggest_tools_auto
 from core.harness.progress import ProgressEvent, ProgressRecorder
 from core.jobs import JobStore
 
@@ -1335,6 +1335,10 @@ def _is_active_run_command(cmd: str) -> bool:
         return True
     if "bench run" in cmd and ("cli.aisp" in cmd or "aisp.py" in cmd or "python -m cli.aisp" in cmd):
         return True
+    if "bench" in tokens and "run" in tokens:
+        exe = Path(tokens[0]).name
+        if exe == "aisp":
+            return True
     if "torchrun_wrapper.py" in cmd:
         return True
     exe = Path(tokens[0]).name
@@ -7074,7 +7078,9 @@ def tool_tools_probe_hw(params: Dict[str, Any]) -> Dict[str, Any]:
     "• 'compare profiles' → compare_nsys, profile_compare. "
     "WORKFLOW: suggest_tools → use suggested tools. "
     "NOT FOR: Direct answers (use ask), getting started (use triage). "
-    "Defaults to LLM-based routing; set llm_routing=false to use keyword heuristics.",
+    "Defaults to LLM-based routing; if no LLM backend is configured, "
+    "automatically falls back to keyword heuristics with a WARNING. "
+    "Set llm_routing=false to force heuristics (also returns a WARNING).",
     {"type": "object", "properties": with_context_params({
         "query": {
             "type": "string",
@@ -7105,35 +7111,31 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
     if max_suggestions is not None and max_suggestions < 1:
         return make_error("max_suggestions must be >= 1.", include_context, context_level)
 
+    tool_catalog = [
+        {"tool": name, "description": tool.description}
+        for name, tool in TOOLS.items()
+    ]
+
     try:
-        if llm_routing:
-            tool_catalog = [
-                {"tool": name, "description": tool.description}
-                for name, tool in TOOLS.items()
-            ]
-            suggestions = suggest_tools_llm(
-                query,
-                DEFAULT_SUGGEST_RULES,
-                tool_catalog=tool_catalog,
-                max_suggestions=max_suggestions,
-            )
-            routing = "llm"
-        else:
-            suggestions = suggest_tools_heuristic(
-                query,
-                DEFAULT_SUGGEST_RULES,
-                max_suggestions=max_suggestions,
-            )
-            routing = "heuristic"
-    except (RuntimeError, ValueError) as exc:
+        routing_result = suggest_tools_auto(
+            query,
+            llm_routing=llm_routing,
+            rules=DEFAULT_SUGGEST_RULES,
+            tool_catalog=tool_catalog,
+            max_suggestions=max_suggestions,
+        )
+    except ValueError as exc:
         return make_error(str(exc), include_context, context_level)
 
     result = {
-        "suggestions": suggestions,
-        "count": len(suggestions),
+        "suggestions": routing_result.get("suggestions", []),
+        "count": len(routing_result.get("suggestions", [])),
         "success": True,
-        "routing": routing,
+        "routing": routing_result.get("routing"),
+        "llm_available": routing_result.get("llm_available"),
     }
+    if routing_result.get("warning"):
+        result["warning"] = routing_result["warning"]
     return attach_context_if_requested(result, include_context, context_level)
 
 

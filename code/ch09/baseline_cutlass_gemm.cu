@@ -1,4 +1,5 @@
 // baseline_cutlass_gemm.cu -- CUTLASS SIMT GEMM baseline (no tensor cores).
+// Inputs are preloaded on device; H2D transfers are excluded from timing.
 
 #include <cuda_runtime.h>
 

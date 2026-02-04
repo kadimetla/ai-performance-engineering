@@ -324,37 +324,6 @@
       },
       "type": "python"
     },
-    "streams_cuda": {
-      "example": "streams",
-      "metadata": {
-        "best_optimization": "ordered",
-        "best_optimization_file": "optimized_streams_ordered.cu",
-        "best_optimization_speedup": 50.54835493519441,
-        "best_optimization_technique": "ordered",
-        "best_optimization_time_ms": 0.033433333333333336,
-        "optimization_goal": "speed"
-      },
-      "metrics": {
-        "baseline_p75_ms": 1.69,
-        "baseline_p90_ms": 1.69,
-        "baseline_time_ms": 1.69,
-        "best_optimized_p75_ms": 0.0308,
-        "best_optimized_p90_ms": 0.0308,
-        "best_optimized_speedup": 50.54835493519441,
-        "best_optimized_time_ms": 0.033433333333333336,
-        "best_speedup": 50.54835493519441,
-        "is_regression": false
-      },
-      "provenance": {
-        "git_commit": "4fe709b0cf0876851d645e87c589d44dc5a59a91",
-        "hardware_key": "2x_b200",
-        "iterations": 20,
-        "profile_name": "none",
-        "timestamp": "2026-01-03T06:50:41.688820",
-        "warmup_iterations": 5
-      },
-      "type": "cuda"
-    },
     "tensor_cores_streams": {
       "example": "tensor_cores_streams",
       "metadata": {

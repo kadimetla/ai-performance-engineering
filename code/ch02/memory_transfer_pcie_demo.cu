@@ -1,6 +1,6 @@
-// baseline_memory_transfer.cu - Traditional PCIe-based CPU-GPU transfers (baseline)
+// memory_transfer_pcie_demo.cu - Traditional PCIe-based CPU-GPU transfers (demo)
 // Demonstrates standard PCIe transfers without Grace-Blackwell optimizations
-// Compile: nvcc -O3 -std=c++17 -arch=sm_121 baseline_memory_transfer.cu -o baseline_memory_transfer_sm121
+// Compile: nvcc -O3 -std=c++17 -arch=sm_121 memory_transfer_pcie_demo.cu -o memory_transfer_pcie_demo_sm121
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -102,4 +102,3 @@ int main() {
     
     return 0;
 }
-

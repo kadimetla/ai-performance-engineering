@@ -19,6 +19,7 @@ class OptimizedHbmPeakBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
+        size_bytes = 512 * 1024 * 1024
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="optimized_hbm_peak",
@@ -27,11 +28,11 @@ class OptimizedHbmPeakBenchmark(CudaBinaryBenchmark):
             warmup=5,
             timeout_seconds=180,
             workload_params={
-                "workload": 1,
-                "dtype": 'float32',
-                "batch_size": 1,
+                "bytes": size_bytes,
+                "dtype": "float32",
             },
         )
+        self.register_workload_metadata(bytes_per_iteration=float(size_bytes * 2))
 
     def get_custom_metrics(self) -> Optional[dict]:
         return None

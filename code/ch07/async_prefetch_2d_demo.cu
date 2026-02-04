@@ -1,4 +1,4 @@
-// optimized_async_prefetch_2d.cu -- Minimal 2D TMA copy to drive bandwidth.
+// async_prefetch_2d_demo.cu -- Minimal 2D TMA copy to drive bandwidth.
 // Uses cp.async.bulk.tensor.2d with a single stage to keep the kernel memory-bound.
 
 #include <algorithm>

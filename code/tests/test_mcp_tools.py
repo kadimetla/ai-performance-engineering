@@ -458,6 +458,29 @@ def test_suggest_tools_common_intents(server: mcp_server.MCPServer, query: str, 
     assert expected_tool in tools
 
 
+def test_suggest_tools_llm_fallback_warns(server: mcp_server.MCPServer) -> None:
+    result = server.call_tool("suggest_tools", {"query": "profile and compare", "llm_routing": True})
+    payload = _payload_from_result(result)
+    tool_result = payload.get("result") or {}
+    routing = tool_result.get("routing")
+    warning = tool_result.get("warning", "")
+    suggestions = tool_result.get("suggestions") or []
+
+    assert routing in {"llm", "heuristic"}
+    assert suggestions, "suggest_tools should return at least one suggestion"
+    if routing == "heuristic":
+        assert "WARNING" in warning
+
+
+def test_suggest_tools_heuristic_warns(server: mcp_server.MCPServer) -> None:
+    result = server.call_tool("suggest_tools", {"query": "profile this model", "llm_routing": False})
+    payload = _payload_from_result(result)
+    tool_result = payload.get("result") or {}
+    warning = tool_result.get("warning", "")
+
+    assert "WARNING" in warning
+
+
 def test_tool_response_is_text_only(server: mcp_server.MCPServer):
     """MCP responses must emit only text content to satisfy clients that reject other types."""
     result = server.call_tool("status", {})

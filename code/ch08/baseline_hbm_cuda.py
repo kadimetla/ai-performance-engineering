@@ -1,4 +1,4 @@
-"""Python harness wrapper for optimized_cutlass_gemm_preloaded.cu."""
+"""Python harness wrapper for baseline_hbm_cuda.cu."""
 
 from __future__ import annotations
 from typing import Optional
@@ -14,41 +14,35 @@ from core.harness.benchmark_harness import BaseBenchmark
 from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
-class OptimizedCutlassGemmPreloadedBenchmark(CudaBinaryBenchmark):
-    """Wraps the preloaded-inputs Tensor Core CUTLASS GEMM."""
+class BaselineHBMCudaBenchmark(CudaBinaryBenchmark):
+    """Wraps the baseline HBM CUDA binary."""
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
-        m = n = k = 1024
-        iterations = 5
-        repeats = 32
-        bytes_a = m * k * 4
-        bytes_b = k * n * 4
-        bytes_c = m * n * 4
+        rows = 4096
+        cols = 2048
+        bytes_per_iter = rows * cols * 4 + rows * 4
         super().__init__(
             chapter_dir=chapter_dir,
-            binary_name="optimized_cutlass_gemm_preloaded",
-            friendly_name="Optimized Cutlass Gemm (Preloaded Inputs)",
+            binary_name="baseline_hbm_cuda",
+            friendly_name="Baseline HBM CUDA",
             iterations=5,
             warmup=5,
             timeout_seconds=120,
             workload_params={
-                "M": m,
-                "N": n,
-                "K": k,
-                "kIterations": iterations,
-                "kRepeats": repeats,
+                "rows": rows,
+                "cols": cols,
                 "dtype": "float32",
             },
         )
-        self.register_workload_metadata(bytes_per_iteration=float(bytes_a + bytes_b + bytes_c))
+        self.register_workload_metadata(bytes_per_iteration=float(bytes_per_iter))
 
     def get_custom_metrics(self) -> Optional[dict]:
         return None
 
 
 def get_benchmark() -> BaseBenchmark:
-    return OptimizedCutlassGemmPreloadedBenchmark()
+    return BaselineHBMCudaBenchmark()
 
 
 if __name__ == "__main__":

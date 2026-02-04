@@ -1,6 +1,6 @@
-// cpu_gpu_zero_copy_coherent.cu -- Zero-copy GPU access to CPU memory via NVLink-C2C
+// memory_transfer_zero_copy_demo.cu -- Zero-copy GPU access to CPU memory via NVLink-C2C
 // Optimized for Grace-Blackwell GB10 (SM 12.1) with 900 GB/s coherent interconnect
-// Compile: nvcc -O3 -std=c++17 -arch=sm_121 cpu_gpu_zero_copy_coherent.cu -o cpu_gpu_zero_copy_coherent
+// Compile: nvcc -O3 -std=c++17 -arch=sm_121 memory_transfer_zero_copy_demo.cu -o memory_transfer_zero_copy_demo
 
 #include <cuda_runtime.h>
 #include <cstdio>

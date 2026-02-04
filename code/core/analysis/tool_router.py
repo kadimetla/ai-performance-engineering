@@ -770,3 +770,71 @@ def suggest_tools_llm(
         raise RuntimeError("LLM routing failed: no valid suggestions returned.")
 
     return results[:max_suggestions] if max_suggestions else results
+
+
+def suggest_tools_auto(
+    query: str,
+    llm_routing: bool = True,
+    rules: Optional[List[Dict[str, Any]]] = None,
+    tool_catalog: Optional[List[Dict[str, str]]] = None,
+    max_suggestions: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Auto-route with LLM, fall back to heuristics with warning."""
+    if llm_routing:
+        status = get_llm_status()
+        if not status.get("available", False):
+            warning = (
+                "WARNING: LLM routing requested but no LLM backend is configured. "
+                "Falling back to keyword heuristics."
+            )
+            suggestions = suggest_tools_heuristic(
+                query,
+                rules,
+                max_suggestions=max_suggestions,
+            )
+            return {
+                "suggestions": suggestions,
+                "routing": "heuristic",
+                "warning": warning,
+                "llm_available": False,
+            }
+        try:
+            suggestions = suggest_tools_llm(
+                query,
+                rules,
+                tool_catalog=tool_catalog,
+                max_suggestions=max_suggestions,
+            )
+            return {
+                "suggestions": suggestions,
+                "routing": "llm",
+                "llm_available": True,
+            }
+        except RuntimeError as exc:
+            warning = (
+                f"WARNING: LLM routing failed ({exc}). "
+                "Falling back to keyword heuristics."
+            )
+            suggestions = suggest_tools_heuristic(
+                query,
+                rules,
+                max_suggestions=max_suggestions,
+            )
+            return {
+                "suggestions": suggestions,
+                "routing": "heuristic",
+                "warning": warning,
+                "llm_available": True,
+            }
+
+    suggestions = suggest_tools_heuristic(
+        query,
+        rules,
+        max_suggestions=max_suggestions,
+    )
+    return {
+        "suggestions": suggestions,
+        "routing": "heuristic",
+        "warning": "WARNING: LLM routing disabled (llm_routing=false). Using keyword heuristics.",
+        "llm_available": None,
+    }

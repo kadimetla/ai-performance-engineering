@@ -62,6 +62,12 @@ DEMOS: Dict[str, DemoSpec] = {
         description="Chapter 10 tcgen05 warpgroup specialization demo (non-benchmark).",
         launch_via=LaunchVia.PYTHON,
     ),
+    "ch10-dsmem-reduction-fixed": DemoSpec(
+        name="ch10-dsmem-reduction-fixed",
+        script_path=REPO_ROOT / "ch10" / "dsmem_reduction_fixed_demo.py",
+        description="Chapter 10 DSMEM reduction fixed binary demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
     "ch11-stream-overlap": DemoSpec(
         name="ch11-stream-overlap",
         script_path=REPO_ROOT / "ch11" / "stream_overlap_demo.py",
@@ -86,6 +92,24 @@ DEMOS: Dict[str, DemoSpec] = {
         description="Chapter 11 CUDA event timing demo (non-benchmark).",
         launch_via=LaunchVia.PYTHON,
     ),
+    "ch11-streams-overlap-cuda": DemoSpec(
+        name="ch11-streams-overlap-cuda",
+        script_path=REPO_ROOT / "ch11" / "streams_overlap_demo.py",
+        description="Chapter 11 CUDA streams overlap binary demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
+    "ch11-streams-ordered-cuda": DemoSpec(
+        name="ch11-streams-ordered-cuda",
+        script_path=REPO_ROOT / "ch11" / "streams_ordered_demo.py",
+        description="Chapter 11 stream-ordered allocator binary demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
+    "ch11-streams-warp-specialized-cuda": DemoSpec(
+        name="ch11-streams-warp-specialized-cuda",
+        script_path=REPO_ROOT / "ch11" / "streams_warp_specialized_demo.py",
+        description="Chapter 11 warp-specialized streams binary demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
     "ch12-graph-capture": DemoSpec(
         name="ch12-graph-capture",
         script_path=REPO_ROOT / "ch12" / "graph_capture_demo.py",
@@ -104,10 +128,34 @@ DEMOS: Dict[str, DemoSpec] = {
         description="Chapter 12 CUDA graph instantiation overhead demo (non-benchmark).",
         launch_via=LaunchVia.PYTHON,
     ),
+    "ch02-memory-transfer-pcie": DemoSpec(
+        name="ch02-memory-transfer-pcie",
+        script_path=REPO_ROOT / "ch02" / "memory_transfer_pcie_demo.py",
+        description="Chapter 2 PCIe memory transfer binary demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
+    "ch02-memory-transfer-nvlink": DemoSpec(
+        name="ch02-memory-transfer-nvlink",
+        script_path=REPO_ROOT / "ch02" / "memory_transfer_nvlink_demo.py",
+        description="Chapter 2 NVLink-C2C memory transfer binary demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
+    "ch02-memory-transfer-zero-copy": DemoSpec(
+        name="ch02-memory-transfer-zero-copy",
+        script_path=REPO_ROOT / "ch02" / "memory_transfer_zero_copy_demo.py",
+        description="Chapter 2 zero-copy memory transfer binary demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
     "ch03-green-context": DemoSpec(
         name="ch03-green-context",
         script_path=REPO_ROOT / "ch03" / "green_context_demo.py",
         description="Chapter 3 CUDA 13 green-context demo (non-benchmark).",
+        launch_via=LaunchVia.PYTHON,
+    ),
+    "ch07-async-prefetch-2d": DemoSpec(
+        name="ch07-async-prefetch-2d",
+        script_path=REPO_ROOT / "ch07" / "async_prefetch_2d_demo.py",
+        description="Chapter 7 async prefetch 2D TMA demo (non-benchmark).",
         launch_via=LaunchVia.PYTHON,
     ),
     "ch13-fp8-perchannel": DemoSpec(

@@ -1,16 +1,19 @@
-// add_parallel.cu
-// Efficient CUDA vector addition (Chapter 6 best practice).
+// add_sequential.cu
+// Naive sequential CUDA example for Chapter 6 (illustrates poor GPU utilization).
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstdio>
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 constexpr int N = 1'000'000;
 
-__global__ void addParallel(const float* A, const float* B, float* C, int n) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < n) {
-    C[idx] = A[idx] + B[idx];
+__global__ void addSequential(const float* A, const float* B, float* C, int n) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    for (int i = 0; i < n; ++i) {
+      C[i] = A[i] + B[i];
+    }
   }
 }
 
@@ -43,13 +46,10 @@ int main() {
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
 
-  int threads = 256;
-  int blocks = (N + threads - 1) / threads;
-  
   cudaEventRecord(start, stream);
-  addParallel<<<blocks, threads, 0, stream>>>(d_A, d_B, d_C, N);
+  addSequential<<<1, 1, 0, stream>>>(d_A, d_B, d_C, N);
   cudaEventRecord(stop, stream);
-  
+
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
     std::fprintf(stderr, "kernel launch failed: %s\n", cudaGetErrorString(err));
@@ -68,14 +68,22 @@ int main() {
 
   cudaMemcpyAsync(h_C, d_C, N * sizeof(float), cudaMemcpyDeviceToHost, stream);
   cudaStreamSynchronize(stream);
-  
+
   // Calculate elapsed time
   float elapsed_ms = 0.0f;
   cudaEventElapsedTime(&elapsed_ms, start, stop);
-  
+
   printf("C[0]=%.1f, C[N-1]=%.1f\n", h_C[0], h_C[N - 1]);
   printf("TIME_MS: %.4f\n", elapsed_ms);
-  
+
+#ifdef VERIFY
+  double checksum = 0.0;
+  for (int i = 0; i < N; ++i) {
+    checksum += std::abs(h_C[i]);
+  }
+  VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
+
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
 

@@ -1,11 +1,13 @@
 // Optimized HBM binary with vectorized accesses.
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <iostream>
 #include <random>
 #include <vector>
 
 #include "hbm_common.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/nvtx_utils.cuh"
 
 using namespace ch08;
@@ -51,7 +53,19 @@ int main() {
 
     float total_ms = 0.0f;
     cudaEventElapsedTime(&total_ms, start, stop);
-    std::cout << "Optimized HBM: " << (total_ms / iterations) << " ms\n";
+    const float avg_ms = total_ms / iterations;
+    std::cout << "Optimized HBM: " << avg_ms << " ms\n";
+    std::printf("TIME_MS: %.6f\n", avg_ms);
+
+#ifdef VERIFY
+    std::vector<float> host_output(rows, 0.0f);
+    cudaMemcpy(host_output.data(), d_output, rows * sizeof(float), cudaMemcpyDeviceToHost);
+    double checksum = 0.0;
+    for (float v : host_output) {
+        checksum += std::abs(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);

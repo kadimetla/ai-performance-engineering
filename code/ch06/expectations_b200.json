@@ -109,12 +109,12 @@
       "type": "python"
     },
     "add_cuda": {
-      "example": "add",
+      "example": "add_cuda",
       "metadata": {
-        "best_optimization": "parallel",
-        "best_optimization_file": "optimized_add_parallel.cu",
+        "best_optimization": "optimized_add_cuda_parallel",
+        "best_optimization_file": "optimized_add_cuda_parallel.cu",
         "best_optimization_speedup": 749.113710554951,
-        "best_optimization_technique": "parallel",
+        "best_optimization_technique": "optimized_add_cuda_parallel",
         "best_optimization_time_ms": 0.061266666666666664,
         "optimization_goal": "speed"
       },
@@ -194,12 +194,12 @@
       "type": "python"
     },
     "add_tensors_cuda": {
-      "example": "add_tensors",
+      "example": "add_tensors_cuda",
       "metadata": {
-        "best_optimization": "optimized_add_tensors",
-        "best_optimization_file": "optimized_add_tensors.cu",
+        "best_optimization": "optimized_add_tensors_cuda",
+        "best_optimization_file": "optimized_add_tensors_cuda.cu",
         "best_optimization_speedup": 744.8024824608741,
-        "best_optimization_technique": "optimized_add_tensors",
+        "best_optimization_technique": "optimized_add_tensors_cuda",
         "best_optimization_time_ms": 0.06176666666666667,
         "optimization_goal": "speed"
       },
