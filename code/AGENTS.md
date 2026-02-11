@@ -40,8 +40,7 @@
 - Queue scripts must log start/end timestamps and exit codes to a dedicated log file in `artifacts/parallel_runs/`.
 - Failure recovery: a failed run must not abort the queue; log the failure and continue. Only re-run on overlap or explicit user request.
 - Monitoring: watch the queue log and report when a run starts, completes, or fails.
-- Mine partial results during execution to catch new per-case wins immediately and feed those wins into the next queued optimization passes.
-- Mine partial in-flight benchmark results/log output during execution to detect new per-case wins immediately, then use those wins to reprioritize and steer subsequent queued runs without waiting for full queue completion.
+- Partial-result mining: while long sweeps are still running, continuously mine partial outputs/log checkpoints for per-case wins and promote those winners into the next queued pass immediately.
 
 ## Explicitness (CRITICAL)
 - Prefer explicit flags/parameters over changing global defaults; if a default must change, ask first and document why.

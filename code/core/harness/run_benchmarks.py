@@ -1935,9 +1935,9 @@ from core.profiling.nvtx_helper import nvtx_range
 _nvtx_label = ({nvtx_includes!r} or ["benchmark_fn"])[0]
 with nvtx_range(_nvtx_label, enable=True):
     benchmark.benchmark_fn()
-
-if torch.cuda.is_available():
-    torch.cuda.synchronize()
+    # Ensure the NVTX range encloses the actual GPU work, not just kernel launch.
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
 
 benchmark.teardown()
 """)
@@ -2186,9 +2186,9 @@ from core.profiling.nvtx_helper import nvtx_range
 _nvtx_label = ({nvtx_includes!r} or ["benchmark_fn"])[0]
 with nvtx_range(_nvtx_label, enable=True):
     benchmark.benchmark_fn()
-
-if torch.cuda.is_available():
-    torch.cuda.synchronize()
+    # Ensure the NVTX range encloses the actual GPU work, not just kernel launch.
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
 
 benchmark.teardown()
 """)
