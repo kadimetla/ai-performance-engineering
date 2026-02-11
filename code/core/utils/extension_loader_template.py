@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -391,6 +392,11 @@ def load_cuda_extension_v2(
     """
     if name in _EXTENSIONS:
         return _EXTENSIONS[name]
+    if name in sys.modules:
+        module = sys.modules[name]
+        if isinstance(module, ModuleType):
+            _EXTENSIONS[name] = module
+            return module
     
     from torch.utils.cpp_extension import load
     
@@ -508,6 +514,11 @@ def load_cuda_extension(
     """
     if extension_name in _EXTENSIONS:
         return _EXTENSIONS[extension_name]
+    if extension_name in sys.modules:
+        module = sys.modules[extension_name]
+        if isinstance(module, ModuleType):
+            _EXTENSIONS[extension_name] = module
+            return module
     
     try:
         from torch.utils.cpp_extension import load
@@ -648,6 +659,11 @@ def load_inline_with_fingerprint(
     """
     if name in _EXTENSIONS:
         return _EXTENSIONS[name]
+    if name in sys.modules:
+        module = sys.modules[name]
+        if isinstance(module, ModuleType):
+            _EXTENSIONS[name] = module
+            return module
     
     from torch.utils.cpp_extension import load_inline
     import os
