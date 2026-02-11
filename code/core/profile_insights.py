@@ -687,10 +687,20 @@ def compare_ncu_files(
             "lts__throughput.avg.pct_of_peak_sustained_elapsed",
             "sm__warps_active.avg.pct_of_peak_sustained_active",
         ]
+        metric_aliases = {
+            # Newer/older NCU "details" metric naming variants.
+            "Duration": "gpu__time_duration.avg",
+            "Compute (SM) Throughput": "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+            "DRAM Throughput": "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+            "Memory Throughput": "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+            "L2 Cache Throughput": "lts__throughput.avg.pct_of_peak_sustained_elapsed",
+            "Achieved Occupancy": "sm__warps_active.avg.pct_of_peak_sustained_active",
+        }
+        accepted_metrics = set(metrics) | set(metric_aliases.keys())
         per_kernel: Dict[str, Dict[str, float]] = {}
 
         details = subprocess.run(
-            ["ncu", "--import", str(ncu_path), "--csv", "--page", "details", "--metrics", ",".join(metrics)],
+            ["ncu", "--import", str(ncu_path), "--csv", "--page", "details"],
             capture_output=True,
             text=True,
             timeout=45,
@@ -703,13 +713,16 @@ def compare_ncu_files(
                 value_raw = (row.get("Metric Value") or "").strip()
                 if not metric or not value_raw:
                     continue
+                normalized_metric = metric_aliases.get(metric, metric)
+                if normalized_metric not in accepted_metrics:
+                    continue
                 value = _parse_float(value_raw)
                 if value is None:
                     continue
                 unit = (row.get("Metric Unit") or "").strip()
-                if metric.startswith("gpu__time_duration"):
+                if normalized_metric.startswith("gpu__time_duration"):
                     value = _time_to_ms(value, unit)
-                per_kernel.setdefault(kernel, {})[metric] = value
+                per_kernel.setdefault(kernel, {})[normalized_metric] = value
             if per_kernel:
                 return per_kernel
 
